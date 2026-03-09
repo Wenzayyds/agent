@@ -1,5 +1,5 @@
 import chainlit as cl
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from app.agent.graph import agent_app
 from app.middleware.logger_middleware import observability_middleware
 from app.middleware.semantic_cache import semantic_cache_middleware
@@ -8,12 +8,21 @@ from app.middleware.semantic_cache import semantic_cache_middleware
 @observability_middleware
 @semantic_cache_middleware
 async def invoke_agent_service(user_input: str, history: list):
-    """业务核心入口"""
+    """业务核心入口 - 流式版本"""
     history.append(HumanMessage(content=user_input))
-    return await agent_app.ainvoke(
+    
+    # 使用 astream 获取流式输出
+    async for event in agent_app.astream(
         {"messages": history},
-        config={"configurable": {"thread_id": "chainlit_session"}}
-    )
+        config={"configurable": {"thread_id": "chainlit_session"}},
+        stream_mode="values"
+    ):
+        # 获取最后一条消息
+        if "messages" in event and len(event["messages"]) > 0:
+            last_message = event["messages"][-1]
+            # 只返回 AI 消息的内容
+            if isinstance(last_message, AIMessage):
+                yield last_message.content
 
 @cl.on_chat_start
 async def on_chat_start():
@@ -23,23 +32,25 @@ async def on_chat_start():
 @cl.on_message
 async def on_message(message: cl.Message):
     history = cl.user_session.get("messages", [])
-    msg = cl.Message(content="处理中...")
+    msg = cl.Message(content="")
     await msg.send()
     
+    full_response = ""
+    
     try:
-        final_state = await invoke_agent_service(user_input=message.content, history=history)
+        # 流式接收回复
+        async for token in invoke_agent_service(user_input=message.content, history=history):
+            if token:
+                full_response = token  # 累积完整响应
+                # 计算新增的内容
+                new_content = token[len(msg.content):]
+                if new_content:
+                    await msg.stream_token(new_content)
         
-        # 提取回复内容 (兼容缓存返回的字典格式和 LangGraph 返回的 Message 对象格式)
-        final_node = final_state["messages"][-1]
-        final_response = final_node["content"] if isinstance(final_node, dict) else final_node.content
-             
-        msg.content = final_response
-        await msg.update()
-        
-        # 仅在非缓存命中时更新历史上下文
-        if not isinstance(final_node, dict):
-             cl.user_session.set("messages", final_state["messages"])
+        # 更新历史上下文
+        history.append(HumanMessage(content=message.content))
+        history.append(AIMessage(content=full_response))
+        cl.user_session.set("messages", history)
              
     except Exception as e:
-        msg.content = f"抱歉，系统出现错误：{str(e)}"
-        await msg.update()
+        await msg.stream_token(f"\n抱歉，系统出现错误：{str(e)}")

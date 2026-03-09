@@ -4,6 +4,9 @@ langgraph>=0.0.26
 langchain-openai>=0.0.5
 langchain-community>=0.0.19
 
+# 通义千问依赖
+dashscope>=1.14.0
+
 # Web UI
 chainlit>=1.0.0
 
