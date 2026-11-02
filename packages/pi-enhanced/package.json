@@ -9,11 +9,20 @@
 		"extensions",
 		"src",
 		"docs",
+		"python",
+		"!python/**/__pycache__",
+		"!python/**/*.pyc",
+		"!python/**/.pytest_cache",
+		"!python/**/.venv",
+		"!python/**/models",
+		"!python/**/indexes",
+		"!python/**/tests",
 		"README.md"
 	],
 	"scripts": {
 		"check": "tsc --noEmit -p ../../tsconfig.json",
-		"test": "vitest --run"
+		"test": "vitest --run",
+		"evaluate:p5": "node --experimental-strip-types benchmarks/p5-evaluation.ts"
 	},
 	"keywords": [
 		"pi-package",

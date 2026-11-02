@@ -1,0 +1,7 @@
+python/**/__pycache__/
+python/**/*.pyc
+python/**/.pytest_cache/
+python/**/.venv/
+python/**/models/
+python/**/indexes/
+python/**/tests/

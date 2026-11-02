@@ -18,6 +18,7 @@ describe("P0 package regression", () => {
 		expect(result.extensions.every((extension) => extension.tools.size === 0)).toBe(true);
 		const commands = result.extensions.flatMap((extension) => [...extension.commands.keys()]);
 		expect(commands.sort()).toEqual([
+			"enhanced-context-inspect",
 			"enhanced-context-status",
 			"enhanced-mcp-policy-status",
 			"enhanced-memory-status",
