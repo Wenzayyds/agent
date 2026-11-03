@@ -348,3 +348,5 @@
 - P2 结论为 inconclusive，没有证明任何单模块收益；禁止从 2 个合成任务推导总体成功率。此次授权的 4 次运行已经用完，不继续自动试跑。
 - 远端 run 41620874749 的 Linux/Docker 通过，Windows 暴露 rootPath 与临时路径大小写不同导致 PROJECT_PATH 标签不一致；Windows 盘符路径改用大小写不敏感替换，保留 Linux 大小写语义及通用脱敏，新增回归通过。
 - run 41622273550 Linux/Docker 通过，Windows 同一标签断言仍失败，说明并非仅大小写。夹具使用 TEMP 别名而 scope 为规范路径（Windows 可有 8.3 短路径）；测试拆为规范 scope 必须 PROJECT_PATH、别名必须脱敏且原路径不泄漏。保留原 Reader 安全断言，未将安全失败改成跳过。
+- 最终源码/测试提交 8204fa14e44d9dbf854a9eb20ab840feda0d4334 的远端 CI 41623230736 全部 success：https://github.com/Wenzayyds/agent/actions/runs/41623230736 。Linux 158 passed/11 skipped，Windows 156 passed/13 skipped；均收集 169 身份、基线缺失 0；Docker 专项 22/22。Windows/Linux Python 均 15/15、确定性回放均 8/8，pack 敏感命中均 0。跳过项是外部 MCP 或未装镜像等环境条件，真实容器执行由独立 Docker job 实测覆盖。
+- 本地完整 TS 为 167 passed/2 skipped（169），全仓 check 通过。P0 统计与 P1 远端工程验证完成；P2 已执行 4 次获准真实试验但结论不足，未知 usage/费用和 gateway_error 见 controlled-comparison-20261103.json，不再重试。此次追加仅记录证据，不修改已验收源码。
