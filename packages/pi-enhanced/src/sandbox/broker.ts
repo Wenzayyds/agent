@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
+import { AUDIT_MAX_RECORDS, SandboxAuditJournal } from "./audit.ts";
 import { assertSandboxWorkspaceIdentity, type SandboxConfig } from "./config.ts";
 import {
 	assertRequestId,
@@ -21,6 +22,9 @@ export function sandboxUser(): string {
 }
 
 export interface SandboxAuditRecord {
+	runId?: string;
+	startedAt?: number;
+	endedAt?: number;
 	requestId: string;
 	toolName: SandboxToolName;
 	operation: string;
@@ -47,9 +51,11 @@ export class DockerSandboxBroker {
 	private requestIds = new Set<string>();
 	private audit: SandboxAuditRecord[] = [];
 	private evidence: SandboxContainerEvidence | undefined;
+	private journal: SandboxAuditJournal | undefined;
 
 	constructor(config: SandboxConfig) {
 		this.config = config;
+		if (config.auditReportPath) this.journal = new SandboxAuditJournal(config.auditReportPath, config);
 	}
 
 	start(): SandboxContainerEvidence {
@@ -135,6 +141,7 @@ export class DockerSandboxBroker {
 					readWrite: mount.RW,
 				})),
 			};
+			this.journal?.setEvidence(this.evidence);
 			return this.evidence;
 		} catch (error) {
 			this.stop();
@@ -153,6 +160,7 @@ export class DockerSandboxBroker {
 		const requestId = options.requestId ?? randomUUID();
 		assertRequestId(requestId);
 		if (this.requestIds.has(requestId)) throw new Error("SANDBOX_DUPLICATE_REQUEST");
+		if (this.requestIds.size >= AUDIT_MAX_RECORDS) throw new Error("SANDBOX_AUDIT_LIMIT");
 		this.requestIds.add(requestId);
 		const request: SandboxRequest = {
 			protocolVersion: SANDBOX_PROTOCOL_VERSION,
@@ -168,22 +176,28 @@ export class DockerSandboxBroker {
 			throw new Error("SANDBOX_REQUEST_TOO_LARGE");
 		}
 		const started = performance.now();
+		const startedAt = Date.now();
+		if (this.audit.length >= AUDIT_MAX_RECORDS) throw new Error("SANDBOX_AUDIT_LIMIT");
+		// No operation starts until its intent is durable. No paths or file contents enter the journal.
+		if (!/^[a-z_]{1,40}$/u.test(operation)) throw new Error("SANDBOX_OPERATION_INVALID");
+		this.journal?.begin({
+			runId: this.config.runId,
+			requestId: auditRequestId(requestId),
+			toolName,
+			operation,
+			containerId,
+			startedAt,
+		});
+		let response: SandboxResponse;
 		try {
-			const response = await this.executeWorker(containerId, encoded, options.signal);
+			response = await this.executeWorker(containerId, encoded, options.signal);
 			if (response.status === "error") throw new Error(response.errorCode ?? "SANDBOX_WORKER_REJECTED");
-			this.audit.push({
-				requestId,
-				toolName,
-				operation,
-				status: "ok",
-				containerId,
-				image: this.config.image,
-				durationMs: Number((performance.now() - started).toFixed(3)),
-			});
-			return response.result;
 		} catch (error) {
 			const sanitized = sanitizeSandboxError(error);
-			this.audit.push({
+			this.record({
+				runId: this.config.runId,
+				startedAt,
+				endedAt: Date.now(),
 				requestId,
 				toolName,
 				operation,
@@ -195,6 +209,20 @@ export class DockerSandboxBroker {
 			});
 			throw sanitized;
 		}
+		// A failed journal write must not be caught and recorded a second time as a worker error.
+		this.record({
+			runId: this.config.runId,
+			startedAt,
+			endedAt: Date.now(),
+			requestId,
+			toolName,
+			operation,
+			status: "ok",
+			containerId,
+			image: this.config.image,
+			durationMs: Number((performance.now() - started).toFixed(3)),
+		});
+		return response.result;
 	}
 
 	toRelative(absolutePath: string): string {
@@ -212,6 +240,14 @@ export class DockerSandboxBroker {
 
 	getEvidence(): SandboxContainerEvidence | undefined {
 		return this.evidence;
+	}
+
+	completeAudit(): void {
+		this.journal?.complete();
+	}
+	private record(value: SandboxAuditRecord): void {
+		this.journal?.end({ ...value, requestId: auditRequestId(value.requestId) });
+		this.audit.push(value);
 	}
 
 	stop(): void {
@@ -298,4 +334,8 @@ export class DockerSandboxBroker {
 			child.stdin.end(input);
 		});
 	}
+}
+
+function auditRequestId(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
 }

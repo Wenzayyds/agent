@@ -12,6 +12,8 @@ export interface ControlledResult {
 }
 
 export function controlledStopReason(result: ControlledResult): string | null {
+	if (result.terminationClassification && !["completed", "verification_failed"].includes(String(result.terminationClassification))) return String(result.terminationClassification);
+	if (result.auditComplete === false) return "sandbox_audit_incomplete";
 	const g = result.gateway;
 	if (!g || g.state !== "ready" || g.requestsRejected !== 0 || g.requestsStarted !== g.requestsCompleted) return "gateway_or_usage_failure";
 	if (![g.requestsStarted, g.actualTotalTokens, g.committedTokenUpperBound, g.actualCostUsd, g.committedCostUpperBoundUsd].every((n) => Number.isFinite(n) && n >= 0)) return "invalid_budget_evidence";

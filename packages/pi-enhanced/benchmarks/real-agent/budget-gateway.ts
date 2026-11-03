@@ -372,7 +372,8 @@ async function handleRequest(
 			ledger.fail(reservation, "GATEWAY_UPSTREAM_BODY_MISSING");
 			settled = true;
 			recordOutcome("GATEWAY_UPSTREAM_BODY_MISSING");
-			return response.end();
+			response.end();
+			return;
 		}
 		let pending = "";
 		const decoder = new TextDecoder();

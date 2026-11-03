@@ -145,6 +145,26 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		expect(providerCalls).toBe(0);
 	}, 60_000);
 
+	it.each(["early-exit", "isolated-attack"])("keeps %s patch execution inside the production verifier container", async (scenario) => {
+		const root = mkdtempSync(join(tmpdir(), "pi-verifier-runner-")); roots.push(root);
+		const sentinel = join(root, "host-sentinel.txt"); writeFileSync(sentinel, "unchanged");
+		const source = scenario === "early-exit" ? "process.exit(0);export const sumTo=()=>0;" : `import fs from 'node:fs';let safe=!process.env.MOCK_PROVIDER_KEY;try{fs.writeFileSync(${JSON.stringify(sentinel)},'escaped');safe=false}catch{}try{fs.writeFileSync('/workspace/unwanted.txt','escaped');safe=false}catch{}export const sumTo=n=>safe?n*(n+1)/2:0;`;
+		let turns = 0;
+		const provider = await startProvider((_body, response) => {
+			turns++; response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end(turns === 1 ? toolCallSse("write", { path: "math.js", content: source }, 100, 10) : textSse("done", 120, 10));
+		});
+		const output = join(root, "output"); const runId = `verifier_${scenario.replaceAll("-", "_")}`;
+		const execution = await runRunner(provider.url, output, image, runId);
+		expect(execution.status, execution.stderr).toBe(0); expect(turns).toBe(2);
+		const record = JSON.parse(readFileSync(join(output, runId, "run.json"), "utf8")).results[0];
+		expect(record).toMatchObject({ runStatus: "completed", verification: { mode: "docker-readonly", cleanup: "removed", evidence: { network: "none", readOnlyRoot: true, mounts: [{ destination: "/workspace", readWrite: false }] } }, gateway: { state: "ready", requestsStarted: 2, requestsCompleted: 2 } });
+		if (scenario === "early-exit") expect(record).toMatchObject({ patchStatus: "failed", terminationClassification: "sandbox_runtime_error", verification: { status: "protocol_error", exitCode: 0, passed: false } });
+		else expect(record).toMatchObject({ patchStatus: "passed", terminationClassification: "completed", verification: { passed: true } });
+		expect(readFileSync(sentinel, "utf8")).toBe("unchanged");
+		if (process.env.PI_ENHANCED_VERIFIER_RUNNER_EVIDENCE_DIR) writeFileSync(join(process.env.PI_ENHANCED_VERIFIER_RUNNER_EVIDENCE_DIR, `${scenario}.json`), JSON.stringify(record, null, 2));
+	}, 90_000);
+
 	it("reaches verified Memory and read-only Task tools through the production pilot", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-module-pilot-"));
 		roots.push(root);

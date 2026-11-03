@@ -16,6 +16,11 @@ import { startBudgetGateway, type BudgetGatewayStatus } from "./budget-gateway.t
 import { budgetExceeded, buildEvaluationPlan, classifyExecution, executionOutcome, preflightView, redactEvaluationText, summarizeUsage } from "./evaluation-policy.ts";
 import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
 import { controlledCell, CONTROLLED_LIMITS, LONG_REPORT_TASK, longReport, MEMORY_RULE, MEMORY_TASK_PROMPT, TASK_STEPS } from "./controlled-cases.ts";
+import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
+import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
+import type { SafetyEvent } from "./controlled-stop.ts";
+import { classifyTermination } from "./result-classification.ts";
+import { verifyPatchInDocker } from "./docker-verifier.ts";
 
 interface Task { id: string; category: string; prompt: string }
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +30,8 @@ const manifest = JSON.parse(readFileSync(join(here, "task-manifest.json"), "utf8
 const execute = process.argv.includes("--execute");
 const localStubUrl = argument("--local-stub-url");
 const cell = controlledCell(argument("--controlled-cell"));
+const offlinePolicy = loadOfflineDenialPolicy(argument("--offline-denial-policy"), localStubUrl, repositoryRoot);
+if (offlinePolicy && !cell) throw new Error("OFFLINE_DENIAL_POLICY_REQUIRES_CONTROLLED_CELL");
 const readonlyModuleTools = cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools");
 const taskId = cell?.taskId ?? argument("--task-id");
 const selectedTasks = (taskId ? [...manifest.tasks, LONG_REPORT_TASK].filter((task) => task.id === taskId) : manifest.tasks).map((task) => cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task);
@@ -70,6 +77,7 @@ const runOutput = plan ? resolve(plan.outputDir, plan.runId) : undefined;
 if (runOutput && existsSync(runOutput)) throw new Error("EVAL_GATE_RUN_ID_ALREADY_EXISTS");
 if (runOutput) mkdirSync(runOutput, { recursive: true });
 const root = mkdtempSync(join(tmpdir(), "pi-enhanced-real-agent-"));
+if (offlinePolicy) writeFileSync(join(root, "offline-denial-policy.json"), JSON.stringify(offlinePolicy), { flag: "wx", mode: 0o600 });
 mkdirSync(join(root, "temp"));
 const results: Array<Record<string, unknown>> = [];
 try {
@@ -77,7 +85,8 @@ try {
 	for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
 		const cwd = join(root, task.id); mkdirSync(cwd);
 		generate(task.id, cwd); initGit(cwd);
-		const initialVerifierPassed = verify(task.id, cwd);
+		// Only pristine, host-generated fixtures reach this check, before any Agent is started.
+		const initialVerifierPassed = verifyTrustedFixture(task.id, cwd);
 		if (initialVerifierPassed) throw new Error(`Fixture ${task.id} is not initially failing`);
 		const repositoryCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
 		if (!execute) {
@@ -122,7 +131,7 @@ try {
 				PI_ENHANCED_CONTEXT_REPORT_PATH: contextReportPath,
 			},
 		});
-		preflightSandbox(childEnvironment, cwd, root);
+		const verifierScope = preflightSandbox(childEnvironment, cwd, root);
 		const gateway = await startBudgetGateway({
 			runId: plan!.runId,
 			upstreamBaseUrl: localStubUrl ?? "https://api.deepseek.com",
@@ -148,7 +157,7 @@ try {
 			"--extension", join(packageRoot, "extensions", "mcp-policy.ts"),
 			"--extension", join(packageRoot, "extensions", "sandbox.ts"),
 		];
-		if (cell) extensionArgs.push("--extension", join(here, "controlled-stop.ts"));
+		if (cell) extensionArgs.push("--extension", join(here, offlinePolicy ? "offline-controlled-stop.ts" : "controlled-stop.ts"));
 		if (switches.memory) extensionArgs.push("--extension", join(packageRoot, "extensions", "memory.ts"));
 		if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
 		if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
@@ -187,14 +196,22 @@ try {
 			costUsd: gatewayStatus.actualCostUsd,
 		};
 		observedCost += gatewayStatus.actualCostUsd;
-		const verifierPassed = verify(task.id, cwd);
+		const verification = await verifyPatchInDocker(task.id, verifierScope);
+		const verifierPassed = verification.passed;
 		const patch = execFileSync("git", ["diff", "--binary", "--no-ext-diff"], { cwd, encoding: "utf8" });
-		const sandboxAudit = cell && !existsSync(sandboxAuditPath) ? { evidence: null, audit: [], error: "EVAL_SANDBOX_AUDIT_MISSING" } : readSandboxAudit(sandboxAuditPath);
+		let sandboxAudit: Record<string, unknown>;
+		try { sandboxAudit = readSandboxAudit(sandboxAuditPath); }
+		catch (error) { sandboxAudit = { evidence: null, audit: [], complete: false, integrity: "invalid_or_missing", error: error instanceof Error ? error.message : "EVAL_SANDBOX_AUDIT_INVALID" }; }
+		const safetyPath = join(root, "tool-safety.json");
+		const toolSafety = existsSync(safetyPath) ? JSON.parse(readFileSync(safetyPath, "utf8")) as { events: SafetyEvent[]; deniedCount: number } : { events: [], deniedCount: 0 };
 		const contextAudit = existsSync(contextReportPath) ? JSON.parse(readFileSync(contextReportPath, "utf8")) as Record<string, unknown> : { state: switches.context ? "missing" : "disabled", diagnostics: [] };
 		const overBudget = budgetExceeded(usage, observedCost, plan!) || gatewayStatus.requestsRejected > 0;
 		const timedOut = child.timedOut;
 		const status = classifyExecution({ overBudget, timedOut, exitCode: child.status, verifierPassed });
 		const outcome = executionOutcome({ overBudget: budgetExceeded(usage, observedCost, plan!), budgetRejected: gatewayStatus.requestsRejected > 0, gatewayFailed: gatewayStatus.state === "failed_closed", timedOut, exitCode: child.status, verifierPassed });
+		const auditComplete = sandboxAudit.complete === true && Boolean(sandboxAudit.evidence);
+		let terminationClassification = classifyTermination({ events: toolSafety.events, lastError: gatewayStatus.lastError, gatewayState: gatewayStatus.state, rejected: gatewayStatus.requestsRejected, runStatus: outcome.runStatus, verifierPassed, auditComplete });
+		if (["completed", "verification_failed"].includes(terminationClassification) && !["passed", "verification_failed"].includes(verification.status)) terminationClassification = "sandbox_runtime_error";
 		const taskOutput = join(runOutput!, task.id); mkdirSync(taskOutput, { recursive: true });
 		writeFileSync(join(taskOutput, "patch.diff"), patch);
 		writeFileSync(join(taskOutput, "agent.stderr.log"), redactEvaluationText(child.stderr ?? "", [process.env[apiKeyEnv!]!]));
@@ -204,8 +221,9 @@ try {
 		const fileToolCalls = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_start" ? [{ toolName: event.toolName, args: event.args }] : []; } catch { return []; } });
 		const toolFailures = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_end" && event.isError ? [{ toolName: event.toolName, result: event.result }] : []; } catch { return []; } });
 		const classifiedRecord = { ...record, ...outcome, ...(cell ? { controlledCell: cell.id, moduleSwitches: switches, referenceHash: createHash("sha256").update(cell.module === "memory" ? MEMORY_RULE : cell.module === "task" ? JSON.stringify(TASK_STEPS) : longReport()).digest("hex"), retriesEnabled: false, fileToolCalls, toolFailures } : {}), memorySeed, moduleTools, moduleToolCalls, moduleToolEvents, contextEnabled: switches.context, contextAudit, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
+		Object.assign(classifiedRecord, { terminationClassification, agentTermination: outcome.runStatus === "completed" ? "normal" : "abnormal", patchGenerated: patch.length > 0, toolSafety, auditComplete, verification });
 		writeFileSync(join(taskOutput, "result.json"), `${JSON.stringify(classifiedRecord, null, 2)}\n`); results.push(classifiedRecord);
-		writeFileSync(join(taskOutput, "sandbox-audit.json"), `${JSON.stringify(sandboxAudit, null, 2)}\n`);
+		writeFileSync(join(taskOutput, "sandbox-audit.json"), sandboxAudit.integrity === "valid" ? readFileSync(sandboxAuditPath) : `${JSON.stringify(sandboxAudit, null, 2)}\n`);
 		writeFileSync(join(taskOutput, "context-audit.json"), `${JSON.stringify(contextAudit, null, 2)}\n`);
 		if (overBudget) break;
 	}
@@ -229,14 +247,14 @@ function isLoopbackUrl(value: string): boolean {
 }
 function readSandboxAudit(path: string): Record<string, unknown> {
 	if (!existsSync(path)) throw new Error("EVAL_SANDBOX_AUDIT_MISSING");
-	const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-	if (!value.evidence || !Array.isArray(value.audit)) throw new Error("EVAL_SANDBOX_AUDIT_INVALID");
-	return value;
+	return readSandboxAuditSnapshot(path);
 }
-function preflightSandbox(environment: NodeJS.ProcessEnv, cwd: string, runRoot: string): void {
-	const broker = new DockerSandboxBroker(loadSandboxConfig(environment, cwd, runRoot));
+function preflightSandbox(environment: NodeJS.ProcessEnv, cwd: string, runRoot: string) {
+	const scope = loadSandboxConfig(environment, cwd, runRoot);
+	const broker = new DockerSandboxBroker({ ...scope, auditReportPath: undefined });
 	try {
 		broker.start();
+		return scope;
 	} finally {
 		broker.stop();
 	}
@@ -246,13 +264,8 @@ async function runAgentProcess(file: string, args: string[], options: { cwd: str
 		const child = spawn(file, args, { cwd: options.cwd, env: options.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
 		const stdout: Buffer[] = []; const stderr: Buffer[] = []; let size = 0; let timedOut = false;
 		const collect = (target: Buffer[], chunk: Buffer) => { size += chunk.length; if (size <= 4 * 1024 * 1024) target.push(chunk); else child.kill(); };
-		let pending = "";
 		child.stdout.on("data", (chunk: Buffer) => {
 			collect(stdout, chunk);
-			if (options.stopOnBoundaryFailure) {
-				pending += chunk.toString(); const lines = pending.split(/\r?\n/u); pending = lines.pop() ?? "";
-				for (const line of lines) { try { const event = JSON.parse(line) as Record<string, unknown>; if (event.type === "tool_execution_end" && event.isError && /SANDBOX_|Native tool guard blocked/u.test(JSON.stringify(event.result))) child.kill(); } catch {} }
-			}
 		}); child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
 		const boundaryTimer = options.stopOnBoundaryFailure ? setInterval(() => { if (options.stopOnBoundaryFailure?.()) child.kill(); }, 25) : undefined;
 		const timer = setTimeout(() => { timedOut = true; child.kill(); }, options.timeoutMs);
@@ -295,7 +308,7 @@ function generate(id: string, cwd: string): void {
 	};
 	for (const [name, content] of Object.entries(files[id]!)) writeFileSync(join(cwd, name), content);
 }
-function verify(id: string, cwd: string): boolean {
+function verifyTrustedFixture(id: string, cwd: string): boolean {
 	if (id === LONG_REPORT_TASK.id) { if (readFileSync(join(cwd, "diagnostics.txt"), "utf8") !== longReport()) return false; id = "long-output-localization"; }
 	const programs: Record<string, string> = {
 		"single-file-off-by-one": "import('./math.js').then(m=>{if(m.sumTo(3)!==6)process.exit(1)})",

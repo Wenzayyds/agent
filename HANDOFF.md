@@ -380,3 +380,28 @@
 - 本地完整回归 180 身份：178 passed/0 failed/2 条件跳过，174 基线缺失 0；Python 15/15、全仓 check 和 pack 泄漏检查通过。真实调用仍为 0，待推送当前实现并核对 CI 后再执行已获授权批次。
 - 首轮实现 27261ee10 的 CI 41631120068 暴露 Linux 隔离停止时序：父进程从 stdout 收到错误之前，Pi 已发下一次请求（实测 2 次）；没有付费执行。修复为受控专用 Extension 在 awaited tool_execution_end 中先认证通知回环网关进入 GATEWAY_ISOLATION_STOP，再结束进程。通道只能关闭网关，不能恢复或提高预算。P1 Policy 和 Pi Core 未修改。
 - 修复后的完整本地回归为 181 身份：179 passed/0 failed/2 条件跳过；隔离失败仍严格断言上游 1 次、后五格 not_run、容器残留 0，未降低验收条件。继续等待新提交的三平台 CI。
+- 最终源码 58dada178ee73ef03d9e5216d8d504bb09f89aff 的 CI 41632059204 三 job 全部 success：Windows 165 passed/16 skipped、Linux 167 passed/14 skipped（均 181 身份、基线缺失 0）；Docker 33/33，Python 均 15/15，包泄漏 0。
+- 同一干净提交通过 CI 后启动唯一真实批次 approved_six_20261103。首格 m_inline 在修改前请求 ls(..)/ls(../..)，Native tool guard 返回 path-outside-workspace；同步停止通道置 GATEWAY_ISOLATION_STOP，父进程结束当前格，后五格均 not_run。没有重试、加预算或补跑。
+- 实际 3 次请求且 3 次 completed_done，输入 6,631/输出 378/总 7,009 Token，网关计费及上界均 0.0024429 美元；运行约 6.645 秒，usage 完整。第一格没有补丁；Memory/Context/Task 均关闭，因此不能评价模块收益。
+- 停止后容器残留 0。强制结束未完整触发 session_shutdown，容器审计标 EVAL_SANDBOX_AUDIT_MISSING；保留工具边界错误、调用参数、gateway-final 与逐请求记录，不伪造完整审计。未来继续前先离线改进异常退出审计；本轮不继续调用或开发。
+- 报告 controlled-six-verification.md、结构化 controlled-six-real-results.json；原始产物 packages/pi-enhanced/evaluation-output/approved_six_20261103/。真实结果和最新记录仅保存在本地，未再次推送。
+
+## 2026-11-03：Batch J 离线异常审计与工具拒绝恢复
+
+- 仅本地开发与离线验证，没有调用付费 API、提交、推送或触发 Workflow。起止 HEAD 58dada178ee73ef03d9e5216d8d504bb09f89aff；原六格历史 12 个文件哈希未变，起始用户改动保留。
+- 根因是 controlled-stop 与 Runner stdout 将所有 Guard 拒绝升级成隔离停止，旧审计只在 session_shutdown 写盘。新增真实拒绝观察事件和明确的宿主 --offline-denial-policy 配置，仅 Stub 可选恢复、默认严格不变；符号链接、身份变化、write/edit、未知工具、容器异常和拒绝超限继续失败关闭。
+- Broker 配置权威路径后，操作 intent/结果即时写有界原子快照；异常保留 running/pending 和 unseenEventsPossible。两种真实子进程 SIGKILL 均恢复已有 Docker read，进行中 write 保留未知结果，未伪造成功。未配置 auditReportPath 的手工 Broker 仍只有旧内存接口。
+- 最终 TS 209 身份：206 passed/0 failed/3 skipped；原 181 身份缺失 0，Python 15/15。新增 Windows 活动目录替换 E2E 被 EBUSY 阻断并保留 Linux CI 用例；另外两项为原有外部 MCP 条件跳过。首次从子包启动导致旧 P4 夹具路径失败，最终使用 CI 的仓库根入口通过，未修改旧测试。
+- 恢复六格 Stub 24 请求、6 格独立验证通过；严重拒绝只启动首格一次请求、后五格 not_run。结果新增终止分类、工具拒绝和审计完整性；旧原始 status/runStatus 保留兼容。
+- 根 check、额外评测 TS/Biome、离线 build、真实 pack/安装 E2E 和包泄漏检查通过。远端 Windows/Linux/Docker CI 均 configured_only；真实六格尚待当前修改 CI 与 Linux 身份替换实测，不能自动重跑或把新离线策略用于 DeepSeek。
+- 交付仅新增 docs/batch-j-verification.md、docs/batch-j-results.json；原始机器证据在 .artifacts/batch-j/。后续真实模型与 Git 远端操作等待单独授权。
+- 额外源码边界记录：既有 verify() 在宿主 Node 导入补丁 JS，独立隐藏验证不等于验证代码也已被 Docker 隔离。本轮仅固定 Stub 补丁；真实模型重跑前需单独处理这段执行边界，未在 Batch J 重写验证器。
+
+## 2026-11-03：隐藏验证器隔离与 Linux CI 准备
+
+- 用户要求按顺序处理隐藏验证器安全，再完成 Linux CI，之后才转向模块效果评估。Batch J 保持结束状态，历史报告不改写；本轮交付仅 verifier-safety-verification.md 和 verifier-safety-results.json，机器证据在 .artifacts/verifier-safety/。
+- 生产 run-real-agent 改为通过独立 Docker 容器执行补丁验证：同固定镜像、非 root、无网络、只读根、只读项目挂载，无宿主环境变量；128 MiB/0.5 CPU/32 PIDs，默认 5 秒、16 KiB 输出上限，失败无宿主回退。宿主固定断言校验观测结果，零退出不等于通过。初始宿主自检仅运行启动 Agent 前刚写入的固定夹具。
+- 验证器 10 项、生产 Runner/原六格专项 8 项通过；提前零退出判协议错误、隔离攻击补丁未改动宿主哨兵。全量最终 224：221 passed/0 failed/3 skipped，原 209 身份缺失 0；Python 15/15，root check、评测 TS/Biome、pack 泄漏检查通过。
+- 初次并发全量旧 J pending 观察用例失败；未修改 J 源码或测试。串行全量通过，CI 同步 maxWorkers=1，保留失败日志，不声称彻底消除旧时序波动。
+- Linux CI 加入验证器用例和严格证据检查，禁止 Docker job 以跳过关键用例判成功；真实 Linux CI 尚未运行，Windows 活动目录替换仍 EBUSY 阻断。等待单独授权审查后提交并正常推送 origin/pi-agent，再完成远端 CI；未调用付费模型、提交或推送，不进入效果评估。
+- 用户随后已明确授权所审查 29 个文件的提交及正常推送，并检查 Windows/Linux/Docker CI。历史真实实验原始产物和敏感数据继续排除；不涉及模型调用授权。

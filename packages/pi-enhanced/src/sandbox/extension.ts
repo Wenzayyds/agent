@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { lstatSync, writeFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DockerSandboxBroker } from "./broker.ts";
@@ -44,24 +43,8 @@ export function createSandboxExtension(
 			broker = undefined;
 		});
 		pi.on("session_shutdown", () => {
-			if (broker && config?.auditReportPath) {
-				writeFileSync(
-					config.auditReportPath,
-					`${JSON.stringify(
-						{
-							schemaVersion: 1,
-							runId: config.runId,
-							workspaceSha256: createHash("sha256").update(config.workspace).digest("hex"),
-							evidence: broker.getEvidence(),
-							audit: broker.getAuditRecords(),
-						},
-						null,
-						2,
-					)}\n`,
-					{ flag: "wx" },
-				);
-			}
 			broker?.stop();
+			broker?.completeAudit();
 			broker = undefined;
 			config = undefined;
 		});

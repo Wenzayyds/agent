@@ -1,0 +1,14 @@
+{
+	"extends": "../../tsconfig.json",
+	"include": [
+		"benchmarks/real-agent/**/*.ts",
+		"tests/unit/batch-j-policy-audit.test.ts",
+		"tests/e2e/batch-j-runner.test.ts",
+		"tests/e2e/docker-verifier.test.ts",
+		"tests/e2e/real-agent-runner-e2e.test.ts",
+		"tests/unit/docker-ci-evidence.test.ts",
+		"tests/fixtures/sandbox-audit-child.ts",
+		"../coding-agent/src/utils/highlight-js.d.ts"
+	],
+	"exclude": ["**/dist/**"]
+}

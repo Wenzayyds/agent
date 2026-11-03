@@ -28,7 +28,9 @@ const identities = report.testResults
 	.sort((left, right) => left.localeCompare(right, "en-US"));
 const baselinePath = process.argv[3] ?? new URL("../docs/batch-d-test-manifest-final.json", import.meta.url);
 const outputPath = process.argv[4] ?? new URL("../docs/batch-e-test-manifest.json", import.meta.url);
-const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as { identities: string[] };
+const baselineDocument = JSON.parse(readFileSync(baselinePath, "utf8")) as { identities?: string[]; typescript?: { identities: string[] } };
+const baseline = { identities: baselineDocument.identities ?? baselineDocument.typescript?.identities ?? [] };
+if (!baseline.identities.length) throw new Error("Test baseline identities are missing");
 const missingBaselineIdentities = baseline.identities.filter((identity) => !identities.includes(identity));
 const sha256 = createHash("sha256").update(identities.join("\n")).digest("hex");
 const manifest = {

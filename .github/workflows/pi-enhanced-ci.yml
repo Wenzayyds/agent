@@ -32,8 +32,9 @@ jobs:
       - run: npm run hydrate:model-data
       - run: npm run build:offline
       - run: npm run check --workspace=@wz-agent/pi-enhanced
-      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
-      - run: node --experimental-strip-types packages/pi-enhanced/benchmarks/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/batch-h-test-manifest.json packages/pi-enhanced/docs/batch-i-test-manifest.json
+      - run: npm run check:evaluation --workspace=@wz-agent/pi-enhanced
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --maxWorkers=1 --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
+      - run: node --experimental-strip-types packages/pi-enhanced/benchmarks/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/batch-j-results.json packages/pi-enhanced/.ci-test-manifest.json
       - run: python -m pytest packages/pi-enhanced/python/memory-intelligence/tests -q
         env:
           PYTHONPATH: packages/pi-enhanced/python/memory-intelligence/src
@@ -49,7 +50,7 @@ jobs:
           path: |
             packages/pi-enhanced/ci-metadata.json
             packages/pi-enhanced/.ci-vitest.json
-            packages/pi-enhanced/docs/batch-i-test-manifest.json
+            packages/pi-enhanced/.ci-test-manifest.json
 
   docker-isolation:
     runs-on: ubuntu-latest
@@ -67,9 +68,14 @@ jobs:
       - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-docker-metadata.json --docker
       - run: docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
       - run: npm run smoke:docker --workspace=@wz-agent/pi-enhanced
-      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts packages/pi-enhanced/tests/unit/controlled-policy.test.ts packages/pi-enhanced/tests/e2e/controlled-batch.test.ts --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
+      - run: npm run check:evaluation --workspace=@wz-agent/pi-enhanced
+      - run: node -e "require('node:fs').mkdirSync('packages/pi-enhanced/batch-j-stub', {recursive:true})"
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts packages/pi-enhanced/tests/unit/controlled-policy.test.ts packages/pi-enhanced/tests/e2e/controlled-batch.test.ts packages/pi-enhanced/tests/unit/batch-j-policy-audit.test.ts packages/pi-enhanced/tests/e2e/batch-j-runner.test.ts packages/pi-enhanced/tests/e2e/docker-verifier.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
         env:
           PI_ENHANCED_SIX_EVIDENCE_PATH: packages/pi-enhanced/controlled-six-stub.json
+          PI_ENHANCED_BATCH_J_OUTPUT: packages/pi-enhanced/batch-j-stub
+          PI_ENHANCED_VERIFIER_RUNNER_EVIDENCE_DIR: packages/pi-enhanced/batch-j-stub
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/require-docker-evidence.ts packages/pi-enhanced/.ci-sandbox-vitest.json
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -79,3 +85,4 @@ jobs:
             packages/pi-enhanced/.ci-sandbox-vitest.json
             packages/pi-enhanced/docs/batch-f-sandbox-smoke.json
             packages/pi-enhanced/controlled-six-stub.json
+            packages/pi-enhanced/batch-j-stub

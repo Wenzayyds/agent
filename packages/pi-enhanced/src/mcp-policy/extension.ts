@@ -89,7 +89,20 @@ export default function mcpPolicyExtension(pi: ExtensionAPI): void {
 
 	pi.on("tool_call", async (event, ctx) => {
 		const current = currentState(ctx);
-		if (!event.toolName.startsWith("mcp__")) return current.nativeGuard.evaluate(event, ctx);
+		if (!event.toolName.startsWith("mcp__")) {
+			const result = await current.nativeGuard.evaluate(event, ctx);
+			// Observation only: policy decisions and tool permissions are unchanged.
+			if (result?.block)
+				pi.events.emit("pi-enhanced:native-denied", {
+					record: current.nativeGuard
+						.snapshot()
+						.slice()
+						.reverse()
+						.find((record) => record.toolCallId === event.toolCallId && record.toolName === event.toolName),
+					path: (event.input as Record<string, unknown>).path,
+				});
+			return result;
+		}
 		if (!current.loaded.config.enabled && !current.loaded.failClosed) return;
 		const toolInfo = pi.getAllTools().find((tool) => tool.name === event.toolName);
 		const identity = parseMcpToolIdentity(event.toolName, toolInfo);
