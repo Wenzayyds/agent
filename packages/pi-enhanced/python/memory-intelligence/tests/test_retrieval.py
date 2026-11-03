@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import numpy as np
 
 from memory_intelligence.retrieval import lexical_rank, reciprocal_rank_fusion
 from memory_intelligence.vector_index import VectorIndex
@@ -47,6 +48,29 @@ def test_real_lsa_vectors_recall_a_target_without_query_term_overlap() -> None:
 def test_reciprocal_rank_fusion_is_deterministic_and_deduplicated() -> None:
     fused = reciprocal_rank_fusion(["a", "b", "c"], ["b", "d", "a"], 4)
     assert fused == ["b", "a", "d", "c"]
+
+
+def test_semantic_recall_survives_rotations_in_repeated_singular_values(monkeypatch) -> None:
+    original = np.linalg.svd
+
+    def rotated_svd(*args, **kwargs):
+        left, singular, right = original(*args, **kwargs)
+        # Rotate the degenerate unit-singular-value subspace, as LAPACK may do.
+        indices = np.flatnonzero(np.isclose(singular, 1.0))
+        if len(indices) > 1:
+            a, b = indices[0], indices[-1]
+            rotation = np.eye(len(singular))
+            rotation[a, a] = rotation[b, b] = np.cos(0.71)
+            rotation[a, b] = -np.sin(0.71)
+            rotation[b, a] = np.sin(0.71)
+            left = left @ rotation.T
+            right = rotation @ right
+        return left, singular, right
+
+    monkeypatch.setattr(np.linalg, "svd", rotated_svd)
+    index = VectorIndex()
+    index.sync_snapshot("project", records())
+    assert "deploy-target" in [item["memoryId"] for item in index.search("project", "operator authorization gate", 5)]
 
 
 def test_offline_benchmark_reports_real_fts5_quality_latency_and_process_memory() -> None:

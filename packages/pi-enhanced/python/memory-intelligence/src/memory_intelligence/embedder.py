@@ -103,6 +103,19 @@ class LocalLsaEmbedder:
             max(2, int(math.sqrt(len(vocabulary)))),
         )
         _left, singular, right = np.linalg.svd(matrix, full_matrices=False)
+        # Cutting a repeated singular-value block selects an arbitrary subspace
+        # across LAPACK implementations. Keep only complete leading blocks.
+        requested_dimensions = dimensions
+        while 0 < dimensions < len(singular) and np.isclose(
+            singular[dimensions - 1], singular[dimensions], rtol=1e-7, atol=1e-10
+        ):
+            dimensions -= 1
+        if dimensions == 0:
+            dimensions = requested_dimensions
+            while dimensions < len(singular) and np.isclose(
+                singular[dimensions - 1], singular[dimensions], rtol=1e-7, atol=1e-10
+            ):
+                dimensions += 1
         self._projection = right[:dimensions].T.astype(np.float32)
         self._document_vectors = _normalize_rows(matrix @ self._projection).astype(np.float32)
         return self._document_vectors

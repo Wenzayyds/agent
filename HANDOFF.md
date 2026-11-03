@@ -340,3 +340,5 @@
 - 此轮没有调用真实模型，未推送；之前的一次付费授权已经消耗。等待推送确认和新实验预算。
 - 随后用户授权正常推送，be90a62ea 已推送；远端 run 41619421795 实际启动。Docker job 在 build:offline 因干净 checkout 缺失被忽略的 Provider 数据失败；CI 补用原有 hydrate:model-data 步骤。恢复的 H/I 清单哈希改为真实换行算法，H 清单明确标注重建来源。
 - 第二轮 run 41619641040 暴露 Linux clean checkout 类型检查依赖构建，以及 runner UID 1001 与容器 UID 1000 不匹配导致挂载写入失败。CI 调整为 hydrate→build→check；容器使用宿主非 root UID/GID（root/Windows 回退 1000:1000），检查值同步匹配，未修改挂载权限或容器能力。
+- 第三轮 Linux TS 与身份清单通过，Python 暴露 SVD 截断重复奇异值块的跨 LAPACK 不确定性。改为完整奇异值块截断，新增旋转子空间回归；Python 15/15 通过。原有语义召回断言保留。
+- P2 用户授权 2 任务×baseline/full，共 4 次独立运行，总 32 请求、80,000 Token、0.12 美元，每次 180 秒、不重试；前置模块触达审查和 CI 尚未完成，未消耗此授权。
