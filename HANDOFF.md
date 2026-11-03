@@ -405,3 +405,4 @@
 - 初次并发全量旧 J pending 观察用例失败；未修改 J 源码或测试。串行全量通过，CI 同步 maxWorkers=1，保留失败日志，不声称彻底消除旧时序波动。
 - Linux CI 加入验证器用例和严格证据检查，禁止 Docker job 以跳过关键用例判成功；真实 Linux CI 尚未运行，Windows 活动目录替换仍 EBUSY 阻断。等待单独授权审查后提交并正常推送 origin/pi-agent，再完成远端 CI；未调用付费模型、提交或推送，不进入效果评估。
 - 用户随后已明确授权所审查 29 个文件的提交及正常推送，并检查 Windows/Linux/Docker CI。历史真实实验原始产物和敏感数据继续排除；不涉及模型调用授权。
+- 已提交并正常推送 5c066bb406484f1d1303c8abf16aa95be70e5272，CI 41657433565 的 Linux 与 Docker 通过（Docker 73/73，含真实目录身份替换），Windows 181 passed/1 failed/42 skipped。失败为 256 次真实 fsync 的旧审计容量测试触及根入口默认 5 秒；CI 显式采用子包原有 30 秒 testTimeout，不修改该测试、容量上限或验证器 5 秒执行限制。同步允许上传 Docker 隐藏 JSON 报告，继续验证下一提交。

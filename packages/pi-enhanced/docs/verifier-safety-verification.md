@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-隐藏验证器的本地改动及回归已完成：模型修改后的 JavaScript 只在 Docker 中执行，宿主不再导入补丁代码。Linux CI 配置已补齐，尚待单独授权提交和推送，不能记为已通过。本轮没有付费模型调用、提交、推送或 Workflow 触发，未开始 Memory、Context、Task Manager 的真实效果评估。
+隐藏验证器的本地改动及回归已完成：模型修改后的 JavaScript 只在 Docker 中执行，宿主不再导入补丁代码。用户已单独授权提交并正常推送。首次远端 Linux 与 Docker job 通过，Windows 触及根测试入口默认 5 秒时限，正在验证配置修正。本轮没有付费模型调用或手动 Workflow 触发，未开始 Memory、Context、Task Manager 的真实效果评估。
 
 本轮只新增这份验收文档和 [verifier-safety-results.json](verifier-safety-results.json)。测试原始结果、生产 Runner 的 Stub 证据和待提交差异保存在 `.artifacts/verifier-safety/`。
 
@@ -72,4 +72,6 @@ Docker 构成执行隔离边界；这些固定功能断言仍是现有合成任�
 
 提交前远端 job 状态均为 `configured_only`，没有新 run URL、Commit ID 或远端成功记录。用户已单独授权将审查后的 29 个必要文件提交并正常推送 `pi-agent` 到 `origin/pi-agent`，继续检查 Windows/Linux/Docker CI。历史 P5 真实结果、controlled-six 原始报告和运行目录不纳入提交；`.env`、密钥、数据库、Session、日志和缓存不纳入提交。后续远端结果在本轮同一对报告中更新。
 
-只有当前修改的 Linux/Docker CI 真正通过后，才进入 Memory、Context、Task Manager 效果评估的方案与授权阶段。真实模型调用仍需另行授权，不能沿用旧六格预算。
+首个提交 `5c066bb406484f1d1303c8abf16aa95be70e5272` 的 [CI 41657433565](https://github.com/Wenzayyds/agent/actions/runs/41657433565)：Linux 184 passed/0 failed/40 skipped；Docker 73/73，真实活动目录身份替换和验证器隔离用例均通过。Windows 181 passed/1 failed/42 skipped，失败为 256 次真实 fsync 的容量测试超过根入口默认 5 秒。CI 现显式采用子包原有的 30 秒 testTimeout，验证器自身 5 秒上限及全部安全断言未变；Docker 同时启用隐藏 JSON 报告上传。等待该配置修正提交的全套 CI。
+
+只有当前修改的完整 CI 真正通过后，才进入 Memory、Context、Task Manager 效果评估的方案与授权阶段。真实模型调用仍需另行授权，不能沿用旧六格预算。

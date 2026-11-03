@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-03T14:48:07.797Z",
+  "generatedAt": "2026-11-03T14:57:09.715Z",
   "scope": "hidden_verifier_isolation_and_linux_ci_preparation",
   "sourceHead": "58dada178ee73ef03d9e5216d8d504bb09f89aff",
   "branch": "pi-agent",
-  "worktreeCommitted": false,
-  "status": "local_verifier_complete_remote_ci_authorized_pending_execution",
+  "worktreeCommitted": true,
+  "status": "linux_and_docker_passed_windows_ci_timeout_fix_in_progress",
   "paidCalls": 0,
   "actualPaidCostUsd": 0,
-  "commits": 0,
-  "pushes": 0,
+  "commits": 1,
+  "pushes": 1,
   "workflowDispatches": 0,
   "typescript": {
     "total": 224,
@@ -289,7 +289,8 @@
     "hostPlatform": "win32",
     "currentRoundFullBuild": "not_run_pi_core_unchanged_existing_bundle_used",
     "piCoreModified": false,
-    "moduleEffectEvaluation": "not_started"
+    "moduleEffectEvaluation": "not_started",
+    "linuxLiveWorkspaceReplacement": "passed_in_remote_docker_job"
   },
   "verifier": {
     "mode": "docker-readonly",
@@ -443,17 +444,325 @@
   ],
   "ci": {
     "workflow": ".github/workflows/pi-enhanced-ci.yml",
-    "windows": "configured_only",
-    "linux": "configured_only",
-    "dockerJob": "configured_only",
+    "windows": "failure",
+    "linux": "success",
+    "dockerJob": "success",
     "criticalDockerSkipsAllowed": false,
     "testWorkers": 1,
-    "remoteRunUrl": null,
-    "authorization": "user_explicitly_approved_29_files_commit_and_normal_push",
-    "reason": "Authorized; pending the reviewed commit and normal push."
+    "remoteRunUrl": "https://github.com/Wenzayyds/agent/actions/runs/41657433565",
+    "authorization": "user_explicitly_approved_commit_and_normal_push",
+    "reason": "First Windows run hit the root CLI default 5-second test timeout during 256 durable writes; package-equivalent 30-second test timeout is being verified.",
+    "attempts": [
+      {
+        "commit": "5c066bb406484f1d1303c8abf16aa95be70e5272",
+        "runId": 41657433565,
+        "runUrl": "https://github.com/Wenzayyds/agent/actions/runs/41657433565",
+        "status": "completed",
+        "conclusion": "failure",
+        "jobs": [
+          {
+            "name": "offline-engineering (windows-latest)",
+            "conclusion": "failure",
+            "url": "https://github.com/Wenzayyds/agent/actions/runs/41657433565/job/125991388766"
+          },
+          {
+            "name": "docker-isolation",
+            "conclusion": "success",
+            "url": "https://github.com/Wenzayyds/agent/actions/runs/41657433565/job/125991389037"
+          },
+          {
+            "name": "offline-engineering (ubuntu-latest)",
+            "conclusion": "success",
+            "url": "https://github.com/Wenzayyds/agent/actions/runs/41657433565/job/125991389129"
+          }
+        ],
+        "artifactSummaries": [
+          {
+            "artifact": "pi-enhanced-docker-5c066bb406484f1d1303c8abf16aa95be70e5272",
+            "metadata": {
+              "schemaVersion": 1,
+              "commit": "5c066bb406484f1d1303c8abf16aa95be70e5272",
+              "runId": "41657433565",
+              "job": "docker-isolation",
+              "runnerOs": "Linux",
+              "platform": "linux/x64",
+              "node": "v24.22.1",
+              "npm": "11.19.1",
+              "python": "Python 3.14.4",
+              "docker": "29.4.2"
+            },
+            "early-exit": {
+              "terminationClassification": "sandbox_runtime_error",
+              "verification": {
+                "mode": "docker-readonly",
+                "status": "protocol_error",
+                "passed": false,
+                "exitCode": 0,
+                "durationMs": 257.963,
+                "outputBytes": 0,
+                "cleanup": "removed",
+                "evidence": {
+                  "containerId": "b3e76dd7f432fede93da430183654c2c84d6be0b464f957d6db8f4430904f6c1",
+                  "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+                  "network": "none",
+                  "readOnlyRoot": true,
+                  "user": "1001:1001",
+                  "mounts": [
+                    {
+                      "destination": "/workspace",
+                      "readWrite": false
+                    }
+                  ]
+                },
+                "containerExitCode": 0,
+                "errorCode": "VERIFIER_INVALID_RESPONSE"
+              }
+            },
+            "identityExecution": {
+              "terminationClassification": "isolation_boundary_stop",
+              "gateway": {
+                "state": "failed_closed",
+                "requestsStarted": 1,
+                "requestsCompleted": 1,
+                "requestsRejected": 1,
+                "requestAttempts": 2,
+                "actualInputTokens": 100,
+                "actualOutputTokens": 10,
+                "actualTotalTokens": 110,
+                "actualCostUsd": 0.000042,
+                "committedTokenUpperBound": 110,
+                "committedCostUpperBoundUsd": 0.000042,
+                "lastError": "GATEWAY_ISOLATION_STOP",
+                "denials": [
+                  {
+                    "runId": "batch_j_identity_test_m_inline",
+                    "requestSequence": 2,
+                    "code": "GATEWAY_FAILED_CLOSED",
+                    "upstreamForwarded": false,
+                    "requestsStarted": 1,
+                    "actualTotalTokens": 110,
+                    "committedTokenUpperBound": 110,
+                    "reservedTokens": 0,
+                    "actualCostUsd": 0.000042,
+                    "committedCostUpperBoundUsd": 0.000042,
+                    "reservedCostUsd": 0
+                  }
+                ],
+                "requestOutcomes": [
+                  {
+                    "requestSequence": 1,
+                    "outcome": "completed_done",
+                    "receivedBytes": 400,
+                    "usageSeen": true,
+                    "doneSeen": true,
+                    "elapsedMs": 79.394
+                  }
+                ]
+              },
+              "verification": {
+                "mode": "docker-readonly",
+                "status": "runtime_error",
+                "passed": false,
+                "exitCode": null,
+                "durationMs": 0.216,
+                "outputBytes": 0,
+                "cleanup": "not_needed",
+                "evidence": null,
+                "errorCode": "SANDBOX_WORKSPACE_IDENTITY_CHANGED"
+              }
+            },
+            "isolated-attack": {
+              "terminationClassification": "completed",
+              "verification": {
+                "mode": "docker-readonly",
+                "status": "passed",
+                "passed": true,
+                "exitCode": 0,
+                "durationMs": 260.914,
+                "outputBytes": 34,
+                "cleanup": "removed",
+                "evidence": {
+                  "containerId": "2ae1f1404335432e56726a27a3c1ad32ebabccc09439e3923a9e7e4832e287a7",
+                  "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+                  "network": "none",
+                  "readOnlyRoot": true,
+                  "user": "1001:1001",
+                  "mounts": [
+                    {
+                      "destination": "/workspace",
+                      "readWrite": false
+                    }
+                  ]
+                },
+                "containerExitCode": 0
+              }
+            }
+          },
+          {
+            "artifact": "pi-enhanced-Linux-5c066bb406484f1d1303c8abf16aa95be70e5272",
+            "tests": {
+              "numTotalTests": 224,
+              "numPassedTests": 184,
+              "numFailedTests": 0,
+              "numPendingTests": 40
+            },
+            "identityCase": [
+              {
+                "ancestorTitles": [
+                  "Batch J production Runner and crash audit"
+                ],
+                "fullName": "Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
+                "status": "skipped",
+                "title": "enforces identity through real Pi, gateway and Docker",
+                "failureMessages": [],
+                "meta": {},
+                "tags": []
+              }
+            ],
+            "verifierCases": [
+              {
+                "name": "Isolated hidden verifier runs the real assertion inputs with read-only Docker evidence and cleans up",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for wrong value without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for early exit zero without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for invalid JSON without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for exception without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for infinite loop without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for output flood without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier denies host data, credentials, project writes, root writes and outbound networking",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier rejects a replaced workspace before running any verifier container",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier does not run host code when the pinned verifier image is missing",
+                "status": "skipped"
+              }
+            ],
+            "manifest": {
+              "count": 224,
+              "baselineCount": 209,
+              "missingBaselineIdentities": [],
+              "sha256": "428950fca7de6717fceca2dbbbdb4d4ea9741ba94fdc56f3e803b2011a7c14e1"
+            },
+            "metadata": {
+              "schemaVersion": 1,
+              "commit": "5c066bb406484f1d1303c8abf16aa95be70e5272",
+              "runId": "41657433565",
+              "job": "offline-engineering",
+              "runnerOs": "Linux",
+              "platform": "linux/x64",
+              "node": "v24.22.2",
+              "npm": "11.19.1",
+              "python": "Python 3.14.10",
+              "docker": null
+            }
+          },
+          {
+            "artifact": "pi-enhanced-Windows-5c066bb406484f1d1303c8abf16aa95be70e5272",
+            "metadata": {
+              "schemaVersion": 1,
+              "commit": "5c066bb406484f1d1303c8abf16aa95be70e5272",
+              "runId": "41657433565",
+              "job": "offline-engineering",
+              "runnerOs": "Windows",
+              "platform": "win32/x64",
+              "node": "v24.22.2",
+              "npm": "11.19.1",
+              "python": "Python 3.14.10",
+              "docker": null
+            },
+            "tests": {
+              "numTotalTests": 224,
+              "numPassedTests": 181,
+              "numFailedTests": 1,
+              "numPendingTests": 42
+            },
+            "identityCase": [
+              {
+                "ancestorTitles": [
+                  "Batch J production Runner and crash audit"
+                ],
+                "fullName": "Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
+                "status": "skipped",
+                "title": "enforces identity through real Pi, gateway and Docker",
+                "failureMessages": [],
+                "meta": {},
+                "tags": []
+              }
+            ],
+            "verifierCases": [
+              {
+                "name": "Isolated hidden verifier runs the real assertion inputs with read-only Docker evidence and cleans up",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for wrong value without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for early exit zero without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for invalid JSON without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for exception without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for infinite loop without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier fails closed for output flood without persisting raw output",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier denies host data, credentials, project writes, root writes and outbound networking",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier rejects a replaced workspace before running any verifier container",
+                "status": "skipped"
+              },
+              {
+                "name": "Isolated hidden verifier does not run host code when the pinned verifier image is missing",
+                "status": "skipped"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "testTimeoutMs": 30000
   },
   "gitReview": {
-    "status": "reviewed_not_staged",
+    "status": "initial_29_files_reviewed_committed_and_pushed",
     "selectedPaths": [
       ".github/workflows/pi-enhanced-ci.yml",
       "HANDOFF.md",
@@ -502,10 +811,10 @@
     "forcePush": false
   },
   "remaining": [
-    "Obtain separate commit/push authorization, then run and inspect Windows/Linux/Docker CI for the resulting exact commit.",
-    "Linux live-workspace-replacement production E2E is still blocked on this Windows host (EBUSY).",
-    "No real-model or module-effect conclusions can be drawn from these Stub runs.",
-    "Docker is the code-execution boundary; existing fixed functional observations are not a general anti-cheating or formal program-verification mechanism.",
-    "A host Runner forcibly killed before its finally cleanup may require removing its owned verifier container; this round tests execution timeout/output-limit cleanup, not parent-SIGKILL recovery."
-  ]
+    "Windows CI must pass after the test-timeout configuration correction.",
+    "No module-effect evaluation or real-model call has been authorized or performed in this round.",
+    "Fixed functional observations are not a general anti-cheating or formal verification mechanism.",
+    "Parent-Runner SIGKILL recovery for verifier containers was not tested; timeout/output-limit cleanup was tested."
+  ],
+  "testedCommit": "5c066bb406484f1d1303c8abf16aa95be70e5272"
 }
