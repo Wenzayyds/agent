@@ -406,3 +406,23 @@
 - Linux CI 加入验证器用例和严格证据检查，禁止 Docker job 以跳过关键用例判成功；真实 Linux CI 尚未运行，Windows 活动目录替换仍 EBUSY 阻断。等待单独授权审查后提交并正常推送 origin/pi-agent，再完成远端 CI；未调用付费模型、提交或推送，不进入效果评估。
 - 用户随后已明确授权所审查 29 个文件的提交及正常推送，并检查 Windows/Linux/Docker CI。历史真实实验原始产物和敏感数据继续排除；不涉及模型调用授权。
 - 已提交并正常推送 5c066bb406484f1d1303c8abf16aa95be70e5272，CI 41657433565 的 Linux 与 Docker 通过（Docker 73/73，含真实目录身份替换），Windows 181 passed/1 failed/42 skipped。失败为 256 次真实 fsync 的旧审计容量测试触及根入口默认 5 秒；CI 显式采用子包原有 30 秒 testTimeout，不修改该测试、容量上限或验证器 5 秒执行限制。同步允许上传 Docker 隐藏 JSON 报告，继续验证下一提交。
+- 配置修正 b32ead240fb38c0ce19df628367e761b715e111c 已正常推送，CI 41658808077 全部 success：https://github.com/Wenzayyds/agent/actions/runs/41658808077 。Linux 184/0/40、Windows 182/0/42（passed/failed/skipped，均 224 身份，209 基线缺失 0）；Docker 73/73、0 skipped，真实身份替换及新验证器负向用例通过。跨 job 去重 222/224 passed，仅两项外部 MCP 条件未执行；Python/pack 检查通过。
+- 本轮两关完成，模型调用 0。最终 CI 证据只补记到同一对本地报告和 HANDOFF，未再推送文档触发重复流水线。原始日志/ZIP/计数在 .artifacts/verifier-safety/remote-ci/；后续可转入模块效果评估的规划与单独授权，不复用旧六格预算。
+
+## 2026-11-03：Batch L 公平对比与授权准备
+
+- 按用户要求转向模块收益评估，未新增业务模块。新 batch-l-v1 仍复用生产六格执行器与 run-real-agent；每对同任务、初始 Prompt/文件/工具定义，Memory 和 Task 两组都拥有同样参考资料，仅切换服务可用性；Context 比较长输出管理。固定顺序 M off/on、C on/off、T on/off，thinking=off，无重试。
+- Memory/Task 关闭组保留相同只读工具 schema，查询返回不可用，不启动对应 Runtime；开启组复用公开 Memory 搜索与 TaskService 查询，current 映射真实任务 ID。记录配对 hash、规则真实命中、Context 每轮诊断、Task 前后状态及费用估算口径。Task 只读计划保持 draft，不能声称验证了任务自动执行或恢复收益。
+- 新真实入口必须提供仓库外、绑定 commit/批次/模型/预算/有效期的显式宿主授权，并独占消费批次与每格记录。拟供单独授权的普通只读拒绝恢复每格上限 2 次，复用 J 的保守分类，未放宽访问权限；真实授权尚未创建，默认严格策略保留。
+- 新预算仅为待批准提案：每格 8 请求/80,000 Token/0.03 美元/180 秒，六格 48 请求/480,000 Token/0.18 美元，0 重试。Token 从旧 40,000 提高是为请求字节保守预留留出空间；不沿用历史授权。真实模型调用、付费、提交、推送均 0。
+- 本地 TS 225：222 passed/0 failed/3 skipped，旧 224 身份缺失 0；Python 15/15。仅新增 1 项六格 Stub E2E，真实 Pi+Docker+隐藏验证全部通过且配对输入一致。Stub 命中/截短/计划读取只证明观测可用，不是效果证据。root check、评测 TS、新文件 Biome 和 pack 泄漏检查通过。
+- 新源码 CI configured_only；上轮 b32ead240fb38c0ce19df628367e761b715e111c 三平台 CI 通过不算本轮证据。交付 docs/batch-l-verification.md、docs/batch-l-results.json，机器证据 .artifacts/batch-l/。待用户分别确认新预算、真实恢复和本轮 Git 远端操作；当前真实六格全部 not_run。既有 p5 结果、上轮验收文档和历史运行目录不纳入本轮提交清单。
+- 用户已单独批准本轮最多 2 次普通只读拒绝恢复；新预算与提交/推送仍待回答，不据此启动模型或远端操作。
+
+## Batch L 提交前复审
+
+- 用户要求先审查，再单独授权提交/推送；新 commit 的 Windows/Linux/Docker CI 全通过后，再授权六格真实实验。当前没有预算或 Git 授权，不调用模型。
+- 复审发现工作树 42 个历史文档删除、两份未提交 Batch L 报告消失。用户确认删除有意，继续排除；不恢复。实际候选从 13 个调整为 11 个（原清单除去两份报告），历史删除和 evaluation-output 均不提交，暂存区为空。
+- 发现并最小修复 Runner 在 Batch L 中覆盖旧 p5-real-model-results.json 的问题；该配置现在只保留独立运行目录结果。原六格 E2E 增加 dry-run 历史报告不变断言，1/1 passed，六格 Stub 通过；根检查、评测 TS、pack 和 diff 检查通过，敏感格式/禁止路径命中 0。
+- 上轮全量仍为 225/222 passed/0 failed/3 skipped，本次修复后只跑受影响用例，未冒充新的全量结果。审查交付保存在 .artifacts/batch-l/review-verification.md 和 review-results.json，不恢复已删除报告；待授权 11 文件正常提交/推送后取得本轮远端 CI。
+- 用户已授权仅这 11 个文件正常提交、推送并检查 Windows/Linux/Docker CI；真实模型仍需 CI 通过后单独授权，不沿用历史预算。

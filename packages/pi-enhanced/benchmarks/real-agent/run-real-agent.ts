@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
@@ -21,6 +21,8 @@ import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
 import type { SafetyEvent } from "./controlled-stop.ts";
 import { classifyTermination } from "./result-classification.ts";
 import { verifyPatchInDocker } from "./docker-verifier.ts";
+import { BATCH_L_PROFILE, BATCH_L_LIMITS, BATCH_L_MODULE_TOOLS, batchLGroup, batchLPrompt, batchLReferences, digest } from "./batch-l-profile.ts";
+import { loadBatchLAuthorization, claimBatchLCell } from "./batch-l-authorization.ts";
 
 interface Task { id: string; category: string; prompt: string }
 const here = dirname(fileURLToPath(import.meta.url));
@@ -30,9 +32,16 @@ const manifest = JSON.parse(readFileSync(join(here, "task-manifest.json"), "utf8
 const execute = process.argv.includes("--execute");
 const localStubUrl = argument("--local-stub-url");
 const cell = controlledCell(argument("--controlled-cell"));
+const comparisonProfile = argument("--comparison-profile");
+if (comparisonProfile && comparisonProfile !== BATCH_L_PROFILE) throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
+const batchL = comparisonProfile === BATCH_L_PROFILE;
+const experimentalLimits = batchL ? BATCH_L_LIMITS : CONTROLLED_LIMITS;
+if (batchL && !cell) throw new Error("BATCH_L_REAL_AUTHORIZATION_REQUIRED");
+const authorizationBatchId = argument("--authorization-batch-id");
+const authorization = batchL && execute && !localStubUrl ? loadBatchLAuthorization(argument("--batch-l-authorization"), repositoryRoot, execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(), authorizationBatchId ?? "") : undefined;
 const offlinePolicy = loadOfflineDenialPolicy(argument("--offline-denial-policy"), localStubUrl, repositoryRoot);
 if (offlinePolicy && !cell) throw new Error("OFFLINE_DENIAL_POLICY_REQUIRES_CONTROLLED_CELL");
-const readonlyModuleTools = cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools");
+const readonlyModuleTools = batchL || (cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools"));
 const taskId = cell?.taskId ?? argument("--task-id");
 const selectedTasks = (taskId ? [...manifest.tasks, LONG_REPORT_TASK].filter((task) => task.id === taskId) : manifest.tasks).map((task) => cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task);
 if (selectedTasks.length === 0) throw new Error("EVAL_UNKNOWN_TASK");
@@ -58,10 +67,12 @@ if (execute && !localStubUrl) {
 	if (existsSync(projectEnv)) loadEnvFile(projectEnv);
 }
 const plan = execute ? buildEvaluationPlan(input, process.env) : undefined;
-if (cell && plan && (plan.maxTasks !== 1 || plan.maxCallsPerTask > CONTROLLED_LIMITS.maxRequests || plan.maxTokensPerTask > CONTROLLED_LIMITS.maxTokens || plan.maxTotalCostUsd > CONTROLLED_LIMITS.maxCostUsd || plan.timeoutMs > CONTROLLED_LIMITS.timeoutMs)) throw new Error("EVAL_CONTROLLED_LIMIT_EXCEEDED");
+if (authorization && plan && (plan.runId !== `${authorizationBatchId}_${cell!.id}` || plan.provider !== authorization.provider || plan.model !== authorization.model)) throw new Error("BATCH_L_AUTHORIZATION_RUN_MISMATCH");
+if (authorization && plan) claimBatchLCell(argument("--batch-l-authorization")!, authorization, cell!.id, plan.outputDir);
+if (cell && plan && (plan.maxTasks !== 1 || plan.maxCallsPerTask > experimentalLimits.maxRequests || plan.maxTokensPerTask > experimentalLimits.maxTokens || plan.maxTotalCostUsd > experimentalLimits.maxCostUsd || plan.timeoutMs > experimentalLimits.timeoutMs)) throw new Error("EVAL_CONTROLLED_LIMIT_EXCEEDED");
 const provider = plan?.provider; const model = plan?.model; const apiKeyEnv = plan?.apiKeyEnv;
 const variant = cell?.variant ?? argument("--variant") ?? "baseline";
-const condition = cell ? cell.id === "m_memory" ? "memory_seeded" : "cold" : argument("--condition") ?? "cold";
+const condition = cell ? (batchL && cell.module === "memory") || cell.id === "m_memory" ? "memory_seeded" : "cold" : argument("--condition") ?? "cold";
 if (condition !== "cold" && condition !== "memory_seeded") throw new Error(`Unknown condition: ${condition}`);
 const variants: Record<string, { memory: boolean; context: boolean; task: boolean }> = {
 	baseline: { memory: false, context: false, task: false },
@@ -78,13 +89,17 @@ if (runOutput && existsSync(runOutput)) throw new Error("EVAL_GATE_RUN_ID_ALREAD
 if (runOutput) mkdirSync(runOutput, { recursive: true });
 const root = mkdtempSync(join(tmpdir(), "pi-enhanced-real-agent-"));
 if (offlinePolicy) writeFileSync(join(root, "offline-denial-policy.json"), JSON.stringify(offlinePolicy), { flag: "wx", mode: 0o600 });
+if (authorization) writeFileSync(join(root, "batch-l-authorization.json"), JSON.stringify(authorization), { flag: "wx", mode: 0o600 });
 mkdirSync(join(root, "temp"));
 const results: Array<Record<string, unknown>> = [];
 try {
 	let observedCost = 0;
 	for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
 		const cwd = join(root, task.id); mkdirSync(cwd);
-		generate(task.id, cwd); initGit(cwd);
+		generate(task.id, cwd);
+		if (batchL) for (const [name, content] of Object.entries(batchLReferences(cell!))) writeFileSync(join(cwd, name), content);
+		const inputFixtureHash = digest(Object.fromEntries(readdirSync(cwd).sort().map((name) => [name, readFileSync(join(cwd, name), "utf8")])));
+		initGit(cwd);
 		// Only pristine, host-generated fixtures reach this check, before any Agent is started.
 		const initialVerifierPassed = verifyTrustedFixture(task.id, cwd);
 		if (initialVerifierPassed) throw new Error(`Fixture ${task.id} is not initially failing`);
@@ -102,15 +117,16 @@ try {
 			context: { enabled: switches.context, mode: "select", memoryInjection: { enabled: switches.memory }, taskInjection: { enabled: switches.task }, ...(cell?.module === "context" ? { toolOutput: { enabled: cell.treatment, maximumTextCharacters: 2_000 } } : {}) },
 			"task-manager": { enabled: switches.task },
 		} }));
-		const memorySeed = condition === "memory_seeded" && switches.memory ? await seedMemory(cwd, agentDir, cell ? MEMORY_RULE : undefined) : null;
+		const memorySeed = (batchL ? cell!.module === "memory" : condition === "memory_seeded" && switches.memory) ? await seedMemory(cwd, agentDir, cell ? MEMORY_RULE : undefined) : null;
 		let seededTaskId: string | undefined;
-		if (readonlyModuleTools && switches.task) {
+		let taskStateBefore: ReturnType<TaskService["get"]> = null;
+		if (batchL ? cell!.module === "task" : readonlyModuleTools && switches.task) {
 			const service = new TaskService(new TaskProvider(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir)), 20);
-			try { seededTaskId = service.create(task.prompt, cell ? TASK_STEPS : [{ title: "阅读实现并定位缺陷", expectedOutcome: "说明缺陷来源" }, { title: "最小修改", expectedOutcome: "公开 API 保持一致，不修改测试", dependsOn: [] }], "controlled-pilot-setup", null).task.taskId; }
+			try { seededTaskId = service.create(batchL ? batchLPrompt(cell!) : task.prompt, cell ? TASK_STEPS : [{ title: "阅读实现并定位缺陷", expectedOutcome: "说明缺陷来源" }, { title: "最小修改", expectedOutcome: "公开 API 保持一致，不修改测试", dependsOn: [] }], "controlled-pilot-setup", null).task.taskId; taskStateBefore = service.get(seededTaskId); }
 			finally { service.close(); }
 		}
-		const moduleTools = readonlyModuleTools ? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])] : [];
-		const prompt = task.prompt + (cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") + (cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") + (moduleTools.includes("enhanced_memory_search") ? " 可使用只读项目记忆搜索查阅 normalizeKey 项目约定。" : "") + (seededTaskId ? ` 任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : "");
+		const moduleTools = batchL ? BATCH_L_MODULE_TOOLS : readonlyModuleTools ? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])] : [];
+		const prompt = batchL ? batchLPrompt(cell!) : task.prompt + (cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") + (cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") + (moduleTools.includes("enhanced_memory_search") ? " 可使用只读项目记忆搜索查阅 normalizeKey 项目约定。" : "") + (seededTaskId ? ` 任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : "");
 		const gatewayToken = randomUUID().replaceAll("-", "");
 		const adminToken = randomUUID().replaceAll("-", "");
 		const sandboxAuditPath = join(root, `${task.id}-sandbox-audit.json`);
@@ -129,6 +145,7 @@ try {
 				PI_ENHANCED_SANDBOX_REPORT_PATH: sandboxAuditPath,
 				PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools ? "1" : "0",
 				PI_ENHANCED_CONTEXT_REPORT_PATH: contextReportPath,
+				...(batchL ? { PI_ENHANCED_BATCH_L_MEMORY: switches.memory ? "1" : "0", PI_ENHANCED_BATCH_L_TASK: switches.task ? "1" : "0", PI_ENHANCED_BATCH_L_TASK_ID: seededTaskId ?? "" } : {}),
 			},
 		});
 		const verifierScope = preflightSandbox(childEnvironment, cwd, root);
@@ -157,17 +174,18 @@ try {
 			"--extension", join(packageRoot, "extensions", "mcp-policy.ts"),
 			"--extension", join(packageRoot, "extensions", "sandbox.ts"),
 		];
-		if (cell) extensionArgs.push("--extension", join(here, offlinePolicy ? "offline-controlled-stop.ts" : "controlled-stop.ts"));
+		if (cell) extensionArgs.push("--extension", join(here, authorization ? "batch-l-controlled-stop.ts" : offlinePolicy ? "offline-controlled-stop.ts" : "controlled-stop.ts"));
 		if (switches.memory) extensionArgs.push("--extension", join(packageRoot, "extensions", "memory.ts"));
 		if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
-		if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
+		if (batchL) extensionArgs.push("--extension", join(here, "batch-l-tools.ts"));
+		else if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
 		const started = performance.now();
 		let gatewayStatus: BudgetGatewayStatus;
 		let child: Awaited<ReturnType<typeof runAgentProcess>>;
 		try {
 			child = await runAgentProcess(
 				process.execPath,
-				[cli, "--mode", "json", "--print", "--provider", provider!, "--model", model!, "--tools", ["read", "grep", "find", "ls", "write", "edit", ...moduleTools].join(","), ...extensionArgs, "--no-session", "--no-mcp", "--no-skills", "--no-context-files", prompt],
+				[cli, "--mode", "json", "--print", "--provider", provider!, "--model", model!, ...(batchL ? ["--thinking", "off"] : []), "--tools", ["read", "grep", "find", "ls", "write", "edit", ...moduleTools].join(","), ...extensionArgs, "--no-session", "--no-mcp", "--no-skills", "--no-context-files", prompt],
 				{
 					cwd,
 					timeoutMs: plan!.timeoutMs,
@@ -197,6 +215,8 @@ try {
 		};
 		observedCost += gatewayStatus.actualCostUsd;
 		const verification = await verifyPatchInDocker(task.id, verifierScope);
+		const referencesUnchanged = !batchL || Object.entries(batchLReferences(cell!)).every(([name, content]) => existsSync(join(cwd, name)) && readFileSync(join(cwd, name), "utf8") === content);
+		if (!referencesUnchanged) { verification.passed = false; verification.status = "verification_failed"; verification.errorCode = "EVAL_REFERENCE_CHANGED"; }
 		const verifierPassed = verification.passed;
 		const patch = execFileSync("git", ["diff", "--binary", "--no-ext-diff"], { cwd, encoding: "utf8" });
 		let sandboxAudit: Record<string, unknown>;
@@ -221,7 +241,16 @@ try {
 		const fileToolCalls = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_start" ? [{ toolName: event.toolName, args: event.args }] : []; } catch { return []; } });
 		const toolFailures = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_end" && event.isError ? [{ toolName: event.toolName, result: event.result }] : []; } catch { return []; } });
 		const classifiedRecord = { ...record, ...outcome, ...(cell ? { controlledCell: cell.id, moduleSwitches: switches, referenceHash: createHash("sha256").update(cell.module === "memory" ? MEMORY_RULE : cell.module === "task" ? JSON.stringify(TASK_STEPS) : longReport()).digest("hex"), retriesEnabled: false, fileToolCalls, toolFailures } : {}), memorySeed, moduleTools, moduleToolCalls, moduleToolEvents, contextEnabled: switches.context, contextAudit, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
-		Object.assign(classifiedRecord, { terminationClassification, agentTermination: outcome.runStatus === "completed" ? "normal" : "abnormal", patchGenerated: patch.length > 0, toolSafety, auditComplete, verification });
+		Object.assign(classifiedRecord, { terminationClassification, agentTermination: outcome.runStatus === "completed" ? "normal" : "abnormal", patchGenerated: patch.length > 0, toolSafety, auditComplete, verification, ...(authorization ? { batchLAuthorization: { id: authorization.authorizationId, recovery: authorization.recovery, batchId: authorization.batchId } } : {}) });
+		if (batchL) {
+			const inputAuditPath = join(root, "batch-l-input-audit.json");
+			const inputAudit = existsSync(inputAuditPath) ? JSON.parse(readFileSync(inputAuditPath, "utf8")) as Record<string, unknown> : null;
+			let taskStateAfter: ReturnType<TaskService["get"]> = null;
+			if (seededTaskId) { const service = new TaskService(new TaskProvider(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir)), 20); try { taskStateAfter = service.get(seededTaskId); } finally { service.close(); } }
+			const memoryEvents = moduleToolEvents.filter((event) => event.toolName === "enhanced_memory_search");
+			const taskEvents = moduleToolEvents.filter((event) => event.toolName === "enhanced_task_get");
+			Object.assign(classifiedRecord, { comparisonProfile: BATCH_L_PROFILE, comparisonGroup: batchLGroup(cell!), fairness: { userPromptSha256: digest(prompt), inputFixtureSha256: inputFixtureHash, referencesUnchanged, declaredTools: ["read", "grep", "find", "ls", "write", "edit", ...moduleTools], inputAudit }, observations: { memory: { enabled: switches.memory, calls: memoryEvents.length, matchedSeedReturned: Boolean(memorySeed && memoryEvents.some((event) => !event.isError && JSON.stringify(event.result).includes(`id=${memorySeed.id}`))) }, task: { enabled: switches.task, calls: taskEvents.length, planReturned: Boolean(seededTaskId && taskEvents.some((event) => !event.isError && JSON.stringify(event.result).includes(seededTaskId!))), before: taskStateBefore, after: taskStateAfter } }, monetaryAccounting: { gatewayCostUsd: usage.costUsd, basis: "peak_uncached_conservative_estimate", providerInvoiceUsd: null, note: "Gateway pricing reserves peak uncached rates; cache/time discounts and invoice deductions are not measured." } });
+		}
 		writeFileSync(join(taskOutput, "result.json"), `${JSON.stringify(classifiedRecord, null, 2)}\n`); results.push(classifiedRecord);
 		writeFileSync(join(taskOutput, "sandbox-audit.json"), sandboxAudit.integrity === "valid" ? readFileSync(sandboxAuditPath) : `${JSON.stringify(sandboxAudit, null, 2)}\n`);
 		writeFileSync(join(taskOutput, "context-audit.json"), `${JSON.stringify(contextAudit, null, 2)}\n`);
@@ -231,7 +260,7 @@ try {
 	const outcomeSummary = { patchPassed: ran.filter((item) => item.patchStatus === "passed").length, normallyCompleted: ran.filter((item) => item.runStatus === "completed").length, budgetStopped: ran.filter((item) => item.runStatus === "budget_stopped").length };
 	const report = { schemaVersion: 1, generatedAt: new Date().toISOString(), evaluationClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", runId: plan?.runId ?? null, variant, condition, model: execute ? { provider, model } : null, authorization: localStubUrl ? "local_stub_only" : execute ? "explicit" : "absent", sandbox: plan ? { mode: "docker-file-tools", image: plan.sandboxImage, tools: ["read", "grep", "find", "ls", "write", "edit"], network: "none", failClosed: true } : null, limits: plan ? { maxTotalCostUsd: plan.maxTotalCostUsd, maxTasks: plan.maxTasks, maxTokensPerTask: plan.maxTokensPerTask, maxCallsPerTask: plan.maxCallsPerTask, timeoutMs: plan.timeoutMs, concurrency: plan.concurrency, budgetEnforcement: plan.budgetEnforcement } : null, summary: { total: results.length, run: ran.length, passed: ran.filter((item) => item.status === "passed").length, notRun: results.length - ran.length, observedCostUsd: execute ? observedCost : 0 }, results };
 	Object.assign(report.summary, outcomeSummary);
-	if (!localStubUrl) writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
+	if (!localStubUrl && !batchL) writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 	process.stdout.write(`${JSON.stringify(report.summary)}\n`);
 } finally { rmSync(root, { recursive: true, force: true }); }

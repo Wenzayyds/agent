@@ -2,8 +2,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONTROLLED_CELLS, CONTROLLED_IMAGE, CONTROLLED_LIMITS } from "./controlled-cases.ts";
+import { CONTROLLED_CELLS, CONTROLLED_IMAGE, CONTROLLED_LIMITS as LEGACY_CONTROLLED_LIMITS } from "./controlled-cases.ts";
 import { controlledStopReason, type ControlledResult, verifyControlledCi } from "./controlled-policy.ts";
+import { BATCH_L_PROFILE, BATCH_L_LIMITS } from "./batch-l-profile.ts";
+import { loadBatchLAuthorization, claimBatchLAuthorization } from "./batch-l-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, "../../../..");
@@ -12,6 +14,11 @@ const execute = process.argv.includes("--execute");
 const batchId = argument("--batch-id");
 const stub = argument("--local-stub-url");
 const offlinePolicyPath = argument("--offline-denial-policy");
+const comparisonProfile = argument("--comparison-profile");
+const CONTROLLED_LIMITS = comparisonProfile === BATCH_L_PROFILE ? BATCH_L_LIMITS : LEGACY_CONTROLLED_LIMITS;
+if (comparisonProfile && comparisonProfile !== BATCH_L_PROFILE) throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
+const authorizationPath = argument("--batch-l-authorization");
+const authorization = comparisonProfile && execute && !stub ? loadBatchLAuthorization(authorizationPath, repositoryRoot, commit, batchId ?? "") : undefined;
 if (offlinePolicyPath && !stub) throw new Error("OFFLINE_DENIAL_POLICY_UNTRUSTED");
 if (!execute) { process.stdout.write(JSON.stringify({ status: "not_run", commit, limits: CONTROLLED_LIMITS, cells: CONTROLLED_CELLS })); process.exit(0); }
 if (!batchId || !/^[a-z0-9][a-z0-9_]{7,39}$/u.test(batchId)) throw new Error("CONTROLLED_BATCH_ID_INVALID");
@@ -30,13 +37,15 @@ mkdirSync(outputBase, { recursive: true });
 const batchDir = join(outputBase, batchId);
 // Exclusive directory creation makes a started or interrupted batch non-resumable.
 mkdirSync(batchDir);
-const cells: Array<{ id: string; status: string; resultStatus: string; terminationClassification?: string; result?: ControlledResult }> = CONTROLLED_CELLS.map(({ id }) => ({ id, status: "not_run", resultStatus: "not_run" }));
+if (authorization) claimBatchLAuthorization(authorizationPath!, authorization, batchDir);
+const specs = comparisonProfile ? [CONTROLLED_CELLS[0], CONTROLLED_CELLS[1], CONTROLLED_CELLS[3], CONTROLLED_CELLS[2], CONTROLLED_CELLS[5], CONTROLLED_CELLS[4]] : CONTROLLED_CELLS;
+const cells: Array<{ id: string; status: string; resultStatus: string; endToEndMs?: number; terminationClassification?: string; result?: ControlledResult }> = specs.map(({ id }) => ({ id, status: "not_run", resultStatus: "not_run" }));
 let stoppedReason: string | null = null;
 let reservedMaximumUsd = 0;
-const save = () => writeFileSync(join(batchDir, "batch.json"), JSON.stringify({ schemaVersion: 1, batchId, commit, evaluationClass: stub ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", limits: CONTROLLED_LIMITS, reservedMaximumUsd, stoppedReason, cells }, null, 2));
+const save = () => writeFileSync(join(batchDir, "batch.json"), JSON.stringify({ schemaVersion: 1, batchId, commit, comparisonProfile, authorization: authorization ? { id: authorization.authorizationId, recovery: authorization.recovery } : undefined, evaluationClass: stub ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", limits: CONTROLLED_LIMITS, reservedMaximumUsd, stoppedReason, cells }, null, 2));
 save();
-for (let index = 0; index < CONTROLLED_CELLS.length; index++) {
-	const spec = CONTROLLED_CELLS[index]!;
+for (let index = 0; index < specs.length; index++) {
+	const spec = specs[index]!;
 	const state = cells[index]!;
 	if (reservedMaximumUsd + CONTROLLED_LIMITS.maxCostUsd > CONTROLLED_LIMITS.maxBatchCostUsd + Number.EPSILON) { stoppedReason = "batch_budget_reservation"; save(); break; }
 	reservedMaximumUsd += CONTROLLED_LIMITS.maxCostUsd;
@@ -44,7 +53,12 @@ for (let index = 0; index < CONTROLLED_CELLS.length; index++) {
 	const runId = `${batchId}_${spec.id}`;
 	const args = ["--experimental-strip-types", join(here, "run-real-agent.ts"), "--execute", "--controlled-cell", spec.id, "--run-id", runId, "--provider", "deepseek", "--model", "deepseek-flash", "--api-key-env", stub ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY", "--max-total-cost-usd", "0.03", "--max-tasks", "1", "--max-tokens-per-task", "40000", "--max-calls-per-task", "8", "--timeout-ms", "180000", "--concurrency", "1", "--budget-enforcement", "local_hard_gateway", "--output-dir", batchDir, "--sandbox-image", CONTROLLED_IMAGE, ...(stub ? ["--local-stub-url", stub] : [])];
 	if (offlinePolicyPath) args.push("--offline-denial-policy", offlinePolicyPath);
+	if (comparisonProfile) args.push("--comparison-profile", comparisonProfile);
+	if (authorization) args.push("--batch-l-authorization", authorizationPath!, "--authorization-batch-id", batchId!);
+	args[args.indexOf("--max-tokens-per-task") + 1] = String(CONTROLLED_LIMITS.maxTokens);
+	const cellStarted = performance.now();
 	const child = spawnSync(process.execPath, args, { cwd: repositoryRoot, env: process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: 210_000, maxBuffer: 8 * 1024 * 1024 });
+	state.endToEndMs = Number((performance.now() - cellStarted).toFixed(3));
 	if (child.status !== 0 || child.error) { state.status = "execution_error"; state.resultStatus = "stopped"; state.terminationClassification = /SANDBOX_/u.test(child.stderr?.toString() ?? "") ? "sandbox_runtime_error" : "agent_execution_error"; stoppedReason = "runner_or_isolation_failure"; save(); break; }
 	try {
 		const report = JSON.parse(readFileSync(join(batchDir, runId, "run.json"), "utf8")) as { results: ControlledResult[] };
@@ -53,7 +67,13 @@ for (let index = 0; index < CONTROLLED_CELLS.length; index++) {
 		state.result = result;
 		state.terminationClassification = String(result.terminationClassification ?? "legacy_result");
 		state.status = "run";
-		stoppedReason = controlledStopReason(result);
+		stoppedReason = controlledStopReason(result, CONTROLLED_LIMITS);
+		if (comparisonProfile) {
+			const own = result.fairness as { userPromptSha256: string; inputFixtureSha256: string; inputAudit: { toolSchemaSha256: string; canonicalSystemPromptSha256: string } | null };
+			if (!own?.inputAudit) stoppedReason = "comparison_input_audit_missing";
+			const peer = cells.slice(0, index).find((cell) => specs.find((s) => s.id === cell.id)?.module === spec.module)?.result?.fairness as typeof own | undefined;
+			if (peer && (peer.userPromptSha256 !== own.userPromptSha256 || peer.inputFixtureSha256 !== own.inputFixtureSha256 || peer.inputAudit?.toolSchemaSha256 !== own.inputAudit?.toolSchemaSha256 || peer.inputAudit?.canonicalSystemPromptSha256 !== own.inputAudit?.canonicalSystemPromptSha256)) stoppedReason = "comparison_fairness_mismatch";
+		}
 		state.resultStatus = stoppedReason ? "stopped" : result.patchStatus === "passed" ? "passed" : "failed";
 	} catch { state.status = "evidence_error"; state.resultStatus = "stopped"; stoppedReason = "result_evidence_invalid"; }
 	save();
