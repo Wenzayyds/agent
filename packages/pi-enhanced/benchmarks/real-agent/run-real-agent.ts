@@ -15,6 +15,7 @@ import { TaskService } from "../../src/task-manager/service.ts";
 import { startBudgetGateway, type BudgetGatewayStatus } from "./budget-gateway.ts";
 import { budgetExceeded, buildEvaluationPlan, classifyExecution, executionOutcome, preflightView, redactEvaluationText, summarizeUsage } from "./evaluation-policy.ts";
 import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
+import { controlledCell, CONTROLLED_LIMITS, LONG_REPORT_TASK, longReport, MEMORY_RULE, MEMORY_TASK_PROMPT, TASK_STEPS } from "./controlled-cases.ts";
 
 interface Task { id: string; category: string; prompt: string }
 const here = dirname(fileURLToPath(import.meta.url));
@@ -23,9 +24,10 @@ const repositoryRoot = resolve(packageRoot, "../..");
 const manifest = JSON.parse(readFileSync(join(here, "task-manifest.json"), "utf8")) as { tasks: Task[] };
 const execute = process.argv.includes("--execute");
 const localStubUrl = argument("--local-stub-url");
-const readonlyModuleTools = process.argv.includes("--readonly-module-tools");
-const taskId = argument("--task-id");
-const selectedTasks = taskId ? manifest.tasks.filter((task) => task.id === taskId) : manifest.tasks;
+const cell = controlledCell(argument("--controlled-cell"));
+const readonlyModuleTools = cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools");
+const taskId = cell?.taskId ?? argument("--task-id");
+const selectedTasks = (taskId ? [...manifest.tasks, LONG_REPORT_TASK].filter((task) => task.id === taskId) : manifest.tasks).map((task) => cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task);
 if (selectedTasks.length === 0) throw new Error("EVAL_UNKNOWN_TASK");
 const input = {
 	runId: argument("--run-id"), provider: argument("--provider"), model: argument("--model"), apiKeyEnv: argument("--api-key-env"),
@@ -49,14 +51,16 @@ if (execute && !localStubUrl) {
 	if (existsSync(projectEnv)) loadEnvFile(projectEnv);
 }
 const plan = execute ? buildEvaluationPlan(input, process.env) : undefined;
+if (cell && plan && (plan.maxTasks !== 1 || plan.maxCallsPerTask > CONTROLLED_LIMITS.maxRequests || plan.maxTokensPerTask > CONTROLLED_LIMITS.maxTokens || plan.maxTotalCostUsd > CONTROLLED_LIMITS.maxCostUsd || plan.timeoutMs > CONTROLLED_LIMITS.timeoutMs)) throw new Error("EVAL_CONTROLLED_LIMIT_EXCEEDED");
 const provider = plan?.provider; const model = plan?.model; const apiKeyEnv = plan?.apiKeyEnv;
-const variant = argument("--variant") ?? "baseline";
-const condition = argument("--condition") ?? "cold";
+const variant = cell?.variant ?? argument("--variant") ?? "baseline";
+const condition = cell ? cell.id === "m_memory" ? "memory_seeded" : "cold" : argument("--condition") ?? "cold";
 if (condition !== "cold" && condition !== "memory_seeded") throw new Error(`Unknown condition: ${condition}`);
 const variants: Record<string, { memory: boolean; context: boolean; task: boolean }> = {
 	baseline: { memory: false, context: false, task: false },
 	"memory-only": { memory: true, context: false, task: false },
 	"context-only": { memory: false, context: true, task: false },
+	"task-only": { memory: false, context: false, task: true },
 	"memory-context": { memory: true, context: true, task: false },
 	full: { memory: true, context: true, task: true },
 };
@@ -81,23 +85,23 @@ try {
 			continue;
 		}
 		const agentDir = join(root, `${task.id}-agent`); mkdirSync(agentDir);
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always", ...(cell ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}) }));
 		const switches = variants[variant]!;
 		writeFileSync(join(agentDir, "pi-enhanced.json"), JSON.stringify({ modules: {
 			"mcp-policy": { enabled: false, defaultAction: "ask", rules: [], nativeToolGuard: { enabled: true, workspaceMutationAction: "allow", protectProjectMetadata: true } },
 			memory: { enabled: switches.memory },
-			context: { enabled: switches.context, mode: "select", memoryInjection: { enabled: switches.memory }, taskInjection: { enabled: switches.task } },
+			context: { enabled: switches.context, mode: "select", memoryInjection: { enabled: switches.memory }, taskInjection: { enabled: switches.task }, ...(cell?.module === "context" ? { toolOutput: { enabled: cell.treatment, maximumTextCharacters: 2_000 } } : {}) },
 			"task-manager": { enabled: switches.task },
 		} }));
-		const memorySeed = condition === "memory_seeded" && switches.memory ? await seedMemory(cwd, agentDir) : null;
+		const memorySeed = condition === "memory_seeded" && switches.memory ? await seedMemory(cwd, agentDir, cell ? MEMORY_RULE : undefined) : null;
 		let seededTaskId: string | undefined;
 		if (readonlyModuleTools && switches.task) {
 			const service = new TaskService(new TaskProvider(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir)), 20);
-			try { seededTaskId = service.create(task.prompt, [{ title: "阅读实现并定位缺陷", expectedOutcome: "说明缺陷来源" }, { title: "最小修改", expectedOutcome: "公开 API 保持一致，不修改测试", dependsOn: [] }], "controlled-pilot-setup", null).task.taskId; }
+			try { seededTaskId = service.create(task.prompt, cell ? TASK_STEPS : [{ title: "阅读实现并定位缺陷", expectedOutcome: "说明缺陷来源" }, { title: "最小修改", expectedOutcome: "公开 API 保持一致，不修改测试", dependsOn: [] }], "controlled-pilot-setup", null).task.taskId; }
 			finally { service.close(); }
 		}
 		const moduleTools = readonlyModuleTools ? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])] : [];
-		const prompt = task.prompt + (moduleTools.length ? ` 可使用只读项目记忆搜索作为参考。${seededTaskId ? `任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : ""}` : "");
+		const prompt = task.prompt + (cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") + (cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") + (moduleTools.includes("enhanced_memory_search") ? " 可使用只读项目记忆搜索查阅 normalizeKey 项目约定。" : "") + (seededTaskId ? ` 任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : "");
 		const gatewayToken = randomUUID().replaceAll("-", "");
 		const adminToken = randomUUID().replaceAll("-", "");
 		const sandboxAuditPath = join(root, `${task.id}-sandbox-audit.json`);
@@ -157,12 +161,22 @@ try {
 					cwd,
 					timeoutMs: plan!.timeoutMs,
 					env: childEnvironment,
+					...(cell ? { stopOnBoundaryFailure: () => { const status = gateway.status(); return status.state !== "ready" || status.requestsRejected > 0; } } : {}),
 				},
 			);
 			gatewayStatus = gateway.status();
 		} finally {
 			gatewayStatus = gateway.status();
+			if (cell) {
+				const evidenceDir = join(runOutput!, task.id); mkdirSync(evidenceDir, { recursive: true });
+				writeFileSync(join(evidenceDir, "gateway-final.json"), JSON.stringify(gatewayEvidence(gatewayStatus), null, 2));
+			}
 			await gateway.close();
+			if (cell) {
+				const prefix = `pi-enhanced-tools-${plan!.runId.slice(0, 50)}-${task.id}-`;
+				const ids = execFileSync("docker", ["ps", "-a", "--filter", `name=^/${prefix}`, "--format", "{{.ID}}"], { encoding: "utf8", timeout: 10_000, windowsHide: true }).trim().split(/\s+/u).filter(Boolean);
+				for (const id of ids) { if (!/^[a-f0-9]{12,64}$/u.test(id)) throw new Error("EVAL_SANDBOX_CLEANUP_ID_INVALID"); execFileSync("docker", ["rm", "-f", id], { timeout: 10_000, windowsHide: true, stdio: "ignore" }); }
+			}
 		}
 		const agentReportedUsage = summarizeUsage(child.stdout ?? "");
 		const usage = {
@@ -173,7 +187,7 @@ try {
 		observedCost += gatewayStatus.actualCostUsd;
 		const verifierPassed = verify(task.id, cwd);
 		const patch = execFileSync("git", ["diff", "--binary", "--no-ext-diff"], { cwd, encoding: "utf8" });
-		const sandboxAudit = readSandboxAudit(sandboxAuditPath);
+		const sandboxAudit = cell && !existsSync(sandboxAuditPath) ? { evidence: null, audit: [], error: "EVAL_SANDBOX_AUDIT_MISSING" } : readSandboxAudit(sandboxAuditPath);
 		const contextAudit = existsSync(contextReportPath) ? JSON.parse(readFileSync(contextReportPath, "utf8")) as Record<string, unknown> : { state: switches.context ? "missing" : "disabled", diagnostics: [] };
 		const overBudget = budgetExceeded(usage, observedCost, plan!) || gatewayStatus.requestsRejected > 0;
 		const timedOut = child.timedOut;
@@ -185,7 +199,9 @@ try {
 		const record = { taskId: task.id, category: task.category, experimentClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", repositoryCommit, status, verifierPassed, hiddenTestExitCode: verifierPassed ? 0 : 1, agentExitCode: child.status, timedOut, usage, agentReportedUsage, gateway: gatewayEvidence(gatewayStatus), sandboxAudit, costClass: localStubUrl ? "simulated" : "gateway_measured", patchSha256: createHash("sha256").update(patch).digest("hex"), durationMs: Number((performance.now() - started).toFixed(3)) };
 		const moduleToolEvents = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_end" && moduleTools.includes(String(event.toolName)) ? [{ toolName: event.toolName, isError: event.isError, result: event.result }] : []; } catch { return []; } });
 		const moduleToolCalls = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_start" && moduleTools.includes(String(event.toolName)) ? [{ toolCallId: event.toolCallId, toolName: event.toolName, args: JSON.parse(redactEvaluationText(JSON.stringify(event.args ?? {}), [process.env[apiKeyEnv!]!])) as Record<string, unknown> }] : []; } catch { return []; } });
-		const classifiedRecord = { ...record, ...outcome, memorySeed, moduleTools, moduleToolCalls, moduleToolEvents, contextEnabled: switches.context, contextAudit, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
+		const fileToolCalls = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_start" ? [{ toolName: event.toolName, args: event.args }] : []; } catch { return []; } });
+		const toolFailures = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_end" && event.isError ? [{ toolName: event.toolName, result: event.result }] : []; } catch { return []; } });
+		const classifiedRecord = { ...record, ...outcome, ...(cell ? { controlledCell: cell.id, moduleSwitches: switches, referenceHash: createHash("sha256").update(cell.module === "memory" ? MEMORY_RULE : cell.module === "task" ? JSON.stringify(TASK_STEPS) : longReport()).digest("hex"), retriesEnabled: false, fileToolCalls, toolFailures } : {}), memorySeed, moduleTools, moduleToolCalls, moduleToolEvents, contextEnabled: switches.context, contextAudit, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
 		writeFileSync(join(taskOutput, "result.json"), `${JSON.stringify(classifiedRecord, null, 2)}\n`); results.push(classifiedRecord);
 		writeFileSync(join(taskOutput, "sandbox-audit.json"), `${JSON.stringify(sandboxAudit, null, 2)}\n`);
 		writeFileSync(join(taskOutput, "context-audit.json"), `${JSON.stringify(contextAudit, null, 2)}\n`);
@@ -223,27 +239,41 @@ function preflightSandbox(environment: NodeJS.ProcessEnv, cwd: string, runRoot: 
 		broker.stop();
 	}
 }
-async function runAgentProcess(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+async function runAgentProcess(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; stopOnBoundaryFailure?: () => boolean }): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
 	return new Promise((resolveProcess) => {
 		const child = spawn(file, args, { cwd: options.cwd, env: options.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
 		const stdout: Buffer[] = []; const stderr: Buffer[] = []; let size = 0; let timedOut = false;
 		const collect = (target: Buffer[], chunk: Buffer) => { size += chunk.length; if (size <= 4 * 1024 * 1024) target.push(chunk); else child.kill(); };
-		child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk)); child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+		let pending = "";
+		child.stdout.on("data", (chunk: Buffer) => {
+			collect(stdout, chunk);
+			if (options.stopOnBoundaryFailure) {
+				pending += chunk.toString(); const lines = pending.split(/\r?\n/u); pending = lines.pop() ?? "";
+				for (const line of lines) { try { const event = JSON.parse(line) as Record<string, unknown>; if (event.type === "tool_execution_end" && event.isError && /SANDBOX_|Native tool guard blocked/u.test(JSON.stringify(event.result))) child.kill(); } catch {} }
+			}
+		}); child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+		const boundaryTimer = options.stopOnBoundaryFailure ? setInterval(() => { if (options.stopOnBoundaryFailure?.()) child.kill(); }, 25) : undefined;
 		const timer = setTimeout(() => { timedOut = true; child.kill(); }, options.timeoutMs);
-		child.once("close", (status) => { clearTimeout(timer); resolveProcess({ status, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), timedOut }); });
-		child.once("error", (error) => { clearTimeout(timer); stderr.push(Buffer.from(error.message)); resolveProcess({ status: null, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), timedOut }); });
+		child.once("close", (status) => { clearTimeout(timer); clearInterval(boundaryTimer); resolveProcess({ status, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), timedOut }); });
+		child.once("error", (error) => { clearTimeout(timer); clearInterval(boundaryTimer); stderr.push(Buffer.from(error.message)); resolveProcess({ status: null, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), timedOut }); });
 	});
 }
-async function seedMemory(cwd: string, agentDir: string): Promise<{ id: string; probeQuery: string; verifiedHits: number }> {
+async function seedMemory(cwd: string, agentDir: string, controlledContent?: string): Promise<{ id: string; probeQuery: string; verifiedHits: number }> {
 	const scope = createProjectScope({ cwd, agentDir }); ensureProjectStorage(scope); const provider = new LocalMemoryProvider(scope);
 	try {
-		const content = "项目约定：normalizeKey 必须 trim 后转成小写且不改变输入；validateItems 必须检查整个数组，不能只检查前十项。修改前阅读实现，保留公开 API，不修改测试。";
+		const content = controlledContent ?? "项目约定：normalizeKey 必须 trim 后转成小写且不改变输入；validateItems 必须检查整个数组，不能只检查前十项。修改前阅读实现，保留公开 API，不修改测试。";
 		const normalizedContent = content.normalize("NFKC").replace(/\s+/gu, " ").trim();
 		const candidate = await provider.saveCandidate({ kind: "experience", content, normalizedContent, contentHash: createHash("sha256").update(normalizedContent).digest("hex"), source: { type: "user", ref: "controlled-ablation-seed", observedAt: Date.now() }, now: Date.now() });
 		await provider.setStatus({ id: candidate.id, status: "verified", verification: { id: randomUUID(), type: "test_passed", evidenceRef: "controlled-ablation-fixture", evidenceVersion: "v1", verifiedAt: Date.now() }, expectedRevision: candidate.revision, now: Date.now() });
 		const probeQuery = "normalizeKey";
 		const records = await provider.search({ text: probeQuery, statuses: ["verified"] });
 		if (!records.some((record) => record.id === candidate.id)) throw new Error("EVAL_MEMORY_SEED_NOT_SEARCHABLE");
+		if (controlledContent) {
+			for (const distractor of ["无关约定：formatName 仅用于显示名称。", "候选信息：normalizeKey 应保留首尾空格（未确认，不可用于参考）。"]) {
+				const normalized = distractor.normalize("NFKC");
+				await provider.saveCandidate({ kind: "experience", content: distractor, normalizedContent: normalized, contentHash: createHash("sha256").update(normalized).digest("hex"), source: { type: "test", ref: "controlled-distractor", observedAt: Date.now() }, now: Date.now() });
+			}
+		}
 		return { id: candidate.id, probeQuery, verifiedHits: records.length };
 	} finally { provider.close(); }
 }
@@ -253,6 +283,7 @@ function initGit(cwd: string): void {
 }
 function generate(id: string, cwd: string): void {
 	writeFileSync(join(cwd, "package.json"), JSON.stringify({ type: "module", private: true }));
+	if (id === LONG_REPORT_TASK.id) { writeFileSync(join(cwd, "diagnostics.txt"), longReport()); writeFileSync(join(cwd, "validate.js"), "export const validateItems = items => items.slice(0, 10).every(value => value >= 0);\n"); return; }
 	const files: Record<string, Record<string, string>> = {
 		"single-file-off-by-one": { "math.js": "export const sumTo = n => n * (n - 1) / 2;\n" },
 		"cross-file-export": { "formatter.js": "const formatName = value => value.toUpperCase();\n", "index.js": "export { formatName } from './formatter.js';\n" },
@@ -263,6 +294,7 @@ function generate(id: string, cwd: string): void {
 	for (const [name, content] of Object.entries(files[id]!)) writeFileSync(join(cwd, name), content);
 }
 function verify(id: string, cwd: string): boolean {
+	if (id === LONG_REPORT_TASK.id) { if (readFileSync(join(cwd, "diagnostics.txt"), "utf8") !== longReport()) return false; id = "long-output-localization"; }
 	const programs: Record<string, string> = {
 		"single-file-off-by-one": "import('./math.js').then(m=>{if(m.sumTo(3)!==6)process.exit(1)})",
 		"cross-file-export": "import('./index.js').then(m=>{if(m.formatName('pi')!=='PI')process.exit(1)}).catch(()=>process.exit(1))",

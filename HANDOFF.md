@@ -366,3 +366,15 @@
 - 用户授权审查、提交并推送上轮离线修复，要求 Windows/Linux/Docker CI 全部通过后再提出真实对比方案，方案确认前禁止付费调用。
 - 复审补上最终 usage 覆盖校验：先有效后无效不能保留旧计费值，负数或不一致 total_tokens 失败关闭；预算超限的 requestOutcomes 使用实际错误码。
 - 本地 Pi Enhanced 174 身份：172 passed/0 failed/2 条件跳过，基线身份缺失 0，全仓 npm run check 通过。本轮付费调用 0。
+- 离线修复 15 个文件已审查、提交并正常推送：f8b6017f3054ce72172a7421f97b3c900e3a3d59。无删除文件，未包含 .env、真实密钥、数据库、Session 或运行日志。
+- 该源码远端 CI 41628243079 全部 success：https://github.com/Wenzayyds/agent/actions/runs/41628243079 。Linux 163 passed/11 skipped，Windows 161 passed/13 skipped（均 174 身份、基线缺失 0）；Docker 专项 26/26，两个系统 Python 均 15/15、包泄漏命中 0。
+- CI 通过后新增本地待确认方案 packages/pi-enhanced/docs/next-controlled-comparison-plan.md：Memory 同信息直给/搜索、Context 长输出关闭/开启、Task 同计划直给/只读查询，3 任务×2 格，共 6 次。建议每格 8 请求/40,000 Token/0.03 美元/180 秒，全批 48 请求/240,000 Token/0.18 美元，不重试。预算未授权，夹具与 task-only 等准备尚未实现；方案确认后仍需先完成离线验收。
+- 本轮真实模型调用 0。源码与远端同步；本次 CI 证据和待确认方案仅保存在本地文档，未另行推送以改变已验收源码提交。
+
+## 2026-11-03：已授权六格真实对比的离线准备
+
+- 用户批准三任务×两组共六次真实对比，每次 8 请求/40,000 Token/0.03 美元/180 秒，整批最多 0.18 美元，不重试、不加预算。必须先完成本地离线与 Windows/Linux/Docker CI，网关或隔离异常停止后续格。
+- 新增固定 controlled-cases、task-only、内联规则/计划与 12,000 字符报告，仍复用原 run-real-agent。Memory 的两组用户目标不泄漏规则；规则或计划原文 hash 相同，Context 两组文件 hash 相同。
+- run-controlled 固定六格串行，开始前逐格预占 0.03 美元运行额度，独占创建批次目录、拒绝恢复/重复运行；费用和 Token 都经原硬预算网关。真实执行核对当前提交的三平台成功证据，受控实验禁用 Pi 与 Provider 重试。
+- 六格本地 Stub 全部经过真实 Pi/Docker并通过隐藏验证；Memory 命中、Task 查询和 Context 截断实际触达。网关/隔离负向测试各只发出一次请求，后五格 not_run，容器残留 0；异常时保留 gateway-final 账目与失败证据。
+- 本地完整回归 180 身份：178 passed/0 failed/2 条件跳过，174 基线缺失 0；Python 15/15、全仓 check 和 pack 泄漏检查通过。真实调用仍为 0，待推送当前实现并核对 CI 后再执行已获授权批次。
