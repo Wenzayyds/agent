@@ -144,6 +144,31 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		expect(result.stderr).toContain("SANDBOX_EXECUTION_FAILED");
 		expect(providerCalls).toBe(0);
 	}, 60_000);
+
+	it("reaches verified Memory and read-only Task tools through the production pilot", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-module-pilot-"));
+		roots.push(root);
+		let turns = 0;
+		const provider = await startProvider((body, response) => {
+			turns += 1;
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			if (turns === 1) response.end(toolCallSse("enhanced_memory_search", { query: "normalizeKey", limit: 2 }, 100, 10));
+			else if (turns === 2) {
+				const taskId = JSON.stringify(body.messages).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/u)?.[0];
+				expect(taskId).toBeDefined();
+				response.end(toolCallSse("enhanced_task_get", { taskId }, 100, 10));
+			} else if (turns === 3) response.end(toolCallSse("edit", { path: "math.js", edits: [{ oldText: "n * (n - 1) / 2", newText: "n * (n + 1) / 2" }] }, 100, 10));
+			else response.end(textSse("fixed", 100, 10));
+		});
+		const output = join(root, "output");
+		const result = await runRunner(provider.url, output, image, "module_pilot_stub", true);
+		expect(result.status, result.stderr).toBe(0);
+		const report = JSON.parse(readFileSync(join(output, "module_pilot_stub", "run.json"), "utf8"));
+		expect(report.results[0]).toMatchObject({ patchStatus: "passed", runStatus: "completed", contextEnabled: true });
+		expect(report.results[0].moduleToolEvents).toHaveLength(2);
+		for (const event of report.results[0].moduleToolEvents) expect(event.isError).not.toBe(true);
+		expect(JSON.stringify(report.results[0].moduleToolEvents)).toContain("normalizeKey");
+	}, 120_000);
 });
 
 async function startProvider(handler: (body: Record<string, unknown>, response: ServerResponse) => void): Promise<{ url: string }> {
@@ -170,6 +195,7 @@ function runRunner(
 	output: string,
 	sandboxImage = image,
 	runId = "batch_i_stub_runner",
+	readonlyModules = false,
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
 	const args = [
 		"--experimental-strip-types", runner, "--execute", "--local-stub-url", providerUrl,
@@ -178,6 +204,7 @@ function runRunner(
 		"--max-tokens-per-task", "200000", "--max-calls-per-task", "8", "--timeout-ms", "60000",
 		"--concurrency", "1", "--budget-enforcement", "local_hard_gateway", "--output-dir", output,
 		"--sandbox-image", sandboxImage,
+		...(readonlyModules ? ["--readonly-module-tools", "--variant", "full", "--condition", "memory_seeded"] : []),
 	];
 	return new Promise((resolveRun) => {
 		const child = spawn(process.execPath, args, {

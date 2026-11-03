@@ -342,3 +342,8 @@
 - 第二轮 run 41619641040 暴露 Linux clean checkout 类型检查依赖构建，以及 runner UID 1001 与容器 UID 1000 不匹配导致挂载写入失败。CI 调整为 hydrate→build→check；容器使用宿主非 root UID/GID（root/Windows 回退 1000:1000），检查值同步匹配，未修改挂载权限或容器能力。
 - 第三轮 Linux TS 与身份清单通过，Python 暴露 SVD 截断重复奇异值块的跨 LAPACK 不确定性。改为完整奇异值块截断，新增旋转子空间回归；Python 15/15 通过。原有语义召回断言保留。
 - P2 用户授权 2 任务×baseline/full，共 4 次独立运行，总 32 请求、80,000 Token、0.12 美元，每次 180 秒、不重试；前置模块触达审查和 CI 尚未完成，未消耗此授权。
+- 用户随后明确授权只读 enhanced_memory_search/enhanced_task_get。默认关闭的白名单、模块配置、任务选择及模块查询事件已接入现有 Runner；模拟 Provider E2E 已实测两个模块工具成功，未允许写记忆、提计划、Shell 或 MCP。
+- 4 次真实对比已经全部执行，没有重试：baseline 两项补丁通过但预算停止；full 两项没有通过隐藏测试，上游流发生 GATEWAY_UPSTREAM_TIMEOUT_OR_ABORT 后网关失败关闭。真实模块查询中 Task 成功，Memory 一次返回 0 条；Context 只证明启用，没有独立效果证据。
+- 合计上游请求 9 次，已确认 16,369 Token、0.005673 美元；两个上游流没有完整 usage，费用未知部分保留预留，累计费用上界 0.019032 美元。不能把 usage 未返回记作免费或已完成计费核对。原始产物保留，派生报告 controlled-comparison-20261103.json 将 full 标为 gateway_error。
+- P2 结论为 inconclusive，没有证明任何单模块收益；禁止从 2 个合成任务推导总体成功率。此次授权的 4 次运行已经用完，不继续自动试跑。
+- 远端 run 41620874749 的 Linux/Docker 通过，Windows 暴露 rootPath 与临时路径大小写不同导致 PROJECT_PATH 标签不一致；Windows 盘符路径改用大小写不敏感替换，保留 Linux 大小写语义及通用脱敏，新增回归通过。

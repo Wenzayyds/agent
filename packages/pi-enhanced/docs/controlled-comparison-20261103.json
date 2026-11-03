@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "authorization": {
+    "runs": 4,
+    "maxRequests": 32,
+    "maxTokens": 80000,
+    "maxCostUsd": 0.12,
+    "perRunTimeoutMs": 180000,
+    "retry": false
+  },
+  "runs": [
+    {
+      "runId": "compare_20261103_long_output_localization_baseline",
+      "taskId": "long-output-localization",
+      "variant": "baseline",
+      "patchStatus": "passed",
+      "runStatus": "budget_stopped",
+      "calls": 3,
+      "completed": 3,
+      "tokens": 6906,
+      "cost": 0.0023840999999999997,
+      "costUpperBound": 0.0023840999999999997,
+      "lastError": null,
+      "moduleTools": []
+    },
+    {
+      "runId": "compare_20261103_long_output_localization_full",
+      "taskId": "long-output-localization",
+      "variant": "full",
+      "patchStatus": "failed",
+      "runStatus": "gateway_error",
+      "calls": 1,
+      "completed": 0,
+      "tokens": 0,
+      "cost": 0,
+      "costUpperBound": 0.0063945,
+      "lastError": "GATEWAY_UPSTREAM_TIMEOUT_OR_ABORT",
+      "moduleTools": [
+        "enhanced_task_get"
+      ]
+    },
+    {
+      "runId": "compare_20261103_memory_guided_regression_baseline",
+      "taskId": "memory-guided-regression",
+      "variant": "baseline",
+      "patchStatus": "passed",
+      "runStatus": "budget_stopped",
+      "calls": 3,
+      "completed": 3,
+      "tokens": 6996,
+      "cost": 0.002457,
+      "costUpperBound": 0.002457,
+      "lastError": null,
+      "moduleTools": []
+    },
+    {
+      "runId": "compare_20261103_memory_guided_regression_full",
+      "taskId": "memory-guided-regression",
+      "variant": "full",
+      "patchStatus": "failed",
+      "runStatus": "gateway_error",
+      "calls": 2,
+      "completed": 1,
+      "tokens": 2467,
+      "cost": 0.0008319,
+      "costUpperBound": 0.0077964,
+      "lastError": "GATEWAY_UPSTREAM_TIMEOUT_OR_ABORT",
+      "moduleTools": [
+        "enhanced_task_get",
+        "enhanced_memory_search"
+      ]
+    }
+  ],
+  "totals": {
+    "requests": 9,
+    "confirmedTokens": 16369,
+    "confirmedCostUsd": 0.005672999999999999,
+    "costUpperBoundUsd": 0.019032
+  },
+  "conclusion": "inconclusive: full runs failed closed at gateway, memory search returned no results, Context effect not instrumented; no individual module benefit established"
+}

@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-03T10:44:14.706Z",
+  "evaluationClass": "real_model_coding_agent_task",
+  "runId": "compare_20261103_long_output_localization_full",
+  "variant": "full",
+  "condition": "memory_seeded",
+  "model": {
+    "provider": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "authorization": "explicit",
+  "sandbox": {
+    "mode": "docker-file-tools",
+    "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+    "tools": [
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "write",
+      "edit"
+    ],
+    "network": "none",
+    "failClosed": true
+  },
+  "limits": {
+    "maxTotalCostUsd": 0.03,
+    "maxTasks": 1,
+    "maxTokensPerTask": 20000,
+    "maxCallsPerTask": 8,
+    "timeoutMs": 180000,
+    "concurrency": 1,
+    "budgetEnforcement": "local_hard_gateway"
+  },
+  "summary": {
+    "total": 1,
+    "run": 1,
+    "passed": 0,
+    "notRun": 0,
+    "observedCostUsd": 0,
+    "patchPassed": 0,
+    "normallyCompleted": 0,
+    "budgetStopped": 1
+  },
+  "results": [
+    {
+      "taskId": "long-output-localization",
+      "category": "long_output",
+      "experimentClass": "real_model_coding_agent_task",
+      "repositoryCommit": "83d86974294438270463bad9e990b0e424a60fdb",
+      "status": "budget_exceeded",
+      "verifierPassed": false,
+      "hiddenTestExitCode": 1,
+      "agentExitCode": 0,
+      "timedOut": false,
+      "usage": {
+        "calls": 1,
+        "tokens": 0,
+        "costUsd": 0
+      },
+      "agentReportedUsage": {
+        "calls": 1,
+        "tokens": 2456,
+        "costUsd": 0.0006753719999999999
+      },
+      "gateway": {
+        "state": "failed_closed",
+        "requestsStarted": 1,
+        "requestsCompleted": 0,
+        "requestsRejected": 4,
+        "requestAttempts": 5,
+        "actualInputTokens": 0,
+        "actualOutputTokens": 0,
+        "actualTotalTokens": 0,
+        "actualCostUsd": 0,
+        "committedTokenUpperBound": 15171,
+        "committedCostUpperBoundUsd": 0.0063945,
+        "lastError": "GATEWAY_UPSTREAM_TIMEOUT_OR_ABORT",
+        "denials": [
+          {
+            "runId": "compare_20261103_long_output_localization_full",
+            "requestSequence": 2,
+            "code": "GATEWAY_FAILED_CLOSED",
+            "upstreamForwarded": false,
+            "requestsStarted": 1,
+            "actualTotalTokens": 0,
+            "committedTokenUpperBound": 15171,
+            "reservedTokens": 0,
+            "actualCostUsd": 0,
+            "committedCostUpperBoundUsd": 0.0063945,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_long_output_localization_full",
+            "requestSequence": 3,
+            "code": "GATEWAY_FAILED_CLOSED",
+            "upstreamForwarded": false,
+            "requestsStarted": 1,
+            "actualTotalTokens": 0,
+            "committedTokenUpperBound": 15171,
+            "reservedTokens": 0,
+            "actualCostUsd": 0,
+            "committedCostUpperBoundUsd": 0.0063945,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_long_output_localization_full",
+            "requestSequence": 4,
+            "code": "GATEWAY_FAILED_CLOSED",
+            "upstreamForwarded": false,
+            "requestsStarted": 1,
+            "actualTotalTokens": 0,
+            "committedTokenUpperBound": 15171,
+            "reservedTokens": 0,
+            "actualCostUsd": 0,
+            "committedCostUpperBoundUsd": 0.0063945,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_long_output_localization_full",
+            "requestSequence": 5,
+            "code": "GATEWAY_FAILED_CLOSED",
+            "upstreamForwarded": false,
+            "requestsStarted": 1,
+            "actualTotalTokens": 0,
+            "committedTokenUpperBound": 15171,
+            "reservedTokens": 0,
+            "actualCostUsd": 0,
+            "committedCostUpperBoundUsd": 0.0063945,
+            "reservedCostUsd": 0
+          }
+        ]
+      },
+      "sandboxAudit": {
+        "schemaVersion": 1,
+        "runId": "compare_20261103_long_output_localization_full-long-output-localization",
+        "workspaceSha256": "956666edfc254f58784b308faad0b142eb5a9bc2bf6e863bc564be19583f7e16",
+        "evidence": {
+          "containerId": "ec24442230a33ca61c700d377a8743154370722c93a4e63bc018d5105c43c1e6",
+          "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+          "network": "none",
+          "readOnlyRoot": true,
+          "user": "1000:1000",
+          "mounts": [
+            {
+              "destination": "/workspace",
+              "readWrite": true
+            }
+          ]
+        },
+        "audit": [
+          {
+            "requestId": "call_01_ET_mT4TXthzCUIFUBRrlBjv9109:grep",
+            "toolName": "grep",
+            "operation": "grep",
+            "status": "ok",
+            "containerId": "ec24442230a33ca61c700d377a8743154370722c93a4e63bc018d5105c43c1e6",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 241.287
+          }
+        ]
+      },
+      "costClass": "gateway_measured",
+      "patchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "durationMs": 17304.141,
+      "patchStatus": "failed",
+      "runStatus": "budget_stopped",
+      "moduleTools": [
+        "enhanced_memory_search",
+        "enhanced_task_get"
+      ],
+      "moduleToolEvents": [
+        {
+          "toolName": "enhanced_task_get",
+          "isError": false,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\n  \"task\": {\n    \"taskId\": \"372ac32d-8639-4d83-ba84-265398bc683d\",\n    \"projectId\": \"6460169006ea8c1ef71d3d63ee96a07daed490f547eea7a7b7cb6c551325d0e0\",\n    \"goal\": \"定位并修复 validateItems:任意负数都应返回 false。只改必要代码。\",\n    \"status\": \"draft\",\n    \"revision\": 1,\n    \"planRevision\": 1,\n    \"acceptancePolicy\": \"user_confirmed\",\n    \"createdAt\": 1793702636345,\n    \"updatedAt\": 1793702636345\n  },\n  \"steps\": [\n    {\n      \"stepId\": \"47286d7a-9ebd-4885-bfb4-5d39012bdb54\",\n      \"taskId\": \"372ac32d-8639-4d83-ba84-265398bc683d\",\n      \"ordinal\": 0,\n      \"title\": \"阅读实现并定位缺陷\",\n      \"expectedOutcome\": \"说明缺陷来源\",\n      \"dependsOn\": [],\n      \"status\": \"pending\",\n      \"revision\": 1,\n      \"riskClass\": \"unknown\"\n    },\n    {\n      \"stepId\": \"71a36419-5107-474e-a613-f6a60c34f1d4\",\n      \"taskId\": \"372ac32d-8639-4d83-ba84-265398bc683d\",\n      \"ordinal\": 1,\n      \"title\": \"最小修改\",\n      \"expectedOutcome\": \"公开 API 保持一致,不修改测试\",\n      \"dependsOn\": [],\n      \"status\": \"pending\",\n      \"revision\": 1,\n      \"riskClass\": \"unknown\"\n    }\n  ],\n  \"evidence\": []\n}"
+              }
+            ],
+            "details": {
+              "taskId": "372ac32d-8639-4d83-ba84-265398bc683d"
+            }
+          }
+        }
+      ],
+      "contextEnabled": true,
+      "usageSource": "local_hard_gateway",
+      "agentReportedUsageSource": "stdout_final_assistant_messages_diagnostic_only"
+    }
+  ]
+}

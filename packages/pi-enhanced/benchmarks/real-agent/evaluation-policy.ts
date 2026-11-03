@@ -105,10 +105,10 @@ export function classifyExecution(input: { overBudget: boolean; timedOut: boolea
 	if (input.exitCode !== 0) return "agent_error";
 	return input.verifierPassed ? "passed" : "failed";
 }
-export function executionOutcome(input: { overBudget: boolean; budgetRejected: boolean; timedOut: boolean; exitCode: number | null; verifierPassed: boolean }): { patchStatus: "passed" | "failed"; runStatus: "completed" | "budget_stopped" | "budget_exceeded" | "timeout" | "agent_error" } {
+export function executionOutcome(input: { overBudget: boolean; budgetRejected: boolean; gatewayFailed?: boolean; timedOut: boolean; exitCode: number | null; verifierPassed: boolean }): { patchStatus: "passed" | "failed"; runStatus: "completed" | "budget_stopped" | "budget_exceeded" | "gateway_error" | "timeout" | "agent_error" } {
 	return {
 		patchStatus: input.verifierPassed ? "passed" : "failed",
-		runStatus: input.overBudget ? "budget_exceeded" : input.timedOut ? "timeout" : input.budgetRejected ? "budget_stopped" : input.exitCode !== 0 ? "agent_error" : "completed",
+		runStatus: input.overBudget ? "budget_exceeded" : input.timedOut ? "timeout" : input.gatewayFailed ? "gateway_error" : input.budgetRejected ? "budget_stopped" : input.exitCode !== 0 ? "agent_error" : "completed",
 	};
 }
 function record(value: unknown): Record<string, unknown> | null { return typeof value === "object" && value !== null ? value as Record<string, unknown> : null; }

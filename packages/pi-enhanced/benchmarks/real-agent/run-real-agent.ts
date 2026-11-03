@@ -10,6 +10,8 @@ import { LocalMemoryProvider } from "../../src/memory/provider.ts";
 import { ensureProjectStorage } from "../../src/memory/storage.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
+import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
+import { TaskService } from "../../src/task-manager/service.ts";
 import { startBudgetGateway, type BudgetGatewayStatus } from "./budget-gateway.ts";
 import { budgetExceeded, buildEvaluationPlan, classifyExecution, executionOutcome, preflightView, redactEvaluationText, summarizeUsage } from "./evaluation-policy.ts";
 import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
@@ -21,6 +23,10 @@ const repositoryRoot = resolve(packageRoot, "../..");
 const manifest = JSON.parse(readFileSync(join(here, "task-manifest.json"), "utf8")) as { tasks: Task[] };
 const execute = process.argv.includes("--execute");
 const localStubUrl = argument("--local-stub-url");
+const readonlyModuleTools = process.argv.includes("--readonly-module-tools");
+const taskId = argument("--task-id");
+const selectedTasks = taskId ? manifest.tasks.filter((task) => task.id === taskId) : manifest.tasks;
+if (selectedTasks.length === 0) throw new Error("EVAL_UNKNOWN_TASK");
 const input = {
 	runId: argument("--run-id"), provider: argument("--provider"), model: argument("--model"), apiKeyEnv: argument("--api-key-env"),
 	maxTotalCostUsd: argument("--max-total-cost-usd"), maxTasks: argument("--max-tasks"), maxTokensPerTask: argument("--max-tokens-per-task"),
@@ -64,7 +70,7 @@ mkdirSync(join(root, "temp"));
 const results: Array<Record<string, unknown>> = [];
 try {
 	let observedCost = 0;
-	for (const task of manifest.tasks.slice(0, plan?.maxTasks ?? manifest.tasks.length)) {
+	for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
 		const cwd = join(root, task.id); mkdirSync(cwd);
 		generate(task.id, cwd); initGit(cwd);
 		const initialVerifierPassed = verify(task.id, cwd);
@@ -84,6 +90,14 @@ try {
 			"task-manager": { enabled: switches.task },
 		} }));
 		if (condition === "memory_seeded" && switches.memory) await seedMemory(cwd, agentDir);
+		let seededTaskId: string | undefined;
+		if (readonlyModuleTools && switches.task) {
+			const service = new TaskService(new TaskProvider(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir)), 20);
+			try { seededTaskId = service.create(task.prompt, [{ title: "阅读实现并定位缺陷", expectedOutcome: "说明缺陷来源" }, { title: "最小修改", expectedOutcome: "公开 API 保持一致，不修改测试", dependsOn: [] }], "controlled-pilot-setup", null).task.taskId; }
+			finally { service.close(); }
+		}
+		const moduleTools = readonlyModuleTools ? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])] : [];
+		const prompt = task.prompt + (moduleTools.length ? ` 可使用只读项目记忆搜索作为参考。${seededTaskId ? `任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : ""}` : "");
 		const gatewayToken = randomUUID().replaceAll("-", "");
 		const adminToken = randomUUID().replaceAll("-", "");
 		const sandboxAuditPath = join(root, `${task.id}-sandbox-audit.json`);
@@ -99,6 +113,7 @@ try {
 				PI_ENHANCED_SANDBOX_WORKSPACE: cwd,
 				PI_ENHANCED_SANDBOX_IMAGE: plan!.sandboxImage,
 				PI_ENHANCED_SANDBOX_REPORT_PATH: sandboxAuditPath,
+				PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools ? "1" : "0",
 			},
 		});
 		preflightSandbox(childEnvironment, cwd, root);
@@ -135,7 +150,7 @@ try {
 		try {
 			child = await runAgentProcess(
 				process.execPath,
-				[cli, "--mode", "json", "--print", "--provider", provider!, "--model", model!, "--tools", "read,grep,find,ls,write,edit", ...extensionArgs, "--no-session", "--no-mcp", "--no-skills", "--no-context-files", task.prompt],
+				[cli, "--mode", "json", "--print", "--provider", provider!, "--model", model!, "--tools", ["read", "grep", "find", "ls", "write", "edit", ...moduleTools].join(","), ...extensionArgs, "--no-session", "--no-mcp", "--no-skills", "--no-context-files", prompt],
 				{
 					cwd,
 					timeoutMs: plan!.timeoutMs,
@@ -160,12 +175,13 @@ try {
 		const overBudget = budgetExceeded(usage, observedCost, plan!) || gatewayStatus.requestsRejected > 0;
 		const timedOut = child.timedOut;
 		const status = classifyExecution({ overBudget, timedOut, exitCode: child.status, verifierPassed });
-		const outcome = executionOutcome({ overBudget: budgetExceeded(usage, observedCost, plan!), budgetRejected: gatewayStatus.requestsRejected > 0, timedOut, exitCode: child.status, verifierPassed });
+		const outcome = executionOutcome({ overBudget: budgetExceeded(usage, observedCost, plan!), budgetRejected: gatewayStatus.requestsRejected > 0, gatewayFailed: gatewayStatus.state === "failed_closed", timedOut, exitCode: child.status, verifierPassed });
 		const taskOutput = join(runOutput!, task.id); mkdirSync(taskOutput, { recursive: true });
 		writeFileSync(join(taskOutput, "patch.diff"), patch);
 		writeFileSync(join(taskOutput, "agent.stderr.log"), redactEvaluationText(child.stderr ?? "", [process.env[apiKeyEnv!]!]));
 		const record = { taskId: task.id, category: task.category, experimentClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", repositoryCommit, status, verifierPassed, hiddenTestExitCode: verifierPassed ? 0 : 1, agentExitCode: child.status, timedOut, usage, agentReportedUsage, gateway: gatewayEvidence(gatewayStatus), sandboxAudit, costClass: localStubUrl ? "simulated" : "gateway_measured", patchSha256: createHash("sha256").update(patch).digest("hex"), durationMs: Number((performance.now() - started).toFixed(3)) };
-		const classifiedRecord = { ...record, ...outcome, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
+		const moduleToolEvents = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_end" && moduleTools.includes(String(event.toolName)) ? [{ toolName: event.toolName, isError: event.isError, result: event.result }] : []; } catch { return []; } });
+		const classifiedRecord = { ...record, ...outcome, moduleTools, moduleToolEvents, contextEnabled: switches.context, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
 		writeFileSync(join(taskOutput, "result.json"), `${JSON.stringify(classifiedRecord, null, 2)}\n`); results.push(classifiedRecord);
 		writeFileSync(join(taskOutput, "sandbox-audit.json"), `${JSON.stringify(sandboxAudit, null, 2)}\n`);
 		if (overBudget) break;
@@ -216,7 +232,7 @@ async function runAgentProcess(file: string, args: string[], options: { cwd: str
 async function seedMemory(cwd: string, agentDir: string): Promise<void> {
 	const scope = createProjectScope({ cwd, agentDir }); ensureProjectStorage(scope); const provider = new LocalMemoryProvider(scope);
 	try {
-		const content = "项目经验：修改前先阅读相关实现，保持公开 API，并使用独立测试验收最终修改。";
+		const content = "项目约定：normalizeKey 必须 trim 后转成小写且不改变输入；validateItems 必须检查整个数组，不能只检查前十项。修改前阅读实现，保留公开 API，不修改测试。";
 		const normalizedContent = content.normalize("NFKC").replace(/\s+/gu, " ").trim();
 		const candidate = await provider.saveCandidate({ kind: "experience", content, normalizedContent, contentHash: createHash("sha256").update(normalizedContent).digest("hex"), source: { type: "user", ref: "controlled-ablation-seed", observedAt: Date.now() }, now: Date.now() });
 		await provider.setStatus({ id: candidate.id, status: "verified", verification: { id: randomUUID(), type: "test_passed", evidenceRef: "controlled-ablation-fixture", evidenceVersion: "v1", verifiedAt: Date.now() }, expectedRevision: candidate.revision, now: Date.now() });

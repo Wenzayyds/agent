@@ -1,0 +1,7 @@
+diff --git a/validate.js b/validate.js
+index 737fe79..a273e21 100644
+--- a/validate.js
++++ b/validate.js
+@@ -1 +1 @@
+-export const validateItems = items => items.slice(0, 10).every(value => value >= 0);
++export const validateItems = items => items.every(value => value >= 0);

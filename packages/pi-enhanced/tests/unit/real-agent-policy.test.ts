@@ -44,6 +44,7 @@ describe("Batch F real model authorization and budget gate", () => {
 		expect(classifyExecution({ overBudget: false, timedOut: false, exitCode: 2, verifierPassed: false })).toBe("agent_error");
 		expect(classifyExecution({ overBudget: false, timedOut: false, exitCode: 0, verifierPassed: true })).toBe("passed");
 		expect(executionOutcome({ overBudget: false, budgetRejected: true, timedOut: false, exitCode: 0, verifierPassed: true })).toEqual({ patchStatus: "passed", runStatus: "budget_stopped" });
+		expect(executionOutcome({ overBudget: false, budgetRejected: true, gatewayFailed: true, timedOut: false, exitCode: 0, verifierPassed: false })).toEqual({ patchStatus: "failed", runStatus: "gateway_error" });
 		expect(executionOutcome({ overBudget: false, budgetRejected: false, timedOut: true, exitCode: null, verifierPassed: true })).toEqual({ patchStatus: "passed", runStatus: "timeout" });
 		expect(executionOutcome({ overBudget: false, budgetRejected: false, timedOut: false, exitCode: 0, verifierPassed: false })).toEqual({ patchStatus: "failed", runStatus: "completed" });
 	});

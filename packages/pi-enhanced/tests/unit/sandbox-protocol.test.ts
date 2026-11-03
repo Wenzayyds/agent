@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
+import { sandboxToolAllowed } from "../../src/sandbox/extension.ts";
 import { assertSandboxWorkspaceIdentity, loadSandboxConfig } from "../../src/sandbox/config.ts";
 import {
 	SANDBOX_PROTOCOL_VERSION,
@@ -19,6 +20,16 @@ describe("Docker sandbox protocol", () => {
 	it("is disabled by default without registering an implicit trusted workspace", () => {
 		const config = loadSandboxConfig({}, process.cwd());
 		expect(config).toMatchObject({ enabled: false, trusted: false, runId: "disabled" });
+	});
+	it("allows only explicitly enabled read-only module tools alongside Docker file tools", () => {
+		for (const name of ["enhanced_memory_search", "enhanced_task_get"]) {
+			expect(sandboxToolAllowed(name)).toBe(false);
+			expect(sandboxToolAllowed(name, true)).toBe(true);
+		}
+		for (const name of ["bash", "mcp", "enhanced_task_propose_plan", "enhanced_memory_write", "unknown"]) {
+			expect(sandboxToolAllowed(name, true)).toBe(false);
+		}
+		expect(sandboxToolAllowed("edit", true)).toBe(true);
 	});
 
 	it("requires bounded identifiers and a pinned image", () => {

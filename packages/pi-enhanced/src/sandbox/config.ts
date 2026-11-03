@@ -6,6 +6,7 @@ import { assertRunId } from "./protocol.ts";
 export interface SandboxConfig {
 	enabled: boolean;
 	trusted: boolean;
+	readonlyModuleTools?: boolean;
 	runId: string;
 	runRoot: string;
 	workspace: string;
@@ -65,6 +66,7 @@ export function loadSandboxConfig(
 	if (!/^sha256:[a-f0-9]{64}$/u.test(image)) throw new Error("SANDBOX_IMAGE_NOT_PINNED");
 	return {
 		enabled: true,
+		readonlyModuleTools: env.PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS === "1",
 		trusted: env.PI_ENHANCED_SANDBOX_TRUSTED === "1",
 		runId,
 		runRoot,

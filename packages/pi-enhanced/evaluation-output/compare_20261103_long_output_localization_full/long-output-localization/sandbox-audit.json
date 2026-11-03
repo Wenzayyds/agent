@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "runId": "compare_20261103_long_output_localization_full-long-output-localization",
+  "workspaceSha256": "956666edfc254f58784b308faad0b142eb5a9bc2bf6e863bc564be19583f7e16",
+  "evidence": {
+    "containerId": "ec24442230a33ca61c700d377a8743154370722c93a4e63bc018d5105c43c1e6",
+    "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+    "network": "none",
+    "readOnlyRoot": true,
+    "user": "1000:1000",
+    "mounts": [
+      {
+        "destination": "/workspace",
+        "readWrite": true
+      }
+    ]
+  },
+  "audit": [
+    {
+      "requestId": "call_01_ET_mT4TXthzCUIFUBRrlBjv9109:grep",
+      "toolName": "grep",
+      "operation": "grep",
+      "status": "ok",
+      "containerId": "ec24442230a33ca61c700d377a8743154370722c93a4e63bc018d5105c43c1e6",
+      "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+      "durationMs": 241.287
+    }
+  ]
+}

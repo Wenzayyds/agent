@@ -5,7 +5,13 @@ export function redactMemoryOutput(value: string, projectRoot?: string): string 
 	let redacted = value;
 	if (projectRoot) {
 		for (const path of new Set([projectRoot, projectRoot.replaceAll("\\", "/"), projectRoot.replaceAll("/", "\\")])) {
-			if (path) redacted = redacted.replaceAll(path, "[PROJECT_PATH]");
+			if (path) {
+				const escaped = path.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+				redacted = redacted.replace(
+					new RegExp(escaped, /^[A-Za-z]:[\\/]/u.test(path) ? "giu" : "gu"),
+					"[PROJECT_PATH]",
+				);
+			}
 		}
 	}
 	return redacted
