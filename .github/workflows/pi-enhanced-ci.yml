@@ -32,7 +32,7 @@ jobs:
       - run: npm run hydrate:model-data
       - run: npm run build:offline
       - run: npm run check --workspace=@wz-agent/pi-enhanced
-      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
       - run: node --experimental-strip-types packages/pi-enhanced/benchmarks/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/batch-h-test-manifest.json packages/pi-enhanced/docs/batch-i-test-manifest.json
       - run: python -m pytest packages/pi-enhanced/python/memory-intelligence/tests -q
         env:
@@ -44,6 +44,7 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: pi-enhanced-${{ runner.os }}-${{ github.sha }}
           path: |
             packages/pi-enhanced/ci-metadata.json
@@ -66,7 +67,7 @@ jobs:
       - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-docker-metadata.json --docker
       - run: docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
       - run: npm run smoke:docker --workspace=@wz-agent/pi-enhanced
-      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
       - if: always()
         uses: actions/upload-artifact@v4
         with:
