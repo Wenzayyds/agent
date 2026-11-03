@@ -378,3 +378,5 @@
 - run-controlled 固定六格串行，开始前逐格预占 0.03 美元运行额度，独占创建批次目录、拒绝恢复/重复运行；费用和 Token 都经原硬预算网关。真实执行核对当前提交的三平台成功证据，受控实验禁用 Pi 与 Provider 重试。
 - 六格本地 Stub 全部经过真实 Pi/Docker并通过隐藏验证；Memory 命中、Task 查询和 Context 截断实际触达。网关/隔离负向测试各只发出一次请求，后五格 not_run，容器残留 0；异常时保留 gateway-final 账目与失败证据。
 - 本地完整回归 180 身份：178 passed/0 failed/2 条件跳过，174 基线缺失 0；Python 15/15、全仓 check 和 pack 泄漏检查通过。真实调用仍为 0，待推送当前实现并核对 CI 后再执行已获授权批次。
+- 首轮实现 27261ee10 的 CI 41631120068 暴露 Linux 隔离停止时序：父进程从 stdout 收到错误之前，Pi 已发下一次请求（实测 2 次）；没有付费执行。修复为受控专用 Extension 在 awaited tool_execution_end 中先认证通知回环网关进入 GATEWAY_ISOLATION_STOP，再结束进程。通道只能关闭网关，不能恢复或提高预算。P1 Policy 和 Pi Core 未修改。
+- 修复后的完整本地回归为 181 身份：179 passed/0 failed/2 条件跳过；隔离失败仍严格断言上游 1 次、后五格 not_run、容器残留 0，未降低验收条件。继续等待新提交的三平台 CI。

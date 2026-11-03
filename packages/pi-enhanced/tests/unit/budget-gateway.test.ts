@@ -18,6 +18,15 @@ const baseLimits: BudgetGatewayLimits = {
 };
 
 describe("Batch H hard budget gateway", () => {
+	it("accepts only authenticated isolation-stop signals and never forwards them upstream", async () => {
+		const upstream = await mockUpstream(async (_request, response) => { response.writeHead(500).end(); });
+		const gateway = await gatewayFor(upstream.url, baseLimits);
+		expect((await fetch(`${gateway.url}/__budget/stop-isolation`, { method: "POST", headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+		expect(gateway.status().state).toBe("ready");
+		expect((await fetch(`${gateway.url}/__budget/stop-isolation`, { method: "POST", headers: { Authorization: "Bearer client-token" } })).status).toBe(200);
+		expect(gateway.status()).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_ISOLATION_STOP", requestsStarted: 0 });
+		expect((await callGateway(gateway.url, "client-token")).status).toBe(429);
+	});
 	it("forces the provider request through loopback, clamps output, and accounts usage", async () => {
 		let seenAuthorization = "";
 		let seenBody: Record<string, unknown> = {};

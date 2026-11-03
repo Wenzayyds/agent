@@ -217,6 +217,8 @@ class BudgetLedger {
 		this.state.state = "closed";
 	}
 
+	stopForIsolation(): void { this.failClosed("GATEWAY_ISOLATION_STOP"); }
+
 	snapshot(): BudgetGatewayStatus {
 		return JSON.parse(JSON.stringify(this.state)) as BudgetGatewayStatus;
 	}
@@ -282,6 +284,11 @@ async function handleRequest(
 	options: BudgetGatewayOptions,
 	ledger: BudgetLedger,
 ): Promise<void> {
+	if (request.method === "POST" && request.url === "/__budget/stop-isolation") {
+		if (!hasBearer(request, options.clientToken)) return sendJson(response, 401, { error: "GATEWAY_CLIENT_AUTH" });
+		ledger.stopForIsolation();
+		return sendJson(response, 200, { state: "failed_closed" });
+	}
 	if (request.method === "GET" && request.url === "/__budget/health") {
 		if (!hasBearer(request, options.adminToken)) return sendJson(response, 401, { error: "GATEWAY_ADMIN_AUTH" });
 		return sendJson(response, 200, { status: ledger.snapshot().state });

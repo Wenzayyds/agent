@@ -142,11 +142,13 @@ try {
 			pricing: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
 		});
 		writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));
+		if (cell) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
 		const cli = join(repositoryRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
 		const extensionArgs = [
 			"--extension", join(packageRoot, "extensions", "mcp-policy.ts"),
 			"--extension", join(packageRoot, "extensions", "sandbox.ts"),
 		];
+		if (cell) extensionArgs.push("--extension", join(here, "controlled-stop.ts"));
 		if (switches.memory) extensionArgs.push("--extension", join(packageRoot, "extensions", "memory.ts"));
 		if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
 		if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
