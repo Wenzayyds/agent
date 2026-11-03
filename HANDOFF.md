@@ -338,3 +338,4 @@
 - 普通 CI 将 offline build 移到测试前，Docker job 也先构建 CLI，避免真实 Runner E2E 因 CLI 缺失被跳过；Python 测试显式设置 PYTHONPATH。
 - 现有真实消融条件不足：六文件工具白名单排除了 Memory/Task 模型工具，预置记忆又是通用经验，不能仅凭开启模块宣称其有效。P2 应先验证模块实际触达，再比较同任务、同预算的结果和成本。
 - 此轮没有调用真实模型，未推送；之前的一次付费授权已经消耗。等待推送确认和新实验预算。
+- 随后用户授权正常推送，be90a62ea 已推送；远端 run 41619421795 实际启动。Docker job 在 build:offline 因干净 checkout 缺失被忽略的 Provider 数据失败；CI 补用原有 hydrate:model-data 步骤。恢复的 H/I 清单哈希改为真实换行算法，H 清单明确标注重建来源。

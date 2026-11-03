@@ -30,6 +30,7 @@ jobs:
       - run: node --version && npm --version && python --version && python -c "import numpy; print(numpy.__version__)"
       - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-metadata.json
       - run: npm run check --workspace=@wz-agent/pi-enhanced
+      - run: npm run hydrate:model-data
       - run: npm run build:offline
       - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
       - run: node --experimental-strip-types packages/pi-enhanced/benchmarks/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/batch-h-test-manifest.json packages/pi-enhanced/docs/batch-i-test-manifest.json
@@ -60,6 +61,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run hydrate:model-data
       - run: npm run build:offline
       - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-docker-metadata.json --docker
       - run: docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293

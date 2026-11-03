@@ -6,7 +6,8 @@
   "passed": 160,
   "failed": 0,
   "skipped": 2,
-  "sha256": "f49802817232b46f42b150fcf6fc691d8f35873a04355b660911dce3386cfd13",
+  "sha256": "7cbbf149bff153030572216bbd478f2dc796b12fffba463d6bdbb048bcf4b126",
+  "reconstructionNote": "Identity list reconstructed from Batch I collection by excluding its four added tests; historical counts are from HANDOFF, not a recovered original report.",
   "baselineCount": 155,
   "missingBaselineIdentities": [],
   "identities": [
