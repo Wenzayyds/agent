@@ -347,3 +347,4 @@
 - 合计上游请求 9 次，已确认 16,369 Token、0.005673 美元；两个上游流没有完整 usage，费用未知部分保留预留，累计费用上界 0.019032 美元。不能把 usage 未返回记作免费或已完成计费核对。原始产物保留，派生报告 controlled-comparison-20261103.json 将 full 标为 gateway_error。
 - P2 结论为 inconclusive，没有证明任何单模块收益；禁止从 2 个合成任务推导总体成功率。此次授权的 4 次运行已经用完，不继续自动试跑。
 - 远端 run 41620874749 的 Linux/Docker 通过，Windows 暴露 rootPath 与临时路径大小写不同导致 PROJECT_PATH 标签不一致；Windows 盘符路径改用大小写不敏感替换，保留 Linux 大小写语义及通用脱敏，新增回归通过。
+- run 41622273550 Linux/Docker 通过，Windows 同一标签断言仍失败，说明并非仅大小写。夹具使用 TEMP 别名而 scope 为规范路径（Windows 可有 8.3 短路径）；测试拆为规范 scope 必须 PROJECT_PATH、别名必须脱敏且原路径不泄漏。保留原 Reader 安全断言，未将安全失败改成跳过。

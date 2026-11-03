@@ -343,8 +343,13 @@ describe("P2-6 ScopedMemoryReader broker", () => {
 		const verified = await service.confirmByUser(candidate.id, candidate.revision, confirmingContext);
 		expect(await acquired[0]?.search({ text: "reader" })).toEqual([verified]);
 		expect(await acquired[0]?.get(candidate.id)).toMatchObject({ status: "verified" });
-		service.createCore("project", `Workspace root: ${harness.tempDir}`);
+		// Windows runners may expose an 8.3 TEMP alias, unlike the canonical scope root.
+		service.createCore("project", `Workspace root: ${service.scope.rootPath}`);
 		expect((await acquired[0]?.getCore("project"))?.content).toContain("[PROJECT_PATH]");
+		service.updateCore("project", `Workspace root: ${harness.tempDir}`);
+		const aliasContent = (await acquired[0]?.getCore("project"))?.content;
+		expect(aliasContent).toMatch(/\[(?:PROJECT_PATH|REDACTED_PATH)\]/u);
+		expect(aliasContent).not.toContain(harness.tempDir);
 
 		if (!events) throw new Error("EventBus was not captured");
 		const concurrent = await Promise.all([
