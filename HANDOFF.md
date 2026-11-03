@@ -339,3 +339,4 @@
 - 现有真实消融条件不足：六文件工具白名单排除了 Memory/Task 模型工具，预置记忆又是通用经验，不能仅凭开启模块宣称其有效。P2 应先验证模块实际触达，再比较同任务、同预算的结果和成本。
 - 此轮没有调用真实模型，未推送；之前的一次付费授权已经消耗。等待推送确认和新实验预算。
 - 随后用户授权正常推送，be90a62ea 已推送；远端 run 41619421795 实际启动。Docker job 在 build:offline 因干净 checkout 缺失被忽略的 Provider 数据失败；CI 补用原有 hydrate:model-data 步骤。恢复的 H/I 清单哈希改为真实换行算法，H 清单明确标注重建来源。
+- 第二轮 run 41619641040 暴露 Linux clean checkout 类型检查依赖构建，以及 runner UID 1001 与容器 UID 1000 不匹配导致挂载写入失败。CI 调整为 hydrate→build→check；容器使用宿主非 root UID/GID（root/Windows 回退 1000:1000），检查值同步匹配，未修改挂载权限或容器能力。

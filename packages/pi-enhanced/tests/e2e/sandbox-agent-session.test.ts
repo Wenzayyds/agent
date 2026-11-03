@@ -97,7 +97,7 @@ describe.skipIf(!dockerAvailable)("real AgentSession Docker file tools", () => {
 				image,
 				network: "none",
 				readOnlyRoot: true,
-				user: "1000:1000",
+				user: `${process.getuid?.() || 1000}:${process.getgid?.() || 1000}`,
 				mounts: [{ destination: "/workspace", readWrite: true }],
 			});
 			expect(harness.session.messages.filter((message) => message.role === "toolResult")).toHaveLength(8);

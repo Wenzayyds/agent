@@ -13,6 +13,13 @@ import {
 } from "./protocol.ts";
 import { SANDBOX_WORKER_SOURCE } from "./worker-source.ts";
 
+// Bind mounts retain host ownership on Linux. Never run the container as root.
+export function sandboxUser(): string {
+	const uid = process.getuid?.();
+	const gid = process.getgid?.();
+	return uid && gid ? `${uid}:${gid}` : "1000:1000";
+}
+
 export interface SandboxAuditRecord {
 	requestId: string;
 	toolName: SandboxToolName;
@@ -72,7 +79,7 @@ export class DockerSandboxBroker {
 					"--cpus",
 					"0.5",
 					"--user",
-					"1000:1000",
+					sandboxUser(),
 					"--tmpfs",
 					"/tmp:rw,noexec,nosuid,size=32m",
 					"--mount",
@@ -110,7 +117,7 @@ export class DockerSandboxBroker {
 				inspected.HostConfig.NetworkMode !== "none" ||
 				!inspected.HostConfig.ReadonlyRootfs ||
 				inspected.HostConfig.Privileged ||
-				inspected.Config.User !== "1000:1000" ||
+				inspected.Config.User !== sandboxUser() ||
 				workspaceMount.length !== 1 ||
 				!workspaceMount[0]?.RW ||
 				inspected.Mounts.some((mount) => mount.Destination !== "/workspace")
