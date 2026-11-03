@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetExceeded, buildEvaluationPlan, classifyExecution, preflightView, redactEvaluationText, summarizeUsage } from "../../benchmarks/real-agent/evaluation-policy.ts";
+import { budgetExceeded, buildEvaluationPlan, classifyExecution, executionOutcome, preflightView, redactEvaluationText, summarizeUsage } from "../../benchmarks/real-agent/evaluation-policy.ts";
 
 const valid = { runId: "pilot_20261102", provider: "fixture", model: "fixture-v1", apiKeyEnv: "PI_EVAL_API_KEY", maxTotalCostUsd: "1", maxTasks: "1", maxTokensPerTask: "10000", maxCallsPerTask: "4", timeoutMs: "60000", concurrency: "1", budgetEnforcement: "external_gateway", outputDir: "evaluation-output", sandboxImage: "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293" };
 
@@ -29,7 +29,10 @@ describe("Batch F real model authorization and budget gate", () => {
 	it("preflight never reads a key and logs redact secrets and usage", () => {
 		expect(JSON.stringify(preflightView(valid, 5))).not.toContain("fake-secret");
 		expect(redactEvaluationText("token=fake-secret sk-example-123456789", ["fake-secret"])).not.toContain("fake-secret");
-		expect(summarizeUsage('{"usage":{"input":10,"output":5,"cost":{"total":0.02}}}\n')).toEqual({ calls: 1, tokens: 15, costUsd: 0.02 });
+		const message = { role: "assistant", stopReason: "stop", usage: { input: 10, output: 5, cost: { total: 0.02 } } };
+		const events = [{ type: "message_update", message }, { type: "message_end", message }, { type: "turn_end", message }, { type: "agent_end", messages: [message] }, { type: "message_end", message: { ...message, stopReason: "error" } }];
+		expect(summarizeUsage(events.map((event) => JSON.stringify(event)).join("\n"))).toEqual({ calls: 1, tokens: 15, costUsd: 0.02 });
+		expect(summarizeUsage("not json\n{}")).toEqual({ calls: 0, tokens: 0, costUsd: null });
 	});
 
 	it("stops on calls, tokens, or cost and classifies timeout and process errors separately", () => {
@@ -40,5 +43,8 @@ describe("Batch F real model authorization and budget gate", () => {
 		expect(classifyExecution({ overBudget: false, timedOut: true, exitCode: null, verifierPassed: false })).toBe("timeout");
 		expect(classifyExecution({ overBudget: false, timedOut: false, exitCode: 2, verifierPassed: false })).toBe("agent_error");
 		expect(classifyExecution({ overBudget: false, timedOut: false, exitCode: 0, verifierPassed: true })).toBe("passed");
+		expect(executionOutcome({ overBudget: false, budgetRejected: true, timedOut: false, exitCode: 0, verifierPassed: true })).toEqual({ patchStatus: "passed", runStatus: "budget_stopped" });
+		expect(executionOutcome({ overBudget: false, budgetRejected: false, timedOut: true, exitCode: null, verifierPassed: true })).toEqual({ patchStatus: "passed", runStatus: "timeout" });
+		expect(executionOutcome({ overBudget: false, budgetRejected: false, timedOut: false, exitCode: 0, verifierPassed: false })).toEqual({ patchStatus: "failed", runStatus: "completed" });
 	});
 });

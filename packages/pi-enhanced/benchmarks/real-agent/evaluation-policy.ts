@@ -82,13 +82,16 @@ export function summarizeUsage(text: string): { calls: number; tokens: number; c
 	for (const line of text.split(/\r?\n/u)) {
 		try {
 			const value = JSON.parse(line) as Record<string, unknown>;
-			walk(value, (usage) => {
+			// Only final assistant messages are billable turns; update/turn_end/agent_end repeat them.
+			const message = record(value.message);
+			if (value.type !== "message_end" || message?.role !== "assistant") continue;
+			const usage = record(message.usage);
+			if (!usage || message.stopReason === "error" || message.stopReason === "aborted") continue;
 				calls += 1;
 				const total = number(usage.totalTokens) ?? (number(usage.input) ?? 0) + (number(usage.output) ?? 0);
 				tokens += total;
 				const costObject = record(usage.cost); const totalCost = costObject ? number(costObject.total) : undefined;
 				if (totalCost !== undefined) { cost += totalCost; hasCost = true; }
-			});
 		} catch {}
 	}
 	return { calls, tokens, costUsd: hasCost ? cost : null };
@@ -102,11 +105,11 @@ export function classifyExecution(input: { overBudget: boolean; timedOut: boolea
 	if (input.exitCode !== 0) return "agent_error";
 	return input.verifierPassed ? "passed" : "failed";
 }
-function walk(value: unknown, found: (usage: Record<string, unknown>) => void): void {
-	if (Array.isArray(value)) { for (const item of value) walk(item, found); return; }
-	const object = record(value); if (!object) return;
-	const usage = record(object.usage); if (usage) found(usage);
-	for (const item of Object.values(object)) if (item !== usage) walk(item, found);
+export function executionOutcome(input: { overBudget: boolean; budgetRejected: boolean; timedOut: boolean; exitCode: number | null; verifierPassed: boolean }): { patchStatus: "passed" | "failed"; runStatus: "completed" | "budget_stopped" | "budget_exceeded" | "timeout" | "agent_error" } {
+	return {
+		patchStatus: input.verifierPassed ? "passed" : "failed",
+		runStatus: input.overBudget ? "budget_exceeded" : input.timedOut ? "timeout" : input.budgetRejected ? "budget_stopped" : input.exitCode !== 0 ? "agent_error" : "completed",
+	};
 }
 function record(value: unknown): Record<string, unknown> | null { return typeof value === "object" && value !== null ? value as Record<string, unknown> : null; }
 function number(value: unknown): number | undefined { return typeof value === "number" && Number.isFinite(value) ? value : undefined; }

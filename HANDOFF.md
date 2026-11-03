@@ -329,3 +329,12 @@
 - 完整 TypeScript 回归从仓库根目录收集 166 个身份：164 passed、0 failed、2 条件跳过；Batch H 162 个身份缺失 0。包内目录启动会使既有崩溃恢复夹具解析到错误路径，不能作为正确运行方式。
 - 共享工作树中的 `packages/pi-enhanced/docs` 再次发生未跟踪文件消失；Runner 清理根已核对为系统临时目录，源码没有删除 docs 的路径，无法复现为 Runner 清理错误。12 个已跟踪历史文档从 HEAD 原样恢复，Batch H/I 报告依据现存运行产物和测试重新生成；更早且无 Git 对象的旧报告不伪造恢复。
 - 尚未推送。发布状态仍为 NO-GO，等待远端 Windows/Linux CI 证据。
+
+## 2026-11-03：评测统计修订与 CI 审查
+
+- stdout 只统计 `message_end` 的最终 assistant usage，排除 update、turn_end、agent_end 重复消息和 error/aborted。用量仍以网关为权威，stdout 仅作诊断。
+- 新增独立 `patchStatus` 和 `runStatus`：隐藏测试通过可以与 budget_stopped/timeout 同时存在；汇总增加 patchPassed、normallyCompleted、budgetStopped。历史原始报告不覆盖。
+- 全仓 `npm run check` 通过。专项 6 passed；Docker 当前不可用，生产 Runner 两项 E2E skipped，新增 stdout 610 Token 断言尚待实测。
+- 普通 CI 将 offline build 移到测试前，Docker job 也先构建 CLI，避免真实 Runner E2E 因 CLI 缺失被跳过；Python 测试显式设置 PYTHONPATH。
+- 现有真实消融条件不足：六文件工具白名单排除了 Memory/Task 模型工具，预置记忆又是通用经验，不能仅凭开启模块宣称其有效。P2 应先验证模块实际触达，再比较同任务、同预算的结果和成本。
+- 此轮没有调用真实模型，未推送；之前的一次付费授权已经消耗。等待推送确认和新实验预算。

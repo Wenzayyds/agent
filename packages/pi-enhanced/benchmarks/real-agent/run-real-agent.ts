@@ -11,7 +11,7 @@ import { ensureProjectStorage } from "../../src/memory/storage.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
 import { startBudgetGateway, type BudgetGatewayStatus } from "./budget-gateway.ts";
-import { budgetExceeded, buildEvaluationPlan, classifyExecution, preflightView, redactEvaluationText, summarizeUsage } from "./evaluation-policy.ts";
+import { budgetExceeded, buildEvaluationPlan, classifyExecution, executionOutcome, preflightView, redactEvaluationText, summarizeUsage } from "./evaluation-policy.ts";
 import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
 
 interface Task { id: string; category: string; prompt: string }
@@ -160,16 +160,20 @@ try {
 		const overBudget = budgetExceeded(usage, observedCost, plan!) || gatewayStatus.requestsRejected > 0;
 		const timedOut = child.timedOut;
 		const status = classifyExecution({ overBudget, timedOut, exitCode: child.status, verifierPassed });
+		const outcome = executionOutcome({ overBudget: budgetExceeded(usage, observedCost, plan!), budgetRejected: gatewayStatus.requestsRejected > 0, timedOut, exitCode: child.status, verifierPassed });
 		const taskOutput = join(runOutput!, task.id); mkdirSync(taskOutput, { recursive: true });
 		writeFileSync(join(taskOutput, "patch.diff"), patch);
 		writeFileSync(join(taskOutput, "agent.stderr.log"), redactEvaluationText(child.stderr ?? "", [process.env[apiKeyEnv!]!]));
 		const record = { taskId: task.id, category: task.category, experimentClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", repositoryCommit, status, verifierPassed, hiddenTestExitCode: verifierPassed ? 0 : 1, agentExitCode: child.status, timedOut, usage, agentReportedUsage, gateway: gatewayEvidence(gatewayStatus), sandboxAudit, costClass: localStubUrl ? "simulated" : "gateway_measured", patchSha256: createHash("sha256").update(patch).digest("hex"), durationMs: Number((performance.now() - started).toFixed(3)) };
-		writeFileSync(join(taskOutput, "result.json"), `${JSON.stringify(record, null, 2)}\n`); results.push(record);
+		const classifiedRecord = { ...record, ...outcome, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
+		writeFileSync(join(taskOutput, "result.json"), `${JSON.stringify(classifiedRecord, null, 2)}\n`); results.push(classifiedRecord);
 		writeFileSync(join(taskOutput, "sandbox-audit.json"), `${JSON.stringify(sandboxAudit, null, 2)}\n`);
 		if (overBudget) break;
 	}
 	const ran = results.filter((item) => item.status !== "not_run");
+	const outcomeSummary = { patchPassed: ran.filter((item) => item.patchStatus === "passed").length, normallyCompleted: ran.filter((item) => item.runStatus === "completed").length, budgetStopped: ran.filter((item) => item.runStatus === "budget_stopped").length };
 	const report = { schemaVersion: 1, generatedAt: new Date().toISOString(), evaluationClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", runId: plan?.runId ?? null, variant, condition, model: execute ? { provider, model } : null, authorization: localStubUrl ? "local_stub_only" : execute ? "explicit" : "absent", sandbox: plan ? { mode: "docker-file-tools", image: plan.sandboxImage, tools: ["read", "grep", "find", "ls", "write", "edit"], network: "none", failClosed: true } : null, limits: plan ? { maxTotalCostUsd: plan.maxTotalCostUsd, maxTasks: plan.maxTasks, maxTokensPerTask: plan.maxTokensPerTask, maxCallsPerTask: plan.maxCallsPerTask, timeoutMs: plan.timeoutMs, concurrency: plan.concurrency, budgetEnforcement: plan.budgetEnforcement } : null, summary: { total: results.length, run: ran.length, passed: ran.filter((item) => item.status === "passed").length, notRun: results.length - ran.length, observedCostUsd: execute ? observedCost : 0 }, results };
+	Object.assign(report.summary, outcomeSummary);
 	if (!localStubUrl) writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 	process.stdout.write(`${JSON.stringify(report.summary)}\n`);

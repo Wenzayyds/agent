@@ -71,7 +71,7 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 				authorization: "local_stub_only",
 				summary: { passed: 1 },
 			});
-			expect(task).toMatchObject({ status: "passed", verifierPassed: true });
+			expect(task).toMatchObject({ status: "passed", verifierPassed: true, patchStatus: "passed", runStatus: "completed", agentReportedUsage: { calls: 4, tokens: 610 }, usageSource: "local_hard_gateway" });
 			expect(task.patchSha256).not.toBe(createHash("sha256").update("").digest("hex"));
 			expect(task.gateway).toMatchObject({ requestsStarted: 4, denials: [] });
 			expect(task.sandboxAudit.evidence).toMatchObject({
