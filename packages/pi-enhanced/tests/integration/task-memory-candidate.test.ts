@@ -35,11 +35,18 @@ describe("Task to Memory candidate bridge", () => {
 		expect(second).toEqual(first);
 		const record = await service.get(first.id);
 		expect(record?.status).toBe("candidate");
-		expect(record?.sources).toEqual([expect.objectContaining({ type: "user", ref: "task:task-1" })]);
+		expect(record?.sources).toEqual([expect.objectContaining({ type: "user", ref: expect.stringMatching(/^task:task-1:experience:[a-f0-9]{64}$/u) })]);
 		expect(await service.search({ text: "reviewed task", statuses: ["verified"] })).toEqual([]);
 		await expect(
 			requestMemoryCandidateWrite(events, { cwd: project, sessionManager: { getSessionId: () => "other" } } as never, { taskId: "task-1", content: "wrong session" }, 50),
 		).rejects.toMatchObject({ code: "MEMORY_RUNTIME_UNAVAILABLE" });
 		off();
+		await service.close(); services.splice(services.indexOf(service), 1);
+		const reopened = await openMemoryService(scope); services.push(reopened);
+		const restartedBus = createEventBus();
+		const stopRestarted = registerMemoryCandidateWriterBroker(restartedBus, { service: reopened, scope, sessionId: "session-1" });
+		const afterRestart = await requestMemoryCandidateWrite(restartedBus, context, { taskId: "task-1", content: "A reviewed task experience" });
+		expect(afterRestart.id).toBe(first.id);
+		stopRestarted();
 	});
 });

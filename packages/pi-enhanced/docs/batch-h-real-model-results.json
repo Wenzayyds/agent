@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "runId": "pilot_h3_deepseek_20261103",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "taskId": "single-file-off-by-one",
+  "status": "failed_sandbox_preflight_at_tool_use",
+  "requestsStarted": 3,
+  "actualInputTokens": 6444,
+  "actualOutputTokens": 222,
+  "actualTotalTokens": 6666,
+  "actualCostUsd": 0.0021996,
+  "requestsRejected": 4,
+  "denialReason": "historical_reason_unknown",
+  "patchProduced": false,
+  "verifierPassed": false,
+  "sandboxError": "SANDBOX_WORKSPACE_NOT_TEMPORARY",
+  "automaticRetry": false
+}

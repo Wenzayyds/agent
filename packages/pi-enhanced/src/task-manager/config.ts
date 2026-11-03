@@ -8,6 +8,7 @@ export interface TaskManagerConfig {
 	maximumTasks: number;
 	maximumSteps: number;
 	maximumEvents: number;
+	controlledFiles: readonly string[];
 }
 
 export interface LoadedTaskManagerConfig {
@@ -23,6 +24,7 @@ const DEFAULT_CONFIG: TaskManagerConfig = Object.freeze({
 	maximumTasks: 200,
 	maximumSteps: 100,
 	maximumEvents: 10_000,
+	controlledFiles: [],
 });
 
 export function loadTaskManagerConfig(options: {
@@ -56,6 +58,7 @@ export function loadTaskManagerConfig(options: {
 			"maximumTasks",
 			"maximumSteps",
 			"maximumEvents",
+			"controlledFiles",
 		]);
 		const unknown = Object.keys(value).find((key) => !allowed.has(key));
 		if (unknown) {
@@ -68,7 +71,8 @@ export function loadTaskManagerConfig(options: {
 			typeof candidate.contextSummary !== "boolean" ||
 			!integer(candidate.maximumTasks, 1, 2_000) ||
 			!integer(candidate.maximumSteps, 1, 500) ||
-			!integer(candidate.maximumEvents, 100, 100_000)
+			!integer(candidate.maximumEvents, 100, 100_000) ||
+			!controlledFiles(candidate.controlledFiles)
 		) {
 			errors.push(`${path}: task-manager limits or switches are invalid`);
 			continue;
@@ -78,6 +82,22 @@ export function loadTaskManagerConfig(options: {
 	}
 	if (errors.length > 0) config.enabled = false;
 	return { config, sources, errors };
+}
+function controlledFiles(value: unknown): value is string[] {
+	return (
+		Array.isArray(value) &&
+		value.length <= 50 &&
+		value.every(
+			(item) =>
+				typeof item === "string" &&
+				item.length > 0 &&
+				item.length <= 240 &&
+				!item.includes("\0") &&
+				!item.startsWith("/") &&
+				!/^[A-Za-z]:[\\/]/u.test(item) &&
+				!item.split(/[\\/]/u).includes(".."),
+		)
+	);
 }
 
 function integer(value: unknown, minimum: number, maximum: number): value is number {

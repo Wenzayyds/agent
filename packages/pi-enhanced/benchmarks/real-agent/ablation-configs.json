@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "variants": [
+    { "id": "baseline", "memory": false, "context": false, "task": false },
+    { "id": "memory-only", "memory": true, "context": false, "task": false },
+    { "id": "context-only", "memory": false, "context": true, "task": false },
+    { "id": "memory-context", "memory": true, "context": true, "task": false },
+    { "id": "full", "memory": true, "context": true, "task": true }
+  ],
+  "conditions": ["cold", "memory_seeded"]
+}

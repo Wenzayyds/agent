@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "license": "Locally authored evaluation fixtures; repository use only",
+  "tasks": [
+    { "id": "single-file-off-by-one", "category": "single_file", "language": "javascript", "testFramework": "node-hidden-verifier", "risk": "low", "prompt": "修复 sumTo，使 sumTo(3) 返回 6。不要修改测试。" },
+    { "id": "cross-file-export", "category": "cross_file", "language": "javascript", "testFramework": "node-hidden-verifier", "risk": "low", "prompt": "修复 formatter 模块的导出与调用，使公开的 formatName('pi') 返回 'PI'。" },
+    { "id": "config-default", "category": "configuration", "language": "javascript", "testFramework": "node-hidden-verifier", "risk": "low", "prompt": "修复配置默认值，使 loadConfig({}) 的 timeoutMs 为 5000，同时保留传入值。" },
+    { "id": "long-output-localization", "category": "long_output", "language": "javascript", "testFramework": "node-hidden-verifier", "risk": "low", "prompt": "定位并修复 validateItems：任意负数都应返回 false。只改必要代码。" },
+    { "id": "memory-guided-regression", "category": "memory_context", "language": "javascript", "testFramework": "node-hidden-verifier", "risk": "low", "prompt": "修复 normalizeKey：应去掉首尾空白并转成小写，且不得改变输入字符串。" }
+  ]
+}

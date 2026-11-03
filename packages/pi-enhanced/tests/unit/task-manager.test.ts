@@ -62,6 +62,21 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 		expect(preflight.pendingStepIds).toEqual(["done", "pending"]); expect(preflight.checkpointRevisionMatches).toBe(true); expect(preflight.automaticReplayAllowed).toBe(false);
 	});
 
+	it("hashes configured and Git-changed files within bounded workspace observation", () => {
+		const { service, root } = fixture();
+		writeFileSync(join(root, "controlled.txt"), "before");
+		const created = service.create("controlled recovery", [{ stepId: "a", title: "edit", expectedOutcome: "hash changes" }], "s", null);
+		const checkpoint = createCheckpoint(service.provider, created, "s", null, ["controlled.txt", "missing.txt"]);
+		expect(checkpoint.workspaceObservation.trackedFiles).toEqual(expect.arrayContaining([
+			expect.objectContaining({ relativePath: "controlled.txt", exists: true, sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
+			expect.objectContaining({ relativePath: "missing.txt", exists: false }),
+		]));
+		writeFileSync(join(root, "controlled.txt"), "after");
+		const preflight = recoveryPreflight(service.provider, created.task.taskId, "s", null, ["controlled.txt", "missing.txt"]);
+		expect(preflight.workspaceChanged).toBe(true);
+		expect(preflight.driftReasons).toContain("controlled-files-changed");
+	});
+
 	it("isolates equal directory names by canonical project identity and rejects a newer schema", () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-task-scope-")); roots.push(root); const agentDir = join(root, "agent"); const firstRoot = join(root, "one", "same"); const secondRoot = join(root, "two", "same"); mkdirSync(firstRoot, { recursive: true }); mkdirSync(secondRoot, { recursive: true });
 		const firstScope = createTaskStorageScope(createProjectScope({ cwd: firstRoot, agentDir }), agentDir); const secondScope = createTaskStorageScope(createProjectScope({ cwd: secondRoot, agentDir }), agentDir); expect(firstScope.projectId).not.toBe(secondScope.projectId); expect(firstScope.databasePath).not.toBe(secondScope.databasePath);
@@ -113,7 +128,7 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 
 	it("tracks parallel, nested, blocked, out-of-order, duplicate, and missing-end tool events by real ids", () => {
 		const { service } = fixture(); const created = service.create("observe tools", [{ stepId: "a", title: "observe", expectedOutcome: "bounded evidence" }], "session", null); service.bind(created.task.taskId, "a", "session", null);
-		const config: TaskManagerConfig = { enabled: true, modelPlanTool: false, contextSummary: false, maximumTasks: 20, maximumSteps: 20, maximumEvents: 1000 };
+		const config: TaskManagerConfig = { enabled: true, modelPlanTool: false, contextSummary: false, maximumTasks: 20, maximumSteps: 20, maximumEvents: 1000, controlledFiles: [] };
 		const runtime = new TaskRuntime("ready", config, undefined, undefined, service); const ctx = { sessionManager: { getSessionId: () => "session" } } as ExtensionContext;
 		runtime.onToolEnd({ type: "tool_execution_end", toolCallId: "out-of-order", toolName: "read", result: {}, isError: false }, ctx);
 		runtime.onToolStart({ type: "tool_execution_start", toolCallId: "parallel-a", toolName: "read", args: { path: "secret-not-stored" } }, ctx);

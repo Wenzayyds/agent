@@ -8,6 +8,8 @@
 	"files": [
 		"extensions",
 		"src",
+		"scripts",
+		"benchmarks",
 		"docs",
 		"python",
 		"!python/**/__pycache__",
@@ -22,7 +24,14 @@
 	"scripts": {
 		"check": "tsc --noEmit -p ../../tsconfig.json",
 		"test": "vitest --run",
-		"evaluate:p5": "node --experimental-strip-types benchmarks/p5-evaluation.ts"
+		"evaluate:p5": "node --experimental-strip-types benchmarks/p5-evaluation.ts",
+		"evaluate:real-agent": "node --experimental-strip-types benchmarks/real-agent/run-real-agent.ts",
+		"evaluate:ablation": "node --experimental-strip-types benchmarks/real-agent/run-ablation.ts",
+		"evaluate:quality": "node --experimental-strip-types benchmarks/quality-evaluation.ts",
+		"smoke:docker": "node --experimental-strip-types scripts/ci/docker-isolation-smoke.ts",
+		"test:sandbox": "vitest --run tests/unit/sandbox-protocol.test.ts tests/e2e/sandbox-agent-session.test.ts",
+		"check:pack": "node --experimental-strip-types scripts/ci/pack-leak-check.ts",
+		"data": "node --experimental-strip-types scripts/data-management.ts"
 	},
 	"keywords": [
 		"pi-package",
@@ -37,7 +46,8 @@
 			"./extensions/mcp-policy.ts",
 			"./extensions/memory.ts",
 			"./extensions/context.ts",
-			"./extensions/task-manager.ts"
+			"./extensions/task-manager.ts",
+			"./extensions/sandbox.ts"
 		]
 	},
 	"peerDependencies": {

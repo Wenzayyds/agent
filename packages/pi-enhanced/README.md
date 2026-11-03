@@ -146,6 +146,11 @@ Pi Package 也允许在 `settings.json` 的 package 资源筛选中排除某个�
       "defaultAction": "ask",
       "approvalTimeoutMs": 30000,
       "audit": { "enabled": true, "maxRecent": 200 },
+	  "nativeToolGuard": {
+	    "enabled": true,
+	    "workspaceMutationAction": "ask",
+	    "protectProjectMetadata": true
+	  },
         "rules": [
           { "id": "allow-serena-find-symbol", "server": "serena", "tool": "find_symbol", "action": "allow" },
           { "id": "allow-serena-references", "server": "serena", "tool": "find_referencing_symbols", "action": "allow" },
@@ -158,6 +163,8 @@ Pi Package 也允许在 `settings.json` 的 package 资源筛选中排除某个�
 ```
 
 规则匹配顺序为：任意明确 deny、工具级规则、Server 级规则、默认动作；同层按 `priority` 从高到低，再按声明顺序。`defaultAction` 只能是 `ask` 或 `deny`。
+
+`nativeToolGuard` 独立保护 Pi 原生 read/write/edit 与 Shell 工具。默认写入和 Shell 需要逐次确认，无 UI 时拒绝；路径规范化后只允许工作区范围，并保护 `.git`、`.pi`。这不是操作系统沙箱，完整覆盖范围和限制见 Batch E 安全文档。
 
 需要审批时，没有对话界面的 print/RPC 流程会拒绝执行。MCP annotations 只用于提示风险，不作为授权依据。对 Serena 这类工具较多的 Server，还应在原生 `mcp.json` 中用 `exposure: "hidden"` 只开放所需查询工具。
 
@@ -180,6 +187,31 @@ Pi Package 也允许在 `settings.json` 的 package 资源筛选中排除某个�
 ```bash
 pi --extension ./packages/pi-enhanced/extensions/mcp-policy.ts
 ```
+
+## Docker 文件工具沙箱
+
+Sandbox Extension 默认关闭。它只供受控临时项目使用，把 Pi 的 `read/grep/find/ls/write/edit` 同名工具替换为无网 Docker Worker；模型和 Agent Loop 仍在宿主运行。不要把真实仓库、HOME、SSH、凭据目录或 Docker Socket 挂入容器。
+
+使用前需要 Docker Desktop/WSL2 或 Linux Docker Engine，并提前准备固定镜像：
+
+```bash
+docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+```
+
+当前沙箱只接受系统临时目录中的项目，并要求显式设置 enabled、trusted、runId、精确工作区和镜像 SHA。正式受控试用应通过 `benchmarks/real-agent/run-real-agent.ts` 启动，不要在不可信项目配置中自行放宽这些变量。Docker、镜像、协议或路径检查失败时工具会直接报错，不回退宿主读写。
+
+真实模型密钥可以保存在仓库根目录 `.env` 中，例如 `DEEPSEEK_API_KEY=...`。该文件已被 Git 忽略，只有带 `--execute` 的真实评测路径会读取它；dry-run 和 `--preflight` 不读取 `.env`。保存密钥本身不会开启真实评测，授权开关、预算网关确认以及调用、Token、金额和超时上限仍需在获准运行时显式提供。
+
+受控 DeepSeek 试用使用 `--budget-enforcement local_hard_gateway`。runner 为每个任务启动仅监听 `127.0.0.1` 的硬预算网关，通过临时 `models.json` 覆盖内置 DeepSeek 地址；真实 Key 不进入 Pi 子进程或 Docker。网关在转发前预留请求次数、输入上界、输出上限和费用，固定单并发并实施超时；usage 缺失、超限、断流或上游错误后失败关闭。当前只允许 `deepseek/deepseek-flash`。
+
+首版不支持 Shell、PowerShell、用户 `!`、codemode、tool_search、MCP 写工具或未知第三方工具。排障时可先运行：
+
+```bash
+npm run smoke:docker --workspace=@wz-agent/pi-enhanced
+npm run test:sandbox --workspace=@wz-agent/pi-enhanced
+```
+
+测试会创建并删除临时容器；异常退出后可按名称 `pi-enhanced-tools-*` 检查残留。不要使用宽泛的容器删除命令。
 
 ## 验证记录
 
@@ -229,3 +261,34 @@ P1 已恢复并保留可重复测试。详细记录如下：
 - [P5 评测设计](docs/p5-evaluation-design.md)
 - [P5 评测数据](docs/p5-evaluation-results.json)
 - [Batch D 总体验收](docs/batch-d-verification.md)
+- [Batch E 总体验收](docs/batch-e-verification.md)
+- [原生工具安全接口](docs/native-tool-security-interface-check.md)
+- [真实模型任务核对](docs/p5-real-model-verification.md)
+- [备份恢复](docs/data-backup-restore.md)
+- [发布候选检查表](docs/release-candidate-checklist.md)
+- [Batch F 总体验收](docs/batch-f-verification.md)
+- [Batch F Docker 隔离报告](docs/batch-f-sandbox-report.md)
+- [Batch F 模型评测器审计](docs/batch-f-real-model-harness-audit.md)
+- [Batch F Gate 报告](docs/batch-f-gate-report.json)
+- [Batch G 固定接口核对](docs/batch-g-interface-audit.md)
+- [Batch G Docker 隔离设计](docs/batch-g-sandbox-design.md)
+- [Batch G 真实工具链验证](docs/batch-g-sandbox-integration-verification.md)
+- [Batch G 模型 Preflight](docs/batch-g-model-preflight.md)
+- [Batch G 总体验收](docs/batch-g-verification.md)
+- [Batch G Gate 报告](docs/batch-g-gate-report.json)
+- [Batch H API 调用链核对](docs/batch-h-interface-audit.md)
+- [Batch H 硬预算网关设计](docs/batch-h-budget-gateway-design.md)
+- [Batch H 联合运行验证](docs/batch-h-joint-verification.md)
+- [Batch H 真实模型结果](docs/batch-h-real-model-results.json)
+- [Batch H CI 与发布复核](docs/batch-h-ci-release-review.md)
+- [Batch H Gate 报告](docs/batch-h-gate-report.json)
+- [Batch H 验收报告](docs/batch-h-verification.md)
+- [Batch H 测试身份](docs/batch-h-test-manifest.json)
+- [Batch I 根因审计](docs/batch-i-root-cause-audit.md)
+- [Batch I 工作区身份设计](docs/batch-i-workspace-identity-design.md)
+- [Batch I 生产 Runner 验证](docs/batch-i-runner-integration-verification.md)
+- [Batch I 网关拒绝审计](docs/batch-i-gateway-denial-audit.md)
+- [Batch I 总体验收](docs/batch-i-verification.md)
+- [Batch I 测试身份](docs/batch-i-test-manifest.json)
+- [Batch I 已知限制](docs/batch-i-known-limitations.md)
+- [Batch I 真实模型状态](docs/batch-i-real-model-pilot.md)

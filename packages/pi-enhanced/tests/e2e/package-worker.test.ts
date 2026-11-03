@@ -89,8 +89,10 @@ describe("P2 release package", () => {
 			expect(readdirSync(installed)).not.toContain("tests");
 			const peerScope = join(installRoot, "node_modules", "@earendil-works"); mkdirSync(peerScope, { recursive: true });
 			for (const [name, source] of [["pi-coding-agent", "coding-agent"], ["pi-ai", "ai"], ["pi-agent-core", "agent"]] as const) symlinkSync(join(repositoryRoot, "packages", source), join(peerScope, name), "junction");
-			const taskModule = await import(pathToFileURL(join(installed, "extensions", "task-manager.ts")).href);
-			expect(typeof taskModule.default).toBe("function");
+			for (const name of ["mcp-policy", "memory", "context", "task-manager", "sandbox"]) {
+				const extensionModule = await import(pathToFileURL(join(installed, "extensions", `${name}.ts`)).href);
+				expect(typeof extensionModule.default).toBe("function");
+			}
 		},
 		30_000,
 	);

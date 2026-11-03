@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ProjectScope } from "../memory/contracts.ts";
@@ -92,6 +92,40 @@ export class TaskProvider {
 				.prepare("SELECT * FROM tasks WHERE project_id=? ORDER BY updated_at DESC LIMIT ?")
 				.all(this.scope.projectId, limit) as unknown as TaskRow[]
 		).map(taskFromRow);
+	}
+
+	diagnostics(): {
+		databaseBytes: number;
+		walBytes: number;
+		shmBytes: number;
+		maximumBytes: number;
+		usageRatio: number;
+		warning: boolean;
+		taskCount: number;
+		eventCount: number;
+		checkpointCount: number;
+		evidenceCount: number;
+	} {
+		this.assertOpen();
+		const size = (path: string) => (existsSync(path) ? statSync(path).size : 0);
+		const count = (table: string) =>
+			(this.database.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count;
+		const databaseBytes = size(this.scope.databasePath);
+		const walBytes = size(`${this.scope.databasePath}-wal`);
+		const shmBytes = size(`${this.scope.databasePath}-shm`);
+		const usageRatio = (databaseBytes + walBytes) / MAX_DATABASE_BYTES;
+		return {
+			databaseBytes,
+			walBytes,
+			shmBytes,
+			maximumBytes: MAX_DATABASE_BYTES,
+			usageRatio,
+			warning: usageRatio >= 0.8,
+			taskCount: count("tasks"),
+			eventCount: count("task_events"),
+			checkpointCount: count("task_checkpoints"),
+			evidenceCount: count("task_evidence"),
+		};
 	}
 
 	get(taskId: string): TaskSnapshot | null {
@@ -775,7 +809,10 @@ function parseWorkspaceObservation(value: string): TaskCheckpoint["workspaceObse
 		return {
 			realRoot: typeof parsed.realRoot === "string" ? parsed.realRoot : "",
 			gitStatusEntries: Number.isSafeInteger(parsed.gitStatusEntries) ? (parsed.gitStatusEntries as number) : 0,
-			trackedFiles: Array.isArray(parsed.trackedFiles) ? parsed.trackedFiles : [],
+			trackedFiles: Array.isArray(parsed.trackedFiles)
+				? parsed.trackedFiles.map((item) => ({ ...item, exists: item?.exists !== false }))
+				: [],
+			observationLimited: parsed.observationLimited === true,
 			...(typeof parsed.gitHead === "string" ? { gitHead: parsed.gitHead } : {}),
 			...(typeof parsed.gitStatusDigest === "string" ? { gitStatusDigest: parsed.gitStatusDigest } : {}),
 		};

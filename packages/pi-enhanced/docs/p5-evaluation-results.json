@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-02T02:01:14.576Z",
+  "generatedAt": "2026-11-03T07:40:49.029Z",
   "classification": {
     "deterministicToolReplay": "run",
     "realModelCodingAgentTasks": "not_run",
@@ -30,7 +30,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 131.452
+      "durationMs": 91.834
     },
     {
       "taskId": "deterministic-mini-repo-2",
@@ -40,7 +40,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 118.723
+      "durationMs": 115.297
     },
     {
       "taskId": "deterministic-mini-repo-3",
@@ -50,7 +50,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 94.989
+      "durationMs": 115.471
     },
     {
       "taskId": "deterministic-mini-repo-4",
@@ -60,7 +60,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 83.236
+      "durationMs": 117.815
     },
     {
       "taskId": "deterministic-mini-repo-5",
@@ -70,7 +70,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 115.423
+      "durationMs": 105.926
     },
     {
       "taskId": "deterministic-mini-repo-6",
@@ -80,7 +80,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 93.735
+      "durationMs": 117.788
     },
     {
       "taskId": "deterministic-mini-repo-7",
@@ -90,7 +90,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 82.18
+      "durationMs": 112.931
     },
     {
       "taskId": "deterministic-mini-repo-8",
@@ -100,7 +100,7 @@
       "patchValid": true,
       "testPassed": true,
       "status": "passed",
-      "durationMs": 88.251
+      "durationMs": 116.932
     }
   ]
 }

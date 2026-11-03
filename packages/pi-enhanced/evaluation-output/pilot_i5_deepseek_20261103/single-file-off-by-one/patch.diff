@@ -1,0 +1,7 @@
+diff --git a/math.js b/math.js
+index 6e59a8a..e4cc814 100644
+--- a/math.js
++++ b/math.js
+@@ -1 +1 @@
+-export const sumTo = n => n * (n - 1) / 2;
++export const sumTo = n => n * (n + 1) / 2;

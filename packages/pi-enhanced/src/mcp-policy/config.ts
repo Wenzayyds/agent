@@ -4,7 +4,7 @@ import type { PolicyAction, PolicyRule, PolicyRuleSource } from "./policy.ts";
 
 const DEFAULT_AUDIT_CAPACITY = 200;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 30_000;
-const MODULE_FIELDS = new Set(["enabled", "defaultAction", "rules", "audit", "approvalTimeoutMs"]);
+const MODULE_FIELDS = new Set(["enabled", "defaultAction", "rules", "audit", "approvalTimeoutMs", "nativeToolGuard"]);
 const RULE_FIELDS = new Set(["id", "action", "server", "tool", "toolPattern", "priority"]);
 
 export interface McpPolicyAuditConfig {
@@ -18,6 +18,15 @@ export interface McpPolicyConfig {
 	rules: readonly PolicyRule[];
 	audit: McpPolicyAuditConfig;
 	approvalTimeoutMs: number;
+	nativeToolGuard: NativeToolGuardConfig;
+}
+
+export interface NativeToolGuardConfig {
+	enabled: boolean;
+	approvalTimeoutMs: number;
+	maxRecent: number;
+	protectProjectMetadata: boolean;
+	workspaceMutationAction: "ask" | "allow";
 }
 
 export interface LoadedMcpPolicyConfig {
@@ -34,6 +43,7 @@ interface PolicyLayer {
 	auditEnabled?: boolean;
 	auditMaxRecent?: number;
 	approvalTimeoutMs?: number;
+	nativeToolGuard?: Partial<NativeToolGuardConfig>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -175,6 +185,58 @@ function parseLayer(path: string, source: PolicyRuleSource, errors: string[]): P
 			layer.approvalTimeoutMs = Number(module.approvalTimeoutMs);
 		} else errors.push(`${path}: mcp-policy.approvalTimeoutMs must be an integer between 1000 and 300000`);
 	}
+	if (module.nativeToolGuard !== undefined) {
+		if (!isRecord(module.nativeToolGuard)) errors.push(`${path}: mcp-policy.nativeToolGuard must be an object`);
+		else {
+			const allowed = new Set([
+				"enabled",
+				"approvalTimeoutMs",
+				"maxRecent",
+				"protectProjectMetadata",
+				"workspaceMutationAction",
+			]);
+			for (const field of Object.keys(module.nativeToolGuard)) {
+				if (!allowed.has(field)) errors.push(`${path}: unknown nativeToolGuard field "${field}"`);
+			}
+			const guard: Partial<NativeToolGuardConfig> = {};
+			if (module.nativeToolGuard.enabled !== undefined) {
+				if (typeof module.nativeToolGuard.enabled === "boolean") guard.enabled = module.nativeToolGuard.enabled;
+				else errors.push(`${path}: nativeToolGuard.enabled must be boolean`);
+			}
+			if (module.nativeToolGuard.protectProjectMetadata !== undefined) {
+				if (typeof module.nativeToolGuard.protectProjectMetadata === "boolean")
+					guard.protectProjectMetadata = module.nativeToolGuard.protectProjectMetadata;
+				else errors.push(`${path}: nativeToolGuard.protectProjectMetadata must be boolean`);
+			}
+			if (module.nativeToolGuard.workspaceMutationAction !== undefined) {
+				if (
+					module.nativeToolGuard.workspaceMutationAction === "ask" ||
+					module.nativeToolGuard.workspaceMutationAction === "allow"
+				)
+					guard.workspaceMutationAction = module.nativeToolGuard.workspaceMutationAction;
+				else errors.push(`${path}: nativeToolGuard.workspaceMutationAction must be ask or allow`);
+			}
+			if (module.nativeToolGuard.approvalTimeoutMs !== undefined) {
+				if (
+					Number.isInteger(module.nativeToolGuard.approvalTimeoutMs) &&
+					Number(module.nativeToolGuard.approvalTimeoutMs) >= 1_000 &&
+					Number(module.nativeToolGuard.approvalTimeoutMs) <= 300_000
+				)
+					guard.approvalTimeoutMs = Number(module.nativeToolGuard.approvalTimeoutMs);
+				else errors.push(`${path}: nativeToolGuard.approvalTimeoutMs must be an integer between 1000 and 300000`);
+			}
+			if (module.nativeToolGuard.maxRecent !== undefined) {
+				if (
+					Number.isInteger(module.nativeToolGuard.maxRecent) &&
+					Number(module.nativeToolGuard.maxRecent) >= 1 &&
+					Number(module.nativeToolGuard.maxRecent) <= 10_000
+				)
+					guard.maxRecent = Number(module.nativeToolGuard.maxRecent);
+				else errors.push(`${path}: nativeToolGuard.maxRecent must be an integer between 1 and 10000`);
+			}
+			layer.nativeToolGuard = guard;
+		}
+	}
 	return layer;
 }
 
@@ -190,6 +252,8 @@ export function loadMcpPolicyConfig(options: {
 	const user = parseLayer(paths.global, "user", errors);
 	if (existsSync(paths.global)) sources.push(paths.global);
 	const project = paths.project ? parseLayer(paths.project, "project", errors) : undefined;
+	if (project?.nativeToolGuard?.workspaceMutationAction === "allow")
+		errors.push("project mcp-policy cannot enable nativeToolGuard.workspaceMutationAction=allow");
 	if (paths.project && existsSync(paths.project)) sources.push(paths.project);
 
 	const rules = [...(user?.rules ?? []), ...(project?.rules ?? [])];
@@ -208,6 +272,17 @@ export function loadMcpPolicyConfig(options: {
 				maxRecent: user?.auditMaxRecent ?? project?.auditMaxRecent ?? DEFAULT_AUDIT_CAPACITY,
 			},
 			approvalTimeoutMs: user?.approvalTimeoutMs ?? project?.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
+			nativeToolGuard: {
+				enabled: Boolean(user?.nativeToolGuard?.enabled || project?.nativeToolGuard?.enabled),
+				approvalTimeoutMs:
+					user?.nativeToolGuard?.approvalTimeoutMs ??
+					project?.nativeToolGuard?.approvalTimeoutMs ??
+					DEFAULT_APPROVAL_TIMEOUT_MS,
+				maxRecent:
+					user?.nativeToolGuard?.maxRecent ?? project?.nativeToolGuard?.maxRecent ?? DEFAULT_AUDIT_CAPACITY,
+				protectProjectMetadata: user?.nativeToolGuard?.protectProjectMetadata !== false,
+				workspaceMutationAction: user?.nativeToolGuard?.workspaceMutationAction === "allow" ? "allow" : "ask",
+			},
 		},
 		sources,
 		errors,

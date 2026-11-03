@@ -163,6 +163,16 @@ describe("P3 Context configuration", () => {
 });
 
 describe("layered MCP policy configuration", () => {
+	it("allows only user-level opt-in for automated workspace mutations", () => {
+		const root = tempDir(); const agentDir = join(root, "agent"); const project = join(root, "project");
+		writeJson(join(agentDir, ENHANCED_CONFIG_FILE), { modules: { "mcp-policy": { enabled: false, nativeToolGuard: { enabled: true, workspaceMutationAction: "allow" } } } });
+		expect(loadMcpPolicyConfig({ agentDir, cwd: project, projectTrusted: true }).config.nativeToolGuard.workspaceMutationAction).toBe("allow");
+		writeJson(join(project, ".pi", ENHANCED_CONFIG_FILE), { modules: { "mcp-policy": { enabled: false, nativeToolGuard: { enabled: true, workspaceMutationAction: "allow" } } } });
+		const loaded = loadMcpPolicyConfig({ agentDir: join(root, "other-agent"), cwd: project, projectTrusted: true });
+		expect(loaded.failClosed).toBe(true);
+		expect(loaded.config.nativeToolGuard.workspaceMutationAction).toBe("ask");
+	});
+
 	it("does not let a trusted project disable user policy or override an explicit user deny", () => {
 		const root = tempDir();
 		const agentDir = join(root, "agent");

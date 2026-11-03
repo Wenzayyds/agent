@@ -130,7 +130,8 @@ export interface WorkspaceObservation {
 	gitHead?: string;
 	gitStatusDigest?: string;
 	gitStatusEntries: number;
-	trackedFiles: readonly { relativePath: string; size: number; mtimeMs: number; sha256?: string }[];
+	trackedFiles: readonly { relativePath: string; exists: boolean; size: number; mtimeMs: number; sha256?: string }[];
+	observationLimited: boolean;
 }
 
 export interface TaskCheckpoint {

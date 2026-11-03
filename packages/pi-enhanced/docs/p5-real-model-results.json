@@ -1,0 +1,265 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-03T07:33:12.496Z",
+  "evaluationClass": "real_model_coding_agent_task",
+  "runId": "pilot_i5_deepseek_20261103",
+  "variant": "baseline",
+  "condition": "cold",
+  "model": {
+    "provider": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "authorization": "explicit",
+  "sandbox": {
+    "mode": "docker-file-tools",
+    "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+    "tools": [
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "write",
+      "edit"
+    ],
+    "network": "none",
+    "failClosed": true
+  },
+  "limits": {
+    "maxTotalCostUsd": 0.03,
+    "maxTasks": 1,
+    "maxTokensPerTask": 20000,
+    "maxCallsPerTask": 8,
+    "timeoutMs": 180000,
+    "concurrency": 1,
+    "budgetEnforcement": "local_hard_gateway"
+  },
+  "summary": {
+    "total": 1,
+    "run": 1,
+    "passed": 0,
+    "notRun": 0,
+    "observedCostUsd": 0.0023832
+  },
+  "results": [
+    {
+      "taskId": "single-file-off-by-one",
+      "category": "single_file",
+      "experimentClass": "real_model_coding_agent_task",
+      "repositoryCommit": "37a5f370a1edbcb7a5206ba6619eb1cec5712df9",
+      "status": "budget_exceeded",
+      "verifierPassed": true,
+      "hiddenTestExitCode": 0,
+      "agentExitCode": 0,
+      "timedOut": false,
+      "usage": {
+        "calls": 3,
+        "tokens": 6873,
+        "costUsd": 0.0023832
+      },
+      "agentReportedUsage": {
+        "calls": 221,
+        "tokens": 36482,
+        "costUsd": 0.005879771999999999
+      },
+      "gateway": {
+        "state": "ready",
+        "requestsStarted": 3,
+        "requestsCompleted": 3,
+        "requestsRejected": 4,
+        "requestAttempts": 7,
+        "actualInputTokens": 6516,
+        "actualOutputTokens": 357,
+        "actualTotalTokens": 6873,
+        "actualCostUsd": 0.0023832,
+        "committedTokenUpperBound": 6873,
+        "committedCostUpperBoundUsd": 0.0023832,
+        "lastError": null,
+        "denials": [
+          {
+            "runId": "pilot_i5_deepseek_20261103",
+            "requestSequence": 4,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6873,
+            "committedTokenUpperBound": 6873,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023832,
+            "committedCostUpperBoundUsd": 0.0023832,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "pilot_i5_deepseek_20261103",
+            "requestSequence": 5,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6873,
+            "committedTokenUpperBound": 6873,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023832,
+            "committedCostUpperBoundUsd": 0.0023832,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "pilot_i5_deepseek_20261103",
+            "requestSequence": 6,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6873,
+            "committedTokenUpperBound": 6873,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023832,
+            "committedCostUpperBoundUsd": 0.0023832,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "pilot_i5_deepseek_20261103",
+            "requestSequence": 7,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6873,
+            "committedTokenUpperBound": 6873,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023832,
+            "committedCostUpperBoundUsd": 0.0023832,
+            "reservedCostUsd": 0
+          }
+        ]
+      },
+      "sandboxAudit": {
+        "schemaVersion": 1,
+        "runId": "pilot_i5_deepseek_20261103-single-file-off-by-one",
+        "workspaceSha256": "12e764f85f24e887ac7da8e66c7be00f7f1d26884ba879e524dde29e4ee011c3",
+        "evidence": {
+          "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+          "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+          "network": "none",
+          "readOnlyRoot": true,
+          "user": "1000:1000",
+          "mounts": [
+            {
+              "destination": "/workspace",
+              "readWrite": true
+            }
+          ]
+        },
+        "audit": [
+          {
+            "requestId": "call_01_ET_ZDY9Bdg71NaNR6Ufr5Nf3066:exists",
+            "toolName": "find",
+            "operation": "exists",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 466.387
+          },
+          {
+            "requestId": "call_00_ET_DGw5MJSYluHqQzW9BnfN1348:exists:0",
+            "toolName": "ls",
+            "operation": "exists",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 489.101
+          },
+          {
+            "requestId": "call_00_ET_DGw5MJSYluHqQzW9BnfN1348:stat:1",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 298.226
+          },
+          {
+            "requestId": "call_01_ET_ZDY9Bdg71NaNR6Ufr5Nf3066:glob",
+            "toolName": "find",
+            "operation": "glob",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 392.072
+          },
+          {
+            "requestId": "call_00_ET_DGw5MJSYluHqQzW9BnfN1348:readdir:2",
+            "toolName": "ls",
+            "operation": "readdir",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 203.221
+          },
+          {
+            "requestId": "call_00_ET_DGw5MJSYluHqQzW9BnfN1348:stat:3",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 175.442
+          },
+          {
+            "requestId": "call_00_ET_DGw5MJSYluHqQzW9BnfN1348:stat:4",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 203.873
+          },
+          {
+            "requestId": "call_01_ET_8AjSnH0QoYULeFUXhcrc7979:read",
+            "toolName": "read",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 338.489
+          },
+          {
+            "requestId": "call_00_ET_eKFh9GrRYTynTUUWSdoF2168:read",
+            "toolName": "read",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 354.107
+          },
+          {
+            "requestId": "call_00_sLVR56er7zVkffrSn6Le3809:access",
+            "toolName": "edit",
+            "operation": "access",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 164.491
+          },
+          {
+            "requestId": "call_00_sLVR56er7zVkffrSn6Le3809:read",
+            "toolName": "edit",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 191.011
+          },
+          {
+            "requestId": "call_00_sLVR56er7zVkffrSn6Le3809:write",
+            "toolName": "edit",
+            "operation": "write_file",
+            "status": "ok",
+            "containerId": "1643c7f1991c08aa8ea7d86c0d591d994027190c12a2985f0613e0b7fb023e02",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 280.059
+          }
+        ]
+      },
+      "costClass": "gateway_measured",
+      "patchSha256": "5fa0153b3fef99b46b88d914995710c3b2d57a70be13315c2abb8bd37c50bdd0",
+      "durationMs": 21257.634
+    }
+  ]
+}

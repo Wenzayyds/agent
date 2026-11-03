@@ -46,7 +46,7 @@ describe("P4 real process interruption recovery", () => {
 		child.kill();
 		await new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
 
-		const config: TaskManagerConfig = { enabled: true, modelPlanTool: false, contextSummary: false, maximumTasks: 20, maximumSteps: 20, maximumEvents: 1_000 };
+		const config: TaskManagerConfig = { enabled: true, modelPlanTool: false, contextSummary: false, maximumTasks: 20, maximumSteps: 20, maximumEvents: 1_000, controlledFiles: [] };
 		const scope = createProjectScope({ cwd: project, agentDir });
 		const runtime = TaskRuntime.start({ config, trusted: true, scope, agentDir });
 		if (!runtime.service) throw new Error(runtime.error ?? "runtime did not reopen");

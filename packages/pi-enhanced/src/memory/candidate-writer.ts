@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ProjectScope } from "./contracts.ts";
@@ -39,7 +39,8 @@ export function registerMemoryCandidateWriterBroker(
 			respond(events, request, { error: "MEMORY_RUNTIME_UNAVAILABLE" });
 			return;
 		}
-		const key = `${request.sessionId}\0${request.taskId}\0${request.content}`;
+		const contentDigest = createHash("sha256").update(request.content).digest("hex");
+		const key = `${binding.scope.projectId}\0${request.taskId}\0${contentDigest}`;
 		const prior = seen.get(key);
 		if (prior) {
 			respond(events, request, { result: prior });
@@ -49,7 +50,7 @@ export function registerMemoryCandidateWriterBroker(
 			const record = await binding.service.saveCandidate({
 				kind: "experience",
 				content: request.content,
-				source: { type: "user", ref: `task:${request.taskId}` },
+				source: { type: "user", ref: `task:${request.taskId}:experience:${contentDigest}` },
 				metadata: { category: "procedure", tags: ["task-experience"] },
 			});
 			const result = { id: record.id, status: "candidate" as const, revision: record.revision };

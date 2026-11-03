@@ -1,18 +1,22 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { RecoveryPreflight, TaskCheckpoint, TaskSnapshot, WorkspaceObservation } from "./contracts.ts";
 import { TaskError } from "./errors.ts";
 import type { TaskProvider } from "./provider.ts";
 
-export function workspaceFingerprint(rootPath: string): string {
+const MAX_FILES = 100;
+const MAX_FILE_BYTES = 256 * 1024;
+const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+
+export function workspaceFingerprint(rootPath: string, controlledFiles: readonly string[] = []): string {
 	return createHash("sha256")
-		.update(JSON.stringify(observeWorkspace(rootPath)))
+		.update(JSON.stringify(observeWorkspace(rootPath, controlledFiles)))
 		.digest("hex");
 }
 
-export function observeWorkspace(rootPath: string): WorkspaceObservation {
+export function observeWorkspace(rootPath: string, controlledFiles: readonly string[] = []): WorkspaceObservation {
 	const realRoot = realpathSync.native(rootPath);
 	let gitHead: string | undefined;
 	let gitStatusDigest: string | undefined;
@@ -35,27 +39,73 @@ export function observeWorkspace(rootPath: string): WorkspaceObservation {
 		gitStatusEntries = status ? status.split(/\r?\n/u).length : 0;
 		gitStatusDigest = createHash("sha256").update(status).digest("hex");
 	} catch {}
+	const candidates = new Set<string>([join(".git", "HEAD"), "package.json", "pyproject.toml", ...controlledFiles]);
+	try {
+		const changed = execFileSync("git", ["diff", "--name-only", "HEAD", "--"], {
+			cwd: realRoot,
+			encoding: "utf8",
+			timeout: 1_500,
+			windowsHide: true,
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		for (const item of changed ? changed.split(/\r?\n/u) : []) candidates.add(item);
+	} catch {}
 	const trackedFiles: Array<WorkspaceObservation["trackedFiles"][number]> = [];
-	for (const relative of [join(".git", "HEAD"), "package.json", "pyproject.toml"]) {
-		const path = join(realRoot, relative);
-		if (!existsSync(path)) continue;
+	let totalBytes = 0;
+	let observationLimited = candidates.size > MAX_FILES;
+	for (const requested of [...candidates].sort().slice(0, MAX_FILES)) {
+		const normalized = requested.replaceAll("\\", "/");
+		if (!normalized || isAbsolute(normalized) || normalized.split("/").includes("..")) {
+			observationLimited = true;
+			continue;
+		}
+		const path = resolve(realRoot, normalized);
+		if (!inside(realRoot, path) || !inside(realRoot, nearestExisting(path))) {
+			observationLimited = true;
+			continue;
+		}
+		if (!existsSync(path)) {
+			trackedFiles.push({ relativePath: normalized, exists: false, size: 0, mtimeMs: 0 });
+			continue;
+		}
 		const stat = statSync(path);
+		if (!stat.isFile()) {
+			observationLimited = true;
+			continue;
+		}
+		totalBytes += stat.size;
+		const hashable = stat.size <= MAX_FILE_BYTES && totalBytes <= MAX_TOTAL_BYTES;
+		if (!hashable) observationLimited = true;
 		trackedFiles.push({
-			relativePath: relative.replaceAll("\\", "/"),
+			relativePath: normalized,
+			exists: true,
 			size: stat.size,
 			mtimeMs: Math.trunc(stat.mtimeMs),
-			...(stat.isFile() && stat.size <= 64 * 1024
-				? { sha256: createHash("sha256").update(readFileSync(path)).digest("hex") }
-				: {}),
+			...(hashable ? { sha256: createHash("sha256").update(readFileSync(path)).digest("hex") } : {}),
 		});
 	}
 	return {
 		realRoot,
 		gitStatusEntries,
 		trackedFiles,
+		observationLimited,
 		...(gitHead ? { gitHead } : {}),
 		...(gitStatusDigest ? { gitStatusDigest } : {}),
 	};
+}
+
+function inside(root: string, candidate: string): boolean {
+	const path = relative(root, candidate);
+	return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+function nearestExisting(path: string): string {
+	let current = path;
+	while (!existsSync(current)) {
+		const parent = dirname(current);
+		if (parent === current) return current;
+		current = parent;
+	}
+	return realpathSync.native(current);
 }
 
 export function createCheckpoint(
@@ -63,8 +113,9 @@ export function createCheckpoint(
 	snapshot: TaskSnapshot,
 	sessionId: string,
 	branchLeafId: string | null,
+	controlledFiles: readonly string[] = [],
 ): TaskCheckpoint {
-	const workspaceObservation = observeWorkspace(provider.scope.rootPath);
+	const workspaceObservation = observeWorkspace(provider.scope.rootPath, controlledFiles);
 	const value: TaskCheckpoint = {
 		checkpointId: randomUUID(),
 		taskId: snapshot.task.taskId,
@@ -88,6 +139,7 @@ export function recoveryPreflight(
 	taskId: string,
 	sessionId: string,
 	branchLeafId: string | null,
+	controlledFiles: readonly string[] = [],
 ): RecoveryPreflight {
 	const snapshot = provider.get(taskId);
 	if (!snapshot) throw new TaskError("TASK_NOT_FOUND", "Task does not exist in the current project");
@@ -98,7 +150,7 @@ export function recoveryPreflight(
 			.filter((attempt) => attempt.state === "needs_reconciliation" || attempt.state === "started")
 			.map(({ stepId }) => stepId),
 	);
-	const currentWorkspace = observeWorkspace(provider.scope.rootPath);
+	const currentWorkspace = observeWorkspace(provider.scope.rootPath, controlledFiles);
 	const currentFingerprint = createHash("sha256").update(JSON.stringify(currentWorkspace)).digest("hex");
 	const workspaceChanged = checkpoint ? checkpoint.workspaceFingerprint !== currentFingerprint : true;
 	const driftReasons: string[] = [];
@@ -109,6 +161,10 @@ export function recoveryPreflight(
 		if (checkpoint.workspaceObservation.gitHead !== currentWorkspace.gitHead) driftReasons.push("git-head-changed");
 		if (checkpoint.workspaceObservation.gitStatusDigest !== currentWorkspace.gitStatusDigest)
 			driftReasons.push("git-worktree-changed");
+		if (
+			JSON.stringify(checkpoint.workspaceObservation.trackedFiles) !== JSON.stringify(currentWorkspace.trackedFiles)
+		)
+			driftReasons.push("controlled-files-changed");
 		if (checkpoint.planRevision !== snapshot.task.planRevision) driftReasons.push("plan-revision-changed");
 		if (checkpoint.taskRevision !== snapshot.task.revision) driftReasons.push("task-revision-changed");
 	}

@@ -1,3 +1,4 @@
+import { redactMemoryOutput } from "../memory/output-safety.ts";
 import type { ContextMessage } from "./contracts.ts";
 
 const TRUNCATION_MARKER = "[pi-enhanced context view: tool output truncated";
@@ -28,8 +29,10 @@ export function truncatePairedToolOutputs(
 		) {
 			return message;
 		}
-		const text = message.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
-		if (text.length <= maximumTextCharacters || text.includes(TRUNCATION_MARKER)) return message;
+		const originalText = message.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
+		const text = redactMemoryOutput(originalText);
+		if (text.length <= maximumTextCharacters || text.includes(TRUNCATION_MARKER))
+			return text === originalText ? message : { ...message, content: [{ type: "text", text }] };
 		const marker = `\n\n${TRUNCATION_MARKER}; toolCallId=${message.toolCallId}; removed=${text.length - maximumTextCharacters} characters; original remains in Session]\n\n`;
 		const available = Math.max(0, maximumTextCharacters - marker.length);
 		const head = Math.ceil(available * 0.7);

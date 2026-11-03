@@ -247,3 +247,85 @@
 - P5 新增 8 个本地 mini Git 仓库的确定性工具回放。实测 8/8 只证明评测链路正常；真实模型 coding task 与官方 SWE-bench 明确为 not_run。
 - 最终完整回归为 TypeScript 26 文件 127/127、Python 14/14；TypeScript check、Biome、pack dry-run 和实际安装包 E2E 通过。Windows 沙箱禁止硬链接，完整 TS 回归在获准的沙箱外测试进程完成。
 - 交付文档：`batch-d-baseline-audit.md`、`batch-d-test-manifest-final.json`、`p3-task-compat-verification.md`、`p4-hardening-verification.md`、`p5-evaluation-design.md`、`p5-evaluation-results.json`、`batch-d-verification.md`。本批完成后停止，不继续开发新的执行引擎或 P6。
+
+## 2026-11-02：Batch E，落地能力补齐
+
+- 原生工具守卫接入 Pi 的执行前 `tool_call`：工作区读、写路径、`.git/.pi`、目录穿越和 junction 逃逸受控；write/edit 默认逐次确认，Shell 无 UI 时拒绝。它不是操作系统全局沙箱。
+- 新增五类真实 Pi 模型任务 harness 和独立验证器；本轮没有授权模型、Key 或费用预算，5/5 均标记 `not_run`，费用 0，没有把 dry-run 当成功率。
+- P4 新增恢复列表、显式确认后的重新绑定、受控文件哈希、容量诊断；Task→Memory 来源使用内容摘要，跨 MemoryService 重启保持 candidate ID 幂等，不会写 verified。
+- Memory/Task 新增 SQLite online backup、manifest 完整性检查和停机恢复；恢复测试只使用临时项目。Task 256 MiB 上限在 80% 预警，不自动删除审计历史。
+- 20 条人工非私密记录、8 个标注查询实测：FTS5 Recall@5 0.125，LSA/Hybrid 0.75；样本很小且 LSA 不是预训练 Embedding。
+- 已添加 Windows/Linux 普通 CI 和显式审批的真实模型独立 workflow；本机 Docker Engine 未运行，Linux/CI/真实模型均不冒充已执行。
+- 最终测试与打包结果以 `packages/pi-enhanced/docs/batch-e-verification.md` 和 `batch-e-test-manifest.json` 为准。
+
+## 2026-11-02：Batch F，受控试用准备与 RC Gate
+
+- 保留 Batch E 全部未提交修改，没有 reset/clean/切分支；HEAD 仍为 `d98a80e...`，固定 Pi Commit 仍是祖先。
+- Docker Desktop 4.55.0 / Linux Engine 29.1.3 实际可用。固定本地 `node:20-alpine` 镜像 ID 完成无网、只读根、cap-drop、no-new-privileges、CPU/内存/PID 限制的真实 smoke；宿主哨兵 hash 不变。该 smoke 尚未与真实 Pi 工具执行链集成。
+- 原有 real-agent runner 增加 runId、provider/model、Key 环境变量名、费用、任务、Token、调用、超时、并发和输出目录闸门。固定 Pi CLI 缺少原生硬预算参数，因此执行还必须由外部预算网关确认；preflight 不读 Key、不发请求。
+- 真实模型调用 0、费用 0；五任务、十格消融、官方 SWE-bench 均为 not_run，没有把 dry-run 或确定性 8/8 写成模型成功率。
+- 新增恶意 Memory/Task/tool-output 离线夹具；修复 text-only 工具输出在请求视图中未先脱敏的缺口，原始 Session 不改写。真实模型提示注入行为仍未测试。
+- 最终 TypeScript 144 个身份：142 passed、0 failed、2 conditional skip，Batch E 137 个身份无缺失；Python 14/14；Serena Docker E2E 另行真实通过。
+- 普通 CI 增加最小权限、版本输出、pack 泄漏扫描和 Docker job；远端 Windows/Linux 尚未实际运行。RC Gate 为 NO-GO，不打 Tag、不推送、不发布。
+
+## 2026-11-02：Batch G，真实 Docker 文件工具执行闭环
+
+- 完整读取 `PI_ENHANCED_BATCH_G_ISOLATED_TOOLS_REAL_MODEL_PILOT_CODEX.md`，保留已有脏工作树，没有 reset/clean、切分支、push、workflow_dispatch、Tag 或发布。
+- 固定 Pi Commit 的 Extension 同名覆盖、`tool_call/tool_result`、CLI allowlist 和六文件工具接口已核对；相关 Pi Core 文件在固定祖先与当前 HEAD 间无差异，本轮没有修改 Pi Core。
+- 新增默认关闭的第五个 `sandbox` Extension。启用时要求 trusted、系统临时工作区、runId 和固定镜像；read/grep/find/ls/write/edit 全部同名替换，Shell、PowerShell、codemode、tool_search、MCP 和未知工具拒绝。
+- Broker 使用 Docker CLI 创建无网、只读根、非 root、cap-drop、no-new-privileges、资源受限容器，只挂 `/workspace`。固定 Worker 通过 JSON stdin 接收结构化操作，不执行模型拼接命令；协议绑定 runId/requestId/toolName，路径和大小双重检查。
+- 发现原生 read 会在 operations 前使用宿主 access 探测文件，原生 grep 即使注入 operations 仍会启动宿主 rg，因此两者只复用公开 schema/renderer，执行体改为容器 Worker。edit 继续复用原生精确替换和 diff，但文件读取/写入只经过容器。
+- 真实 Pi AgentSession E2E 覆盖六工具、中文/空格/CRLF、并行 read、串行 write/edit、路径逃逸、Windows drive/UNC、`.git`、junction、二进制、超大文件、重复请求、取消、容器退出、缺失镜像、无网、只读根和守卫先阻断；实际 pack/install 后加载沙箱入口也通过。专项 9/9，容器残留 0。
+- real-agent 继续复用原 runner，已接入 Sandbox Extension 和固定镜像 gate；preflight 无 Key 成功，未授权 execute 返回 `EVAL_GATE_UNAUTHORIZED`，dry-run 5 个 fixture 全部 not_run。真实模型调用 0、费用 0。
+- 普通 CI 增加身份清单和环境元数据，Docker job 跑真实 AgentSession E2E；付费 workflow 在 execute 前跑 sandbox 和 preflight。未获远端授权，状态仍 configured_only。
+- 全量 TypeScript 最终清单为 155 个身份、153 passed、0 failed、2 conditional skipped，Batch F 144 个身份缺失 0；Python 14/14、确定性回放 8/8、offline build 和只读根检查通过。最终 pack 数字以 `batch-g-verification.md` 为准。
+- G-ENG、G-SBX、G-SBX-INTEGRATED 和离线 G-SEC 通过；G-MODEL not_run、G-CI configured_only，G-RC 继续 NO-GO。本批完成后停止，不进入付费试用或消融。
+
+## 2026-11-02：项目内本地模型密钥配置
+
+- 根目录已有 `.env` 忽略规则；新增 `.env.example`，本机 `.env` 仅保留 `DEEPSEEK_API_KEY=` 占位，不记录真实密钥。
+- real-agent runner 只在显式 `--execute` 时加载仓库根目录 `.env`；dry-run 和 `--preflight` 仍不读取密钥，保存密钥不会自动开启付费评测。
+- TypeScript check 通过；真实模型 Policy 单测 4/4 通过；DeepSeek preflight 仍显示未授权且未调用模型。
+
+## 2026-11-02：Batch G NO-GO 续验
+
+- 用户明确授权后续 DeepSeek API 调用；项目 `.env` 中的 `DEEPSEEK_API_KEY` 通过官方 `/models` 非推理鉴权，HTTP 200，可用模型为 `deepseek-flash`、`deepseek-v4-pro`，未输出密钥。
+- 新的 PILOT-G1 preflight 固定为 `deepseek/deepseek-flash`、1 个任务、20,000 Token、8 次调用、0.10 美元、180 秒和固定 Docker 镜像；preflight 通过。
+- 项目没有已核实的外部费用硬限制网关，runner 参数只能事后检查，不能伪装成硬限制。因此 G-MODEL 从 `not_run` 更新为 `blocked_budget_gateway`，推理调用仍为 0、费用 0。
+- `.env` 继续由 Git 忽略；pack 泄漏检查通过：139 entries、163758 bytes、forbidden 0、contentLeaks 0。远端 CI 仍没有 Run URL，且本机没有 `gh`，G-CI 保持 configured_only，G-RC 保持 NO-GO。
+
+## 2026-11-03：Batch H 预算网关与首次试用准备
+
+- H0 确认 DeepSeek 请求由内置 `deepseekProvider` 经 `openai-completions` Adapter 发出，`models.json` 可以覆盖内置 baseUrl 与认证；没有修改 Pi Core。
+- H1 新增回环硬预算网关：请求次数、保守输入 Token 上界、输出 `max_tokens`、总 Token、总费用、单并发、请求大小和超时均在转发前检查；usage 缺失、上游错误或超过预留时失败关闭。
+- 真实 Key 只由 runner 网关持有。临时 Pi 子进程只收到一次性网关 Token，并移除 DeepSeek/OpenAI/Anthropic Key，设置 `PI_OFFLINE=1`。
+- 模拟 Provider、Policy 和凭据隔离专项 10/10 通过；真实 Pi + 网关 + Docker 联合 E2E 1/1 通过，3 次模型回合全部经过网关，write/read 进入 Docker，模拟 usage 为 570 Token。
+- H3 preflight 通过后，用户明确授权把固定合成 JavaScript 任务及 Docker 工具输出发给 DeepSeek，限 8 次调用、20,000 Token、0.10 美元、180 秒。真实试用执行了 3 次调用，输入 6444、输出 222、合计 6666 Token，网关实测费用 0.0021996 美元；随后 4 个请求被网关拒绝。
+- H3 的 Sandbox Extension 因 runner 临时目录传递错误报 `SANDBOX_WORKSPACE_NOT_TEMPORARY`，没有执行文件工具，没有生成补丁，独立验证失败。本次授权已经消耗，没有自动重试。runner 随后改为以任务根目录作为 TEMP，并以网关 usage 作为权威调用量和费用来源；旧 stdout 统计仅留作追踪。
+- H2 复测时发现根目录文件写入会先请求创建 `.`，Worker 原先将其误判为非法路径；现仅对 mkdir 允许工作区根 `.`，其他路径规则不变。真实 Pi + 模拟 Provider + 网关 + Docker 联合 E2E 再次通过，write/read 都进入容器。
+- CI 已加入网关专项和联合 E2E，付费 workflow 改用 `local_hard_gateway`。远端 CI 未运行、H3 失败、未获发布批准，因此 Batch H 仍 NO-GO。
+- 完整回归：TypeScript 162 个身份中 160 passed、0 failed、2 skipped，Batch G 155 身份缺失 0；Python 14/14；确定性回放 8/8；TypeScript check、offline build、pack 泄漏检查通过。pack 为 149 entries、175601 bytes、forbidden 0、contentLeaks 0。
+
+## 2026-11-03：Batch I 真实 Runner 修复与离线 RC 复核
+
+- 完整读取 Batch I 任务书和 Prompt；没有调用 DeepSeek、读取 `.env`、push、触发 Workflow、Tag 或发布。
+- H3 根因已用代码与离线测试证实：旧 Runner 将 Pi 子进程 `TEMP/TMP` 设为 `<runRoot>/temp`，fixture 位于同级 `<runRoot>/<task>`，Sandbox 的 `relative(os.tmpdir(), workspace)` 因 `..` 拒绝。H2 未走生产 Runner，因此漏测。
+- Runner 现在显式传递 `PI_ENHANCED_SANDBOX_RUN_ROOT`，与子进程 `TEMP/TMP` 使用同一受控根。Sandbox 要求 workspace 为该根的严格子目录并等于真实 cwd，记录设备号/文件编号；Broker 启动和每次请求前复核目录身份。
+- Runner 在启动预算网关前先以相同配置完成 Docker 预检。缺失镜像 E2E 证明 Stub Provider 收到 0 次请求；没有宿主文件工具回退。
+- 新增生产 `run-real-agent.ts` 本地 Stub 模式，只接受显式环境门禁和 `127.0.0.1`，不读取 `.env`、不覆盖真实模型报告。完整 Stub→网关→Pi CLI→Docker→Patch→隐藏验证器通过，补丁 hash `5fa0153b...bdd0`，外部哨兵不变，容器残留 0。
+- Sandbox 审计只能写到 runRoot 直属位置且不能进入模型工作区；记录路径 hash、容器策略和工具元数据，不记录正文或凭据。
+- 网关新增 `requestAttempts` 和有界 `denials`，记录稳定拒绝码、请求序号、未转发标志及预算快照。H3 旧产物没有逐次原因，只能标记 `historical_reason_unknown`；未将其猜测为 Token 或费用耗尽。
+- TypeScript 最终清单为 166 个身份：164 passed、0 failed、2 条件跳过，Batch H 162 个身份缺失 0；Python 14/14；P5 确定性回放 8/8；离线构建 82 files/9.0 MiB；最终 pack 122 entries/165939 bytes、forbidden 0、contentLeaks 0。
+- 最终核对时共享工作树中的旧报告发生并发变化：11 个已跟踪 Batch D/P3/P4/P5 文档显示删除，已从当前 HEAD 原样恢复；此前未跟踪的 Batch E～G 等报告没有 Git 或其它本地副本，未伪造重建。发布前需从外部备份恢复或重新审计这些历史报告。
+- I0～I4 本地工程验收通过；I5 无新付费授权为 `not_run`，远端 CI 为 `configured_only`，发布结论 `engineering_passed / model_not_run / release_no_go`。
+
+## 2026-11-03：Batch I 单次真实 DeepSeek 试跑与提交准备
+
+- 用户授权且仅执行一次 `deepseek/deepseek-flash` 的 `single-file-off-by-one`：上限 8 请求、20,000 Token、0.03 美元、180 秒，并发 1，不自动重试。
+- 模型经本地硬预算网关完成 3 次上游请求，输入 6516、输出 357、合计 6873 Token，费用 0.0023832 美元。后续序号 4～7 的请求均由网关以 `GATEWAY_TOKEN_BUDGET` 本地拒绝，`upstreamForwarded=false`。
+- 生成补丁将 `n * (n - 1) / 2` 改为 `n * (n + 1) / 2`，补丁 SHA-256 为 `5fa0153b3fef99b46b88d914995710c3b2d57a70be13315c2abb8bd37c50bdd0`；隐藏验证器退出码 0。
+- 原始 Runner 状态保留为 `budget_exceeded`，因为存在预算拒绝；功能结论为 `passed_with_budget_stop`。没有重试，没有增加预算。
+- Sandbox 审计确认无网、只读根、非 root、仅临时 `/workspace` 可写；本次使用 find、ls、read、edit，没有 Shell、MCP 或宿主工具回退。
+- 完整 TypeScript 回归从仓库根目录收集 166 个身份：164 passed、0 failed、2 条件跳过；Batch H 162 个身份缺失 0。包内目录启动会使既有崩溃恢复夹具解析到错误路径，不能作为正确运行方式。
+- 共享工作树中的 `packages/pi-enhanced/docs` 再次发生未跟踪文件消失；Runner 清理根已核对为系统临时目录，源码没有删除 docs 的路径，无法复现为 Runner 清理错误。12 个已跟踪历史文档从 HEAD 原样恢复，Batch H/I 报告依据现存运行产物和测试重新生成；更早且无 Git 对象的旧报告不伪造恢复。
+- 尚未推送。发布状态仍为 NO-GO，等待远端 Windows/Linux CI 证据。

@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-03T01:22:32.336Z",
+  "evaluationClass": "real_model_coding_agent_task",
+  "runId": "pilot_h3_deepseek_20261103",
+  "variant": "baseline",
+  "condition": "cold",
+  "model": {
+    "provider": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "authorization": "explicit",
+  "sandbox": {
+    "mode": "docker-file-tools",
+    "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+    "tools": [
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "write",
+      "edit"
+    ],
+    "network": "none",
+    "failClosed": true
+  },
+  "limits": {
+    "maxTotalCostUsd": 0.1,
+    "maxTasks": 1,
+    "maxTokensPerTask": 20000,
+    "maxCallsPerTask": 8,
+    "timeoutMs": 180000,
+    "concurrency": 1,
+    "budgetEnforcement": "local_hard_gateway"
+  },
+  "summary": {
+    "total": 1,
+    "run": 1,
+    "passed": 0,
+    "notRun": 0,
+    "observedCostUsd": 0.0021996
+  },
+  "results": [
+    {
+      "taskId": "single-file-off-by-one",
+      "category": "single_file",
+      "experimentClass": "real_model_coding_agent_task",
+      "repositoryCommit": "37a5f370a1edbcb7a5206ba6619eb1cec5712df9",
+      "status": "budget_exceeded",
+      "failureReason": "sandbox_workspace_validation_failed_before_tool_execution",
+      "sandboxErrorCode": "SANDBOX_WORKSPACE_NOT_TEMPORARY",
+      "verifierPassed": false,
+      "hiddenTestExitCode": 1,
+      "agentExitCode": 0,
+      "timedOut": false,
+      "usage": {
+        "calls": 3,
+        "tokens": 6666,
+        "costUsd": 0.0021996
+      },
+      "agentReportedUsage": {
+        "calls": 114,
+        "tokens": 33330,
+        "costUsd": 0.005165039999999999,
+        "note": "legacy stdout parser output; retained for traceability and not used for billing"
+      },
+      "gateway": {
+        "state": "ready",
+        "requestsStarted": 3,
+        "requestsCompleted": 3,
+        "requestsRejected": 4,
+        "actualInputTokens": 6444,
+        "actualOutputTokens": 222,
+        "actualTotalTokens": 6666,
+        "actualCostUsd": 0.0021996,
+        "committedTokenUpperBound": 6666,
+        "committedCostUpperBoundUsd": 0.0021996,
+        "lastError": null
+      },
+      "costClass": "gateway_measured",
+      "patchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "durationMs": 17639.89
+    }
+  ]
+}

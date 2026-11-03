@@ -130,6 +130,9 @@ const COMMANDS = [
 	"enhanced-task-complete",
 	"enhanced-task-cancel",
 	"enhanced-task-memory-propose",
+	"enhanced-task-recovery-list",
+	"enhanced-task-rebind",
+	"enhanced-task-capacity",
 ] as const;
 
 function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
@@ -206,7 +209,13 @@ function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void
 				const snapshot = requireTask(service.get(single(args)));
 				ctx.ui.notify(
 					JSON.stringify(
-						createCheckpoint(service.provider, snapshot, ctx.sessionManager.getSessionId(), branchLeaf(ctx)),
+						createCheckpoint(
+							service.provider,
+							snapshot,
+							ctx.sessionManager.getSessionId(),
+							branchLeaf(ctx),
+							getRuntime()?.config.controlledFiles,
+						),
 						null,
 						2,
 					),
@@ -221,13 +230,78 @@ function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void
 				const service = ready(getRuntime());
 				ctx.ui.notify(
 					JSON.stringify(
-						recoveryPreflight(service.provider, single(args), ctx.sessionManager.getSessionId(), branchLeaf(ctx)),
+						recoveryPreflight(
+							service.provider,
+							single(args),
+							ctx.sessionManager.getSessionId(),
+							branchLeaf(ctx),
+							getRuntime()?.config.controlledFiles,
+						),
 						null,
 						2,
 					),
 					"warning",
 				);
 			}),
+	});
+	pi.registerCommand("enhanced-task-recovery-list", {
+		description: "List non-terminal tasks and their recovery state without replaying tools",
+		handler: async (_args, ctx) =>
+			command(ctx, async () => {
+				const service = ready(getRuntime());
+				const active = service.list().filter((task) => !["completed", "failed", "cancelled"].includes(task.status));
+				notify(
+					ctx,
+					active.map((task) => ({
+						taskId: task.taskId,
+						status: task.status,
+						revision: task.revision,
+						checkpointId: service.get(task.taskId)?.lastCheckpoint?.checkpointId ?? null,
+						reconciliationCount: service.provider
+							.getAttempts(task.taskId)
+							.filter((attempt) => attempt.state === "needs_reconciliation" || attempt.state === "started")
+							.length,
+					})),
+				);
+			}),
+	});
+	pi.registerCommand("enhanced-task-rebind", {
+		description: "Rebind a recoverable task step after preflight and explicit confirmation",
+		handler: async (args, ctx) =>
+			command(ctx, async () => {
+				const [taskId, stepId, ...extra] = args.trim().split(/\s+/u);
+				if (!taskId || !stepId || extra.length)
+					throw new TaskError("TASK_VALIDATION_ERROR", "Usage: /enhanced-task-rebind <taskId> <stepId>");
+				const service = ready(getRuntime());
+				const snapshot = requireTask(service.get(taskId));
+				if (
+					["completed", "failed", "cancelled"].includes(snapshot.task.status) ||
+					!snapshot.steps.some((step) => step.stepId === stepId)
+				)
+					throw new TaskError("TASK_INVALID_TRANSITION", "Task or step cannot be rebound");
+				const preflight = recoveryPreflight(
+					service.provider,
+					taskId,
+					ctx.sessionManager.getSessionId(),
+					branchLeaf(ctx),
+					getRuntime()?.config.controlledFiles,
+				);
+				if (!preflight.projectMatches || !preflight.consistencyValid || preflight.unknownStepIds.length > 0)
+					throw new TaskError(
+						"TASK_INVALID_TRANSITION",
+						"Resolve project, consistency, and unknown attempt issues before rebinding",
+					);
+				if (
+					!ctx.hasUI ||
+					!(await ctx.ui.confirm("重新绑定任务步骤", `${taskId}/${stepId}\n只恢复观察绑定，不会重放工具。`))
+				)
+					return;
+				notify(ctx, service.bind(taskId, stepId, ctx.sessionManager.getSessionId(), branchLeaf(ctx)));
+			}),
+	});
+	pi.registerCommand("enhanced-task-capacity", {
+		description: "Show bounded Task SQLite capacity diagnostics",
+		handler: async (_args, ctx) => command(ctx, async () => notify(ctx, ready(getRuntime()).provider.diagnostics())),
 	});
 	pi.registerCommand("enhanced-task-evidence", {
 		description: "Inspect evidence or add explicit user-attested evidence",

@@ -10,11 +10,13 @@ import { AuditTrail } from "./audit.ts";
 import { type LoadedMcpPolicyConfig, loadMcpPolicyConfig } from "./config.ts";
 import { classifyToolResult } from "./errors.ts";
 import { type McpToolIdentity, parseMcpToolIdentity } from "./identity.ts";
+import { NativeToolGuard } from "./native-tool-guard.ts";
 import { evaluatePolicy, type PolicyAction, type PolicyDecision } from "./policy.ts";
 
 interface McpPolicyRuntimeState {
 	loaded: LoadedMcpPolicyConfig;
 	audit: AuditTrail;
+	nativeGuard: NativeToolGuard;
 	lastError?: string;
 }
 
@@ -24,7 +26,11 @@ function loadState(ctx: ExtensionContext): McpPolicyRuntimeState {
 		cwd: ctx.cwd,
 		projectTrusted: ctx.isProjectTrusted(),
 	});
-	return { loaded, audit: new AuditTrail(loaded.config.audit.maxRecent) };
+	return {
+		loaded,
+		audit: new AuditTrail(loaded.config.audit.maxRecent),
+		nativeGuard: new NativeToolGuard(loaded.config.nativeToolGuard),
+	};
 }
 
 function auditBase(
@@ -49,7 +55,7 @@ function denialReason(identity: McpToolIdentity, decision: PolicyDecision): stri
 }
 
 function formatStatus(state: McpPolicyRuntimeState): string {
-	const { loaded, audit } = state;
+	const { loaded, audit, nativeGuard } = state;
 	const enforcement = loaded.failClosed
 		? "fail-closed (configuration error)"
 		: loaded.config.enabled
@@ -65,6 +71,7 @@ function formatStatus(state: McpPolicyRuntimeState): string {
 		`Configuration: ${sources}`,
 		`Rules: ${loaded.config.rules.length}; default: ${loaded.config.defaultAction}`,
 		`Audit: ${loaded.config.audit.enabled ? `enabled (${records.length} recent, ${denied} denied, ${nested} nested)` : "disabled"}`,
+		`Native tool guard: ${loaded.config.nativeToolGuard.enabled ? `enabled (${nativeGuard.snapshot().length} recent)` : "disabled"}`,
 		...(errors.length > 0 ? ["Recent errors:", ...errors.slice(-5)] : []),
 	].join("\n");
 }
@@ -81,8 +88,8 @@ export default function mcpPolicyExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (!event.toolName.startsWith("mcp__")) return;
 		const current = currentState(ctx);
+		if (!event.toolName.startsWith("mcp__")) return current.nativeGuard.evaluate(event, ctx);
 		if (!current.loaded.config.enabled && !current.loaded.failClosed) return;
 		const toolInfo = pi.getAllTools().find((tool) => tool.name === event.toolName);
 		const identity = parseMcpToolIdentity(event.toolName, toolInfo);
@@ -139,6 +146,7 @@ export default function mcpPolicyExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", () => {
 		state?.audit.clear();
+		state?.nativeGuard.clear();
 		state = undefined;
 	});
 

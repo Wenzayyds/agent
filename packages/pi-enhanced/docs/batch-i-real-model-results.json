@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "runId": "pilot_i5_deepseek_20261103",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "taskId": "single-file-off-by-one",
+  "authorizedLimits": {
+    "maxRequests": 8,
+    "maxTokens": 20000,
+    "maxCostUsd": 0.03,
+    "timeoutMs": 180000,
+    "automaticRetry": false
+  },
+  "functionalStatus": "passed_with_budget_stop",
+  "rawRunnerStatus": "budget_exceeded",
+  "verifierPassed": true,
+  "hiddenTestExitCode": 0,
+  "agentExitCode": 0,
+  "timedOut": false,
+  "gateway": {
+    "requestAttempts": 7,
+    "requestsStarted": 3,
+    "requestsCompleted": 3,
+    "requestsRejected": 4,
+    "actualInputTokens": 6516,
+    "actualOutputTokens": 357,
+    "actualTotalTokens": 6873,
+    "actualCostUsd": 0.0023832,
+    "denialCode": "GATEWAY_TOKEN_BUDGET",
+    "denialSequences": [4, 5, 6, 7],
+    "allDeniedRequestsForwarded": false
+  },
+  "patchSha256": "5fa0153b3fef99b46b88d914995710c3b2d57a70be13315c2abb8bd37c50bdd0",
+  "sandboxAuditPresent": true,
+  "sandboxToolsObserved": ["find", "ls", "read", "edit"],
+  "hostToolFallback": false,
+  "artifact": "evaluation-output/pilot_i5_deepseek_20261103"
+}

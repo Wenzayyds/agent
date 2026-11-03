@@ -1,0 +1,72 @@
+name: Pi Enhanced CI
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths: ["packages/pi-enhanced/**", ".github/workflows/pi-enhanced-ci.yml"]
+  push:
+    paths: ["packages/pi-enhanced/**", ".github/workflows/pi-enhanced-ci.yml"]
+
+jobs:
+  offline-engineering:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: npm ci
+      - run: python -m pip install numpy pytest
+      - run: node --version && npm --version && python --version && python -c "import numpy; print(numpy.__version__)"
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-metadata.json
+      - run: npm run check --workspace=@wz-agent/pi-enhanced
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
+      - run: node --experimental-strip-types packages/pi-enhanced/benchmarks/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/batch-h-test-manifest.json packages/pi-enhanced/docs/batch-i-test-manifest.json
+      - run: python -m pytest packages/pi-enhanced/python/memory-intelligence/tests -q
+      - run: npm run evaluate:p5 --workspace=@wz-agent/pi-enhanced
+      - run: npm run evaluate:real-agent --workspace=@wz-agent/pi-enhanced
+      - run: npm run evaluate:quality --workspace=@wz-agent/pi-enhanced
+      - run: npm run check:pack --workspace=@wz-agent/pi-enhanced
+      - run: npm run build:offline
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-enhanced-${{ runner.os }}-${{ github.sha }}
+          path: |
+            packages/pi-enhanced/ci-metadata.json
+            packages/pi-enhanced/.ci-vitest.json
+            packages/pi-enhanced/docs/batch-i-test-manifest.json
+
+  docker-isolation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-docker-metadata.json --docker
+      - run: docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+      - run: npm run smoke:docker --workspace=@wz-agent/pi-enhanced
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-enhanced-docker-${{ github.sha }}
+          path: |
+            packages/pi-enhanced/ci-docker-metadata.json
+            packages/pi-enhanced/.ci-sandbox-vitest.json
+            packages/pi-enhanced/docs/batch-f-sandbox-smoke.json
