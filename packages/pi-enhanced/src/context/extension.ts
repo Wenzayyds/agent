@@ -2,11 +2,12 @@ import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil
 import { requestScopedMemoryReader } from "../memory/reader.ts";
 import { requestScopedTaskReader } from "../task-manager/reader.ts";
 import { loadContextConfig } from "./config.ts";
-import type { ContextRuntimeState } from "./contracts.ts";
+import type { ContextDiagnostics, ContextModuleConfig, ContextRuntimeState } from "./contracts.ts";
 import { ContextRuntime } from "./runtime.ts";
 
 export interface ContextExtensionOptions {
 	agentDir?: string;
+	onDiagnostics?: (diagnostics: Readonly<ContextDiagnostics>, config: Readonly<ContextModuleConfig>) => void;
 }
 
 export function createContextExtension(options: ContextExtensionOptions = {}): (pi: ExtensionAPI) => void {
@@ -55,6 +56,11 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 		const current = runtime;
 		if (!current) return undefined;
 		const messages = await current.transform(event.messages, ctx);
+		try {
+			options.onDiagnostics?.(current.diagnostics, structuredClone(current.config));
+		} catch {
+			/* Observation must not affect Context output. */
+		}
 		if (!messages || runtime !== current) return undefined;
 		return { messages };
 	});

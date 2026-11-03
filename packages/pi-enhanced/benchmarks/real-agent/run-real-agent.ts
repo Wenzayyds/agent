@@ -89,7 +89,7 @@ try {
 			context: { enabled: switches.context, mode: "select", memoryInjection: { enabled: switches.memory }, taskInjection: { enabled: switches.task } },
 			"task-manager": { enabled: switches.task },
 		} }));
-		if (condition === "memory_seeded" && switches.memory) await seedMemory(cwd, agentDir);
+		const memorySeed = condition === "memory_seeded" && switches.memory ? await seedMemory(cwd, agentDir) : null;
 		let seededTaskId: string | undefined;
 		if (readonlyModuleTools && switches.task) {
 			const service = new TaskService(new TaskProvider(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir)), 20);
@@ -101,6 +101,7 @@ try {
 		const gatewayToken = randomUUID().replaceAll("-", "");
 		const adminToken = randomUUID().replaceAll("-", "");
 		const sandboxAuditPath = join(root, `${task.id}-sandbox-audit.json`);
+		const contextReportPath = join(root, `${task.id}-context-audit.json`);
 		const childEnvironment = isolatedAgentEnvironment(process.env, {
 			providerApiKeyEnv: apiKeyEnv!, gatewayToken, agentDir, tempDir: root,
 			evaluation: {
@@ -114,6 +115,7 @@ try {
 				PI_ENHANCED_SANDBOX_IMAGE: plan!.sandboxImage,
 				PI_ENHANCED_SANDBOX_REPORT_PATH: sandboxAuditPath,
 				PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools ? "1" : "0",
+				PI_ENHANCED_CONTEXT_REPORT_PATH: contextReportPath,
 			},
 		});
 		preflightSandbox(childEnvironment, cwd, root);
@@ -142,7 +144,7 @@ try {
 			"--extension", join(packageRoot, "extensions", "sandbox.ts"),
 		];
 		if (switches.memory) extensionArgs.push("--extension", join(packageRoot, "extensions", "memory.ts"));
-		if (switches.context) extensionArgs.push("--extension", join(packageRoot, "extensions", "context.ts"));
+		if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
 		if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
 		const started = performance.now();
 		let gatewayStatus: BudgetGatewayStatus;
@@ -172,6 +174,7 @@ try {
 		const verifierPassed = verify(task.id, cwd);
 		const patch = execFileSync("git", ["diff", "--binary", "--no-ext-diff"], { cwd, encoding: "utf8" });
 		const sandboxAudit = readSandboxAudit(sandboxAuditPath);
+		const contextAudit = existsSync(contextReportPath) ? JSON.parse(readFileSync(contextReportPath, "utf8")) as Record<string, unknown> : { state: switches.context ? "missing" : "disabled", diagnostics: [] };
 		const overBudget = budgetExceeded(usage, observedCost, plan!) || gatewayStatus.requestsRejected > 0;
 		const timedOut = child.timedOut;
 		const status = classifyExecution({ overBudget, timedOut, exitCode: child.status, verifierPassed });
@@ -181,9 +184,11 @@ try {
 		writeFileSync(join(taskOutput, "agent.stderr.log"), redactEvaluationText(child.stderr ?? "", [process.env[apiKeyEnv!]!]));
 		const record = { taskId: task.id, category: task.category, experimentClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task", repositoryCommit, status, verifierPassed, hiddenTestExitCode: verifierPassed ? 0 : 1, agentExitCode: child.status, timedOut, usage, agentReportedUsage, gateway: gatewayEvidence(gatewayStatus), sandboxAudit, costClass: localStubUrl ? "simulated" : "gateway_measured", patchSha256: createHash("sha256").update(patch).digest("hex"), durationMs: Number((performance.now() - started).toFixed(3)) };
 		const moduleToolEvents = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_end" && moduleTools.includes(String(event.toolName)) ? [{ toolName: event.toolName, isError: event.isError, result: event.result }] : []; } catch { return []; } });
-		const classifiedRecord = { ...record, ...outcome, moduleTools, moduleToolEvents, contextEnabled: switches.context, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
+		const moduleToolCalls = (child.stdout ?? "").split(/\r?\n/u).flatMap((line) => { try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "tool_execution_start" && moduleTools.includes(String(event.toolName)) ? [{ toolCallId: event.toolCallId, toolName: event.toolName, args: JSON.parse(redactEvaluationText(JSON.stringify(event.args ?? {}), [process.env[apiKeyEnv!]!])) as Record<string, unknown> }] : []; } catch { return []; } });
+		const classifiedRecord = { ...record, ...outcome, memorySeed, moduleTools, moduleToolCalls, moduleToolEvents, contextEnabled: switches.context, contextAudit, usageSource: "local_hard_gateway", agentReportedUsageSource: "stdout_final_assistant_messages_diagnostic_only" };
 		writeFileSync(join(taskOutput, "result.json"), `${JSON.stringify(classifiedRecord, null, 2)}\n`); results.push(classifiedRecord);
 		writeFileSync(join(taskOutput, "sandbox-audit.json"), `${JSON.stringify(sandboxAudit, null, 2)}\n`);
+		writeFileSync(join(taskOutput, "context-audit.json"), `${JSON.stringify(contextAudit, null, 2)}\n`);
 		if (overBudget) break;
 	}
 	const ran = results.filter((item) => item.status !== "not_run");
@@ -229,13 +234,17 @@ async function runAgentProcess(file: string, args: string[], options: { cwd: str
 		child.once("error", (error) => { clearTimeout(timer); stderr.push(Buffer.from(error.message)); resolveProcess({ status: null, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), timedOut }); });
 	});
 }
-async function seedMemory(cwd: string, agentDir: string): Promise<void> {
+async function seedMemory(cwd: string, agentDir: string): Promise<{ id: string; probeQuery: string; verifiedHits: number }> {
 	const scope = createProjectScope({ cwd, agentDir }); ensureProjectStorage(scope); const provider = new LocalMemoryProvider(scope);
 	try {
 		const content = "项目约定：normalizeKey 必须 trim 后转成小写且不改变输入；validateItems 必须检查整个数组，不能只检查前十项。修改前阅读实现，保留公开 API，不修改测试。";
 		const normalizedContent = content.normalize("NFKC").replace(/\s+/gu, " ").trim();
 		const candidate = await provider.saveCandidate({ kind: "experience", content, normalizedContent, contentHash: createHash("sha256").update(normalizedContent).digest("hex"), source: { type: "user", ref: "controlled-ablation-seed", observedAt: Date.now() }, now: Date.now() });
 		await provider.setStatus({ id: candidate.id, status: "verified", verification: { id: randomUUID(), type: "test_passed", evidenceRef: "controlled-ablation-fixture", evidenceVersion: "v1", verifiedAt: Date.now() }, expectedRevision: candidate.revision, now: Date.now() });
+		const probeQuery = "normalizeKey";
+		const records = await provider.search({ text: probeQuery, statuses: ["verified"] });
+		if (!records.some((record) => record.id === candidate.id)) throw new Error("EVAL_MEMORY_SEED_NOT_SEARCHABLE");
+		return { id: candidate.id, probeQuery, verifiedHits: records.length };
 	} finally { provider.close(); }
 }
 function initGit(cwd: string): void {

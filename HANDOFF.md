@@ -350,3 +350,19 @@
 - run 41622273550 Linux/Docker 通过，Windows 同一标签断言仍失败，说明并非仅大小写。夹具使用 TEMP 别名而 scope 为规范路径（Windows 可有 8.3 短路径）；测试拆为规范 scope 必须 PROJECT_PATH、别名必须脱敏且原路径不泄漏。保留原 Reader 安全断言，未将安全失败改成跳过。
 - 最终源码/测试提交 8204fa14e44d9dbf854a9eb20ab840feda0d4334 的远端 CI 41623230736 全部 success：https://github.com/Wenzayyds/agent/actions/runs/41623230736 。Linux 158 passed/11 skipped，Windows 156 passed/13 skipped；均收集 169 身份、基线缺失 0；Docker 专项 22/22。Windows/Linux Python 均 15/15、确定性回放均 8/8，pack 敏感命中均 0。跳过项是外部 MCP 或未装镜像等环境条件，真实容器执行由独立 Docker job 实测覆盖。
 - 本地完整 TS 为 167 passed/2 skipped（169），全仓 check 通过。P0 统计与 P1 远端工程验证完成；P2 已执行 4 次获准真实试验但结论不足，未知 usage/费用和 gateway_error 见 controlled-comparison-20261103.json，不再重试。此次追加仅记录证据，不修改已验收源码。
+
+## 2026-11-03：full 网关、Memory、Context 离线修复
+
+- 本轮按用户要求仅离线排查修复，没有付费调用、提交或推送。历史真实试验原始数据没有改写。
+- 两次 full 均不足 20 秒，网关超时为 120 秒；旧控制器只有超时或客户端关闭可 abort，结合 SDK 收到 DONE 即退出读取，定位客户端正常结束与网关等待 HTTP EOF 的结算竞态。离线 Provider 发完 usage/DONE 后延迟 EOF，旧代码稳定失败并丢弃 usage；现在转发 DONE 前结算一次。真正超时、提前断开、无效/缺失 usage 仍失败关闭并保留预留，requestOutcomes 记录明确原因和阶段。
+- Memory 复现为长提示的 AND/literal 查询零命中；历史真实模型 query 未记录，不能还原原词。新增仅零命中时的有界代码标识符参考检索，复用原项目/verified/生命周期过滤，不改 SQLite Schema/MemoryService；候选和归档负向测试通过。Runner 新增种子搜索预检、脱敏工具入参和检索策略记录。
+- Context 原诊断只供用户命令读取，Runner 没接入。新增可选诊断回调和评测专用 probe，保存实际配置、每轮估算 Token、注入 ID、删选/截断计数。原 fixture 的 draft/setup-session 任务被正确跳过；toolOutput 默认关闭、短任务未触发预算压力，不把配置开关当成收益证据。
+- 最终模拟链路 4/4 请求 completed_done、网关 ready；种子预检 1 条、Memory 标识符降级命中 1 条、Context 4 轮诊断含实际注入 ID，Patch 与独立验证器通过。证据明确标注 local_stub_only，不是真实模型成绩。
+- 本地完整回归 173 身份：171 passed/0 failed/2 外部 MCP 条件跳过，Batch I 166 身份缺失 0；Python 15/15，全仓 npm run check 通过，最终专项 Runner 3/3，pack 泄漏命中 0。
+- 报告：packages/pi-enhanced/docs/full-offline-root-cause-and-fix.md；清单 full-offline-fix-test-manifest.json；持久化模拟证据 full-offline-module-evidence.json。当前修改未被远端 CI 验证；本轮不重新规划真实对比、不重用已消耗授权。
+
+## 2026-11-03：离线修复提交审查
+
+- 用户授权审查、提交并推送上轮离线修复，要求 Windows/Linux/Docker CI 全部通过后再提出真实对比方案，方案确认前禁止付费调用。
+- 复审补上最终 usage 覆盖校验：先有效后无效不能保留旧计费值，负数或不一致 total_tokens 失败关闭；预算超限的 requestOutcomes 使用实际错误码。
+- 本地 Pi Enhanced 174 身份：172 passed/0 failed/2 条件跳过，基线身份缺失 0，全仓 npm run check 通过。本轮付费调用 0。

@@ -57,5 +57,6 @@ export function gatewayEvidence(status: BudgetGatewayStatus): Record<string, unk
 		committedCostUpperBoundUsd: status.committedCostUpperBoundUsd,
 		lastError: status.lastError,
 		denials: status.denials,
+		requestOutcomes: status.requestOutcomes,
 	};
 }

@@ -110,8 +110,69 @@ describe("Batch H hard budget gateway", () => {
 		expect((await callGateway(gateway.url, "client-token")).status).toBe(502);
 		const status = gateway.status();
 		expect(status.state).toBe("failed_closed");
+		expect(status.lastError).toBe("GATEWAY_UPSTREAM_TIMEOUT");
 		expect(status.committedTokenUpperBound).toBeGreaterThan(0);
 		expect(status.committedCostUpperBoundUsd).toBeGreaterThan(0);
+	});
+
+	it("settles usage at SSE DONE before a client closes a still-open upstream stream", async () => {
+		const upstream = await mockUpstream(async (_request, response) => {
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.write('data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}\n\ndata: [DONE]\n\n');
+			setTimeout(() => response.end(), 200);
+		});
+		const gateway = await gatewayFor(upstream.url, baseLimits);
+		const response = await callGateway(gateway.url, "client-token");
+		const reader = response.body!.getReader();
+		let text = "";
+		while (!text.includes("[DONE]")) { const part = await reader.read(); if (part.done) break; text += new TextDecoder().decode(part.value); }
+		await reader.cancel();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(gateway.status()).toMatchObject({ state: "ready", requestsCompleted: 1, actualTotalTokens: 120, activeRequests: 0 });
+		expect(gateway.status().requestOutcomes[0]).toMatchObject({ outcome: "completed_done", usageSeen: true, doneSeen: true });
+	});
+
+	it("keeps incomplete client disconnects failed closed with a distinct cause and full reservation", async () => {
+		const upstream = await mockUpstream(async (_request, response) => {
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+			setTimeout(() => response.end(), 200);
+		});
+		const gateway = await gatewayFor(upstream.url, baseLimits);
+		const response = await callGateway(gateway.url, "client-token");
+		const reader = response.body!.getReader();
+		await reader.read();
+		await reader.cancel();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		const status = gateway.status();
+		expect(status).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_CLIENT_DISCONNECTED", requestsCompleted: 0, actualTotalTokens: 0, activeRequests: 0 });
+		expect(status.committedTokenUpperBound).toBeGreaterThan(0);
+		expect(status.requestOutcomes[0]).toMatchObject({ outcome: "GATEWAY_CLIENT_DISCONNECTED", usageSeen: false, doneSeen: false });
+		expect((await callGateway(gateway.url, "client-token")).status).toBe(429);
+	});
+	it("does not treat malformed provider usage as a free completed request", async () => {
+		const upstream = await mockUpstream(async (_request, response) => {
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end('data: {"usage":{}}\n\ndata: [DONE]\n\n');
+		});
+		const gateway = await gatewayFor(upstream.url, baseLimits);
+		await (await callGateway(gateway.url, "client-token")).text();
+		expect(gateway.status()).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_USAGE_MISSING", actualTotalTokens: 0 });
+		expect(gateway.status().committedCostUpperBoundUsd).toBeGreaterThan(0);
+	});
+	it("rejects invalid final usage instead of retaining an earlier valid sample", async () => {
+		for (const finalUsage of [{}, { prompt_tokens: 1, completion_tokens: 1, total_tokens: -1 }, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 99 }]) {
+			const upstream = await mockUpstream(async (_request, response) => {
+				response.writeHead(200, { "Content-Type": "text/event-stream" });
+				response.write('data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n');
+				response.end(`data: ${JSON.stringify({ usage: finalUsage })}\n\ndata: [DONE]\n\n`);
+			});
+			const gateway = await gatewayFor(upstream.url, baseLimits);
+			await (await callGateway(gateway.url, "client-token")).text();
+			expect(gateway.status()).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_USAGE_MISSING", actualTotalTokens: 0 });
+			expect(gateway.status().requestOutcomes[0]?.outcome).toBe("GATEWAY_USAGE_MISSING");
+			expect(gateway.status().committedCostUpperBoundUsd).toBeGreaterThan(0);
+		}
 	});
 });
 

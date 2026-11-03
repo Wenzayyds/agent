@@ -72,6 +72,7 @@ export interface BudgetGatewayStatus {
 	reservedCostUsd: number;
 	lastError: string | null;
 	denials: GatewayDenialRecord[];
+	requestOutcomes: Array<{ requestSequence: number; outcome: string; receivedBytes: number; usageSeen: boolean; doneSeen: boolean; elapsedMs: number }>;
 	limits: BudgetGatewayLimits;
 }
 
@@ -103,6 +104,7 @@ class BudgetLedger {
 			reservedCostUsd: 0,
 			lastError: null,
 			denials: [],
+			requestOutcomes: [],
 			limits: { ...limits },
 		};
 	}
@@ -110,6 +112,11 @@ class BudgetLedger {
 	nextRequestSequence(): number {
 		this.state.requestAttempts += 1;
 		return this.state.requestAttempts;
+	}
+
+	recordOutcome(value: BudgetGatewayStatus["requestOutcomes"][number]): void {
+		this.state.requestOutcomes.push(value);
+		if (this.state.requestOutcomes.length > 64) this.state.requestOutcomes.shift();
 	}
 
 	reserve(bodyBytes: number, requestedOutputTokens: number, requestSequence: number): Reservation {
@@ -330,9 +337,15 @@ async function handleRequest(
 	body.user_id = "pi_enhanced_controlled_pilot";
 
 	const controller = new AbortController();
+	let settled = false;
+	let usage: ProviderUsage | null = null;
+	let doneSeen = false;
+	let receivedBytes = 0;
+	const started = performance.now();
+	const recordOutcome = (outcome: string) => ledger.recordOutcome({ requestSequence, outcome, receivedBytes, usageSeen: usage !== null, doneSeen, elapsedMs: Number((performance.now() - started).toFixed(3)) });
 	const timeout = setTimeout(() => controller.abort(new Error("GATEWAY_UPSTREAM_TIMEOUT")), options.limits.requestTimeoutMs);
 	response.on("close", () => {
-		if (!response.writableEnded) controller.abort(new Error("GATEWAY_CLIENT_DISCONNECTED"));
+		if (!settled && !response.writableEnded) controller.abort(new Error("GATEWAY_CLIENT_DISCONNECTED"));
 	});
 	try {
 		const upstream = await (options.fetch ?? globalThis.fetch)(`${options.upstreamBaseUrl.replace(/\/$/u, "")}/chat/completions`, {
@@ -350,26 +363,48 @@ async function handleRequest(
 		response.setHeader("Cache-Control", "no-store");
 		if (!upstream.body) {
 			ledger.fail(reservation, "GATEWAY_UPSTREAM_BODY_MISSING");
+			settled = true;
+			recordOutcome("GATEWAY_UPSTREAM_BODY_MISSING");
 			return response.end();
 		}
-		let usage: ProviderUsage | null = null;
 		let pending = "";
 		const decoder = new TextDecoder();
 		for await (const chunk of upstream.body) {
 			const bytes = Buffer.from(chunk);
-			response.write(bytes);
+			receivedBytes += bytes.length;
 			pending += decoder.decode(bytes, { stream: true });
 			const parsed = consumeSseLines(pending);
 			pending = parsed.remainder;
-			usage = parsed.usage ?? usage;
+			if (parsed.hasUsage) usage = parsed.usage;
+			doneSeen ||= parsed.done;
+			// Settle before exposing DONE: Pi may close the downstream immediately.
+			if (doneSeen) {
+				if (upstream.ok) ledger.complete(reservation, usage);
+				else ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
+				settled = true;
+				recordOutcome(ledger.snapshot().lastError ?? "completed_done");
+			}
+			response.write(bytes);
+			if (doneSeen) break;
 		}
 		pending += decoder.decode();
-		usage = consumeSseLines(`${pending}\n`).usage ?? usage;
+		const final = consumeSseLines(`${pending}\n`);
+		if (final.hasUsage) usage = final.usage;
+		if (!settled) {
+			if (upstream.ok) ledger.complete(reservation, usage);
+			else ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
+			settled = true;
+			recordOutcome(ledger.snapshot().lastError ?? "completed_eof");
+		}
 		response.end();
-		if (upstream.ok) ledger.complete(reservation, usage);
-		else ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
 	} catch (error) {
-		ledger.fail(reservation, controller.signal.aborted ? "GATEWAY_UPSTREAM_TIMEOUT_OR_ABORT" : "GATEWAY_UPSTREAM_ERROR");
+		if (!settled) {
+			const reason = controller.signal.reason;
+			const code = controller.signal.aborted && reason instanceof Error ? reason.message : "GATEWAY_UPSTREAM_ERROR";
+			ledger.fail(reservation, code);
+			settled = true;
+			recordOutcome(code);
+		}
 		if (!response.headersSent) sendJson(response, 502, { error: "GATEWAY_UPSTREAM_FAILED" });
 		else response.destroy(error instanceof Error ? error : undefined);
 	} finally {
@@ -377,29 +412,39 @@ async function handleRequest(
 	}
 }
 
-function consumeSseLines(input: string): { remainder: string; usage: ProviderUsage | null } {
+function consumeSseLines(input: string): { remainder: string; usage: ProviderUsage | null; done: boolean; hasUsage: boolean } {
 	const lines = input.split(/\r?\n/u);
 	const remainder = lines.pop() ?? "";
 	let usage: ProviderUsage | null = null;
+	let done = false;
+	let hasUsage = false;
 	for (const line of lines) {
 		if (!line.startsWith("data:")) continue;
 		const data = line.slice(5).trim();
-		if (!data || data === "[DONE]") continue;
+		if (data === "[DONE]") { done = true; continue; }
+		if (!data) continue;
 		try {
 			const parsed = JSON.parse(data) as { usage?: Record<string, unknown> };
-			if (parsed.usage) usage = parseUsage(parsed.usage);
+			if (parsed.usage !== undefined && parsed.usage !== null) {
+				hasUsage = true;
+				usage = typeof parsed.usage === "object" ? parseUsage(parsed.usage) : null;
+			}
 		} catch {}
 	}
-	return { remainder, usage };
+	return { remainder, usage, done, hasUsage };
 }
 
-function parseUsage(value: Record<string, unknown>): ProviderUsage {
-	const promptTokens = nonnegativeInteger(value.prompt_tokens) ?? 0;
-	const completionTokens = nonnegativeInteger(value.completion_tokens) ?? 0;
+function parseUsage(value: Record<string, unknown>): ProviderUsage | null {
+	const promptTokens = nonnegativeInteger(value.prompt_tokens);
+	const completionTokens = nonnegativeInteger(value.completion_tokens);
+	if (promptTokens === undefined || completionTokens === undefined) return null;
+	const totalTokens = value.total_tokens === undefined ? promptTokens + completionTokens : nonnegativeInteger(value.total_tokens);
+	if (totalTokens === undefined) return null;
+	if (totalTokens !== promptTokens + completionTokens) return null;
 	return {
 		promptTokens,
 		completionTokens,
-		totalTokens: nonnegativeInteger(value.total_tokens) ?? promptTokens + completionTokens,
+		totalTokens,
 	};
 }
 
@@ -436,7 +481,7 @@ function positiveInteger(value: unknown): number | undefined {
 }
 
 function nonnegativeInteger(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function validateOptions(options: BudgetGatewayOptions): void {

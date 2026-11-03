@@ -1,5 +1,6 @@
 import type { MemoryRecord, ScopedMemoryReader } from "../memory/contracts.ts";
 import { redactMemoryOutput, truncateMemoryOutput } from "../memory/output-safety.ts";
+import { searchMemoryReferences } from "../memory/reference-search.ts";
 import type { ContextMemoryInjectionConfig, ContextMessage } from "./contracts.ts";
 
 const MEMORY_CUSTOM_TYPE = "pi-enhanced-context-memory";
@@ -23,7 +24,9 @@ export async function injectVerifiedMemory(options: {
 	if (userIndex < 0) return { messages: [...options.messages], injectedMemoryIds: [], state: "skipped" };
 	const query = userText(options.messages[userIndex]).trim().slice(0, MAX_QUERY_CHARACTERS);
 	if (!query) return { messages: [...options.messages], injectedMemoryIds: [], state: "skipped" };
-	const records = await options.reader.search({ text: query, limit: options.config.maximumRecords });
+	const { records } = await searchMemoryReferences(query, (text) =>
+		options.reader.search({ text, limit: options.config.maximumRecords }),
+	);
 	const visibleText = collectVisibleText(options.messages);
 	const selected: MemoryRecord[] = [];
 	for (const observed of records.slice(0, options.config.maximumRecords)) {

@@ -152,13 +152,17 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		const provider = await startProvider((body, response) => {
 			turns += 1;
 			response.writeHead(200, { "Content-Type": "text/event-stream" });
-			if (turns === 1) response.end(toolCallSse("enhanced_memory_search", { query: "normalizeKey", limit: 2 }, 100, 10));
+			const finish = (sse: string) => { response.write(sse); setTimeout(() => response.end(), 200); };
+			if (turns === 1) {
+				expect(JSON.stringify(body.messages)).toContain("已验证的历史记忆数据");
+				finish(toolCallSse("enhanced_memory_search", { query: "修复 normalizeKey 保留 API", limit: 2 }, 100, 10));
+			}
 			else if (turns === 2) {
 				const taskId = JSON.stringify(body.messages).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/u)?.[0];
 				expect(taskId).toBeDefined();
-				response.end(toolCallSse("enhanced_task_get", { taskId }, 100, 10));
-			} else if (turns === 3) response.end(toolCallSse("edit", { path: "math.js", edits: [{ oldText: "n * (n - 1) / 2", newText: "n * (n + 1) / 2" }] }, 100, 10));
-			else response.end(textSse("fixed", 100, 10));
+				finish(toolCallSse("enhanced_task_get", { taskId }, 100, 10));
+			} else if (turns === 3) finish(toolCallSse("edit", { path: "key.js", edits: [{ oldText: "value.trim()", newText: "value.trim().toLowerCase()" }] }, 100, 10));
+			else finish(textSse("fixed", 100, 10));
 		});
 		const output = join(root, "output");
 		const result = await runRunner(provider.url, output, image, "module_pilot_stub", true);
@@ -167,7 +171,14 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		expect(report.results[0]).toMatchObject({ patchStatus: "passed", runStatus: "completed", contextEnabled: true });
 		expect(report.results[0].moduleToolEvents).toHaveLength(2);
 		for (const event of report.results[0].moduleToolEvents) expect(event.isError).not.toBe(true);
+		expect(report.results[0].moduleToolEvents[0].result.details).toMatchObject({ count: 1, searchStrategy: "code-identifier" });
+		expect(report.results[0].moduleToolCalls[0].args.query).toBe("修复 normalizeKey 保留 API");
+		expect(report.results[0].contextAudit.diagnostics.some((entry: { injectedMemoryIds: string[] }) => entry.injectedMemoryIds.length > 0)).toBe(true);
+		expect(report.results[0].contextAudit.diagnostics.every((entry: { taskState: string }) => entry.taskState === "skipped")).toBe(true);
+		expect(report.results[0].memorySeed.verifiedHits).toBe(1);
+		expect(report.results[0].gateway.requestOutcomes.every((entry: { outcome: string }) => entry.outcome === "completed_done")).toBe(true);
 		expect(JSON.stringify(report.results[0].moduleToolEvents)).toContain("normalizeKey");
+		if (process.env.PI_ENHANCED_OFFLINE_REPRO_EVIDENCE_PATH) writeFileSync(process.env.PI_ENHANCED_OFFLINE_REPRO_EVIDENCE_PATH, JSON.stringify(report, null, 2));
 	}, 120_000);
 });
 
@@ -204,7 +215,7 @@ function runRunner(
 		"--max-tokens-per-task", "200000", "--max-calls-per-task", "8", "--timeout-ms", "60000",
 		"--concurrency", "1", "--budget-enforcement", "local_hard_gateway", "--output-dir", output,
 		"--sandbox-image", sandboxImage,
-		...(readonlyModules ? ["--readonly-module-tools", "--variant", "full", "--condition", "memory_seeded"] : []),
+		...(readonlyModules ? ["--readonly-module-tools", "--variant", "full", "--condition", "memory_seeded", "--task-id", "memory-guided-regression"] : []),
 	];
 	return new Promise((resolveRun) => {
 		const child = spawn(process.execPath, args, {
