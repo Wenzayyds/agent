@@ -14,6 +14,9 @@ describe("Batch G CI authorization boundaries", () => {
 		expect(offline).not.toContain("--execute");
 		expect(offline).toContain("tests/e2e/sandbox-agent-session.test.ts");
 		expect(offline).toContain("permissions:\n  contents: read");
+		expect(offline).toContain("packages/pi-enhanced/docs/version-freeze-results.json");
+		expect(offline).not.toContain("packages/pi-enhanced/docs/batch-n-results.json");
+		expect(offline).toContain("--exclude '**/.artifacts/**'");
 	});
 
 	it("keeps paid evaluation behind workflow dispatch, environment approval, and the sandbox gate", () => {
@@ -21,7 +24,7 @@ describe("Batch G CI authorization boundaries", () => {
 		expect(paid).toContain("environment: pi-enhanced-paid-evaluation");
 		expect(paid).toContain("--budget-enforcement local_hard_gateway");
 		expect(paid).not.toContain("PI_ENHANCED_BUDGET_GATEWAY_CONFIRMED");
-		expect(paid).toContain("PI_EVAL_API_KEY: ${{ secrets.PI_EVAL_API_KEY }}");
+		expect(paid).toMatch(/PI_EVAL_API_KEY: \$\{\{ secrets\.PI_EVAL_API_KEY \}\}/u);
 		expect(paid.indexOf("npm run test:sandbox")).toBeLessThan(paid.indexOf("--execute"));
 		expect(paid).toContain("--sandbox-image sha256:");
 		expect(offline).toContain("tests/e2e/gateway-sandbox-e2e.test.ts");

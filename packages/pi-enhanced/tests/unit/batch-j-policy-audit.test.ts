@@ -1,24 +1,21 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadOfflineDenialPolicy, ordinaryReadonlyOutside } from "../../benchmarks/real-agent/offline-denial-policy.ts";
 import { classifyTermination } from "../../benchmarks/real-agent/result-classification.ts";
 import { AUDIT_MAX_RECORDS, readSandboxAuditSnapshot, SandboxAuditJournal } from "../../src/sandbox/audit.ts";
 import { assertSandboxWorkspaceIdentity } from "../../src/sandbox/config.ts";
-import { sandboxConfigForTesting } from "../../src/sandbox/extension.ts";
+import { createSandboxFixture } from "../fixtures/runner-support.ts";
 
 const roots: string[] = [];
 function fixture() {
-	const root = mkdtempSync(join(tmpdir(), "pi-batch-j-unit-"));
+	const { root, workspace, config } = createSandboxFixture("pi-batch-j-unit-");
 	roots.push(root);
-	const workspace = join(root, "project");
-	mkdirSync(workspace);
 	const path = join(root, "audit.json");
-	const config = sandboxConfigForTesting({ workspace, auditReportPath: path });
-	return { root, workspace, path, config };
+	return { root, workspace, path, config: { ...config, auditReportPath: path } };
 }
+
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });

@@ -18,6 +18,7 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 		"controlled-batch.test.ts",
 		"real-agent-runner-e2e.test.ts",
 		"batch-j-runner.test.ts",
+		"batch-n-observability.test.ts",
 		"docker-verifier.test.ts",
 	]) {
 		const suites = report.testResults.filter((suite) => suite.name.replaceAll("\\", "/").endsWith(`/e2e/${file}`));

@@ -426,3 +426,60 @@
 - 发现并最小修复 Runner 在 Batch L 中覆盖旧 p5-real-model-results.json 的问题；该配置现在只保留独立运行目录结果。原六格 E2E 增加 dry-run 历史报告不变断言，1/1 passed，六格 Stub 通过；根检查、评测 TS、pack 和 diff 检查通过，敏感格式/禁止路径命中 0。
 - 上轮全量仍为 225/222 passed/0 failed/3 skipped，本次修复后只跑受影响用例，未冒充新的全量结果。审查交付保存在 .artifacts/batch-l/review-verification.md 和 review-results.json，不恢复已删除报告；待授权 11 文件正常提交/推送后取得本轮远端 CI。
 - 用户已授权仅这 11 个文件正常提交、推送并检查 Windows/Linux/Docker CI；真实模型仍需 CI 通过后单独授权，不沿用历史预算。
+- 已核对实际暂存清单及 staged diff：11 文件、文件删除 0、敏感格式命中 0；提交 774fa52d8fc39cb9125a99895938729b4ee815e5 已正常推送 origin/pi-agent。42 项文档删除和历史运行目录未纳入，用户删除状态保留。
+- 当前提交 CI 41670552429 全部 success：https://github.com/Wenzayyds/agent/actions/runs/41670552429 。Linux 184/0/41、Windows 182/0/43（passed/failed/skipped，225 身份，224 基线缺失 0）；Docker 74/74、0 skipped。合并去重 223/225 passed，仅两项外部 MCP 条件未运行；Python 均 15/15，pack 泄漏 0。Artifact commit/runId 已核对，Docker 新六格 Stub 全部通过、输入配对一致，实际触达规则/截短/计划；不代表真实收益。
+- 本轮实际 DeepSeek 请求 0。最终证据更新到 .artifacts/batch-l/review-verification.md、review-results.json 和 remote-ci/；此补记仅本地，不再推送制造新 SHA。状态 ready_for_authorization，待 CI 通过后的全新六格预算确认；不得沿用历史授权启动模型。
+- CI 通过后用户明确批准全新六格预算，每格 8 请求/80,000 Token/0.03 美元/180 秒，全批 0.18 美元，不重试。独立干净工作树 774fa52d8 上执行 batch_l_20261104_01；准备期目录联接和构建复制问题均在零真实调用时解决，独立工作树 Stub 通过后才创建一次性真实授权。运行产物 hash 已记录，不修改主工作树删除。
+- 真实批次已结束且停止，不再调用模型：Memory off/on、Context on/off 四格均正常结束且隐藏验证通过；Task on 第 9 次请求被 GATEWAY_REQUEST_LIMIT 拒绝（实际转发 8），补丁独立验证通过但 Agent 非正常结束、审计未完成；Task off not_run，没有补跑。总计实际转发 25 请求，输入 87,379/输出 3,316/总 90,695 Token，保守费用 0.0301929 美元，实际 Provider 扣费未知，usage 完整。
+- Memory on 命中真实规则但仍读 reference.md，请求 4→4、工具 6→6，Token 少 2.29% 不足以归因稳定收益；Context on 实际截短，总 Token 少 10.23%、估算费用少 6.03%，但请求 4→5、工具 5→7、端到端慢约 1.96 秒。Task 真实计划读取成立、状态 draft→draft，缺少关闭组，不能评估收益。
+- 5 份审计快照均校验有效，4 完整；Task 审计 running/35 条已持久化事件/pending 0，明确 unseenEventsPossible=true，未伪造结束状态。真实只读拒绝 0，恢复未触发；工具容器残留 0，新原始结果中真实 API Key 扫描命中 0。历史数据未覆盖，所有结果保留在 evaluation-output/batch_l_20261104_01/；现有同一对审查 MD/JSON 已补真实结果，不新增重复报告、不提交实验数据、不自动使用剩余额度。本轮停止。
+
+## Batch M：仅分析既有真实轨迹
+
+- 用户要求不调用 DeepSeek、不补跑、不直接重构。本轮只读 Batch L 原件及相关源码，36 个原始证据文件在分析前后均通过原清单 SHA256 核对；真实调用、实验补跑、业务代码修改、提交和推送均 0。
+- 重要证据缺口：Runner 未落盘完整 Pi stdout，工具记录无 turn/request 对应，网关只保留逐请求完成状态/耗时与整格 usage；没有逐请求 Token、请求消息和中间 Patch。因此只能分别还原真实请求序列与工具顺序，不能定位 Token 差异具体在哪一轮，不能把工具次数当模型轮数。
+- Memory 两组 Patch SHA256 完全相同，均读 reference.md/key.js/package.json，均 6 工具/4 请求、grep/find 0。命中 verified 规则成立，使用来源归因与搜索/质量收益未证实；不换 Embedding。
+- Context 两组 Patch SHA256 相同。额外工具为 diagnostics.txt 的 201 起分页（首次限 200，关闭组限 2000，无区间重叠），以及 edit 后重读短 validate.js。不能断言这两次是裁剪导致的重复读取，也不能把全部耗时增加归因于 Context。暂不调整阈值，未来先控制分页并补裁剪关联记录。
+- Task 第 7 个工具 edit 已形成最终主修复，后续工具 8～13 是写验证脚本、ls 两次、读脚本/formatter/index；不是模型请求 7。隐藏验证只在运行后执行。计划查询 1 次且还读计划文件，是否增加模型轮次未知。第 9 次请求因 GATEWAY_REQUEST_LIMIT 未转发，没有生成回复，无法断定原本仅为最终回答。保留 patchPassed=true/agentCompleted=false/auditComplete=false/overallAccepted=false；关闭组未运行，不能评价 Task 收益。
+- 交付同一对 .artifacts/batch-m/batch-m-verification.md 与 batch-m-results.json，包含全部可见逐请求状态、工具序列、诊断与收益证据等级；最小建议仅列出，未实施。后续由用户决定观测记录、统一分页/退出提示或精简计划展示；本轮停止，不复用旧授权调用模型。
+
+
+## Batch N：评测观测离线验收（2026-11-04）
+
+- 完整任务书已读取：F:/Chrome Download/CODEX_PROMPT_BATCH_N_EVALUATION_OBSERVABILITY.md。本轮未调用模型、未读真实 Key、未提交/推送/触发远端操作；不使用 subagent。保留用户 42 项历史文档删除与既有未提交修改。
+- 新增可选 evaluation-telemetry，宿主 --evaluation-telemetry 显式开启；Gateway 最终结算逐请求采集，响应 ID→Pi 回复→工具 ID→确定性 Broker 操作关联。未改预算策略、Pi Core、P1 Policy、Memory/Task/SQLite。Context 仅增加可选元数据诊断回调。
+- 生产 Runner+真实 Pi+硬网关+Docker 工具+独立隐藏验证器的四组 Stub 批次通过：观测 on/off 各六格补丁及 Usage 一致；严格越界停止；请求九拒绝后其余五格 not_run。26 请求 Usage 对账一致、26/26 工具与 34/34 Broker 操作关联；turnId 26/26 unknown，Context 消费请求 ID unknown，不用时间猜测。
+- 全量 TypeScript 242 身份：239 passed/0 failed/3 skipped，旧 225 缺失 0；Python 15/15。最终受影响用例 17/17（与全量重叠，不累加）。只读静态/evaluation TS/离线构建/包安装回归/最终 pack 扫描通过；pack 107 entries，禁止路径和敏感格式命中均 0。首轮发现旧 worktree 重复身份、Python 发现路径错误、格式差异等均在核心报告如实说明，未删用例或扩大超时。
+- 新 batch-n-v1 共享 Prompt，仅待批准配置，真实 execute 在读取 Key 前硬阻断。新 CI 配置已更新，但当前源码未提交，远端状态 configured_only；不能用旧 commit CI 背书。Memory/Task 仅记录触达；Context 只能区分请求行区间、编辑后读取，不能证明裁剪导致重读。
+- 核心交付仅 packages/pi-enhanced/docs/batch-n-verification.md 和 batch-n-results.json；详细日志、身份清单及机器证据 .artifacts/batch-n/。Batch L/M 38 文件 SHA256 全部保持。状态 offline_verified_pending_review；停止开发，下一轮真实调用或 Git 远端操作须另行授权。
+
+
+## Cleanup Batch（2026-11-04）
+
+- 完整阅读 F:/Chrome Download/PI_ENHANCED_CLEANUP_BATCH_PROMPT.md。以当前未提交源码建立 .artifacts/cleanup/baseline.json、145 个 TS 快照和112个保护文件散列；未重置用户工作树，42项原有文档删除保持原状，历史证据112/112散列未变。
+- 实质清理：Runner stdout解析5遍→1遍；telemetry先构造后覆盖的两个代码块合并为最终一次构造，复用模块事件及Task状态；成功工具结果改用ID集合；删除内部无人读取的Reservation.id/nextId、重复gateway快照赋值和peer查找。不改Pi Core、P1 Policy、Schema、授权与预算/隔离边界。
+- 4个生产源码净减少2671字节/2348个非空白字符/4行；1个现有测试增加284字节/3行，总计净减2387字节/2082个非空白字符/1行。没有删除源码文件或测试身份；相近用例的边界不同，未找到可安全替代的删除对象。
+- 全量TS242：239 passed/0 failed/3 skipped；Python15/15；生产Runner六格及越界/请求九停止前后Patch、审计、Usage、费用、模块触达一致。真实tgz安装、Docker六工具、安全负向均通过。强杀恢复与Verifier在两个worker下重复两轮，每轮12/12通过；过滤出的12项不计环境缺口。
+- 根只读静态、evaluation TS、离线构建和pack扫描通过；补充扫描旧评测5文件仍有8条既存Biome诊断，清理前后相同，不冒充全绿。Linux挂载目录替换、两项外部MCP未实测；当前源码远端CI configured_only。
+- 交付仅 packages/pi-enhanced/docs/cleanup-verification.md、cleanup-results.json；详细证据、逐身份kept映射、清理专属diff在.artifacts/cleanup/。未读真实密钥、未调用付费模型、未暂存/提交/推送/dispatch；停止。
+
+
+## 核心代码结构整理（2026-11-04）
+
+- 本轮按用户要求实质拆分Runner，不调用模型、不读真实密钥、不暂存/提交/推送。基线与145个TS副本在.artifacts/structure/；用户42项文档删除、N/Cleanup既有改动保持，114个历史保护文件散列不变。
+- 只新增3个生产文件：runner-preparation.ts准备合成工作区、配置与种子；runner-execution.ts控制网关/Pi/工具容器及独立Docker验证器；runner-results.ts解释证据、保存与汇总。run-real-agent.ts只保留命令行/授权/阶段调度，从36579字节389行变8561字节204行。因类型/导入/排版，总代码量增加，不声称净减行数。
+- 只新增1个测试辅助文件tests/fixtures/runner-support.ts，共享两套Stub HTTP/SSE、四处镜像探测、临时工作区及挂载断言；测试专用sandboxConfigForTesting迁出生产Extension。场景和242身份均保留。共享Stub断言失败由真实子进程确认退出1，不吞错。
+- 新结果删除无读取方的hiddenTestExitCode、costClass、agentReportedUsageSource；保留仍由测试、ablation命令和.artifacts/batch-l/collect-real.mjs读取的referenceHash、usageSource、observations和monetaryAccounting。旧JSON/真实原件不修改。
+- 最终完整TS242：239 passed/0 failed/3 skipped；Python15/15；生产Runner、六工具Docker、只读Verifier、预算安全负向、强杀恢复、真实tgz安装均通过。四组最终Stub与Cleanup原件在Patch、Usage/费用、审计、模块触达/关联方面一致。根只读静态/evaluation TS、本轮12文件Biome0诊断、离线构建、pack扫描通过。Linux挂载身份与外部MCP未运行；远端CI configured_only。
+- .artifacts/structure/ownership.json逐路径区分原有42项删除、N、Cleanup、本轮、真实运行数据；同文件叠加标签，不按文件机械拆提交。当前CI需要N身份基线JSON；建议整体审查工程差异，42项文档删除另列，evaluation-output/密钥/数据库/session/log/cache排除。暂存区仍空，没有擅自清理工作树。
+- 交付packages/pi-enhanced/docs/core-structure-verification.md与core-structure-results.json；机器证据.artifacts/structure/。停止开发，待审查。
+
+
+## 版本收口与本地完整验收（2026-11-04）
+
+- 重新核对分支pi-agent与HEAD 774fa52d8fc39cb9125a99895938729b4ee815e5，暂存区为空。精确候选29文件，清单/逐项归属/保留理由/最终散列在.artifacts/version-freeze/candidates.json；42项用户文档删除、6份N/Cleanup/结构整理旧报告和真实evaluation-output逐项排除，原件保留。前面工作记录所列旧报告按本地归档证据理解，不要求重复提交；CI已改用本轮version-freeze-results.json身份基线。
+- 修复CLI导入即执行：私有main加直接入口判断；真实子进程测试先复现BATCH_N_SEPARATE_AUTHORIZATION_REQUIRED，再验证四阶段静态导入不执行/不读真实Key/不创建文件。仅私有化2个内部常量；ModuleSwitches因TS4058所示公共返回类型需要保留导出。候选24个TS只作范围明确的排版，Gateway与执行模块规范化可执行JS和冻结前一致。
+- 最终TS243：240 passed/0 failed/3 skipped，旧242缺失0，新增导入回归1项；Python15/15。首轮Docker未启动为201/0/42，保留证据；官方desktop start恢复Engine29.1.3并复用原固定镜像后完整重跑。Linux挂载身份与两项外部MCP仍未在本机执行，Linux身份必须由docker-isolation实际覆盖。
+- 生产Runner/Gateway/Docker六工具/Verifier/预算拒绝/隔离拒绝/强杀审计/模块生命周期实跑；最终四组Stub和Cleanup基线在Patch、费用/Usage、审计、触达与状态一致。根只读检查、evaluation TS、候选Biome0诊断、离线构建、正式test-manifest均通过。
+- HEAD归档+29项覆盖的独立候选快照打包扫描通过，152项/禁止路径0/密钥形态0；候选tgz安装Sandbox与PythonWorker E2E 6/6，npm强制离线。既有离线回放8/8、Agent dry-run 5项not_run、LSA质量检查仅在候选副本运行，不覆盖用户历史报告，不算真实Agent效果。116个历史保护文件SHA不变。
+- 新交付仅packages/pi-enhanced/docs/version-freeze-verification.md、version-freeze-results.json；详细机器证据.artifacts/version-freeze/。本地具备申请远端CI授权条件，最终状态pending_remote_authorization；当前源码Windows/Linux/Docker远端Job均not_run，不借旧CI背书。未对目标仓库add/commit/push/dispatch，未读真实ProviderKey，未调用任何付费模型。停止，等待用户另行授权精确清单后的暂存/提交/推送。

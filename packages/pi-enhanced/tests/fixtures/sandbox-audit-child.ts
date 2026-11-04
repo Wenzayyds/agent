@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
-import { sandboxConfigForTesting } from "../../src/sandbox/extension.ts";
+import { sandboxConfigForTesting } from "./runner-support.ts";
 
 const root = process.argv[2]!;
 const broker = new DockerSandboxBroker(

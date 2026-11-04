@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { EvaluationTelemetry } from "./evaluation-telemetry.ts";
 
 export interface BudgetGatewayLimits {
 	maxRequests: number;
@@ -25,6 +26,7 @@ export interface BudgetGatewayOptions {
 	limits: BudgetGatewayLimits;
 	pricing: BudgetGatewayPricing;
 	fetch?: typeof globalThis.fetch;
+	telemetry?: EvaluationTelemetry;
 }
 
 export interface GatewayDenialRecord {
@@ -48,7 +50,6 @@ interface ProviderUsage {
 }
 
 interface Reservation {
-	id: number;
 	inputTokenUpperBound: number;
 	outputTokenLimit: number;
 	reservedTokens: number;
@@ -72,18 +73,31 @@ export interface BudgetGatewayStatus {
 	reservedCostUsd: number;
 	lastError: string | null;
 	denials: GatewayDenialRecord[];
-	requestOutcomes: Array<{ requestSequence: number; outcome: string; receivedBytes: number; usageSeen: boolean; doneSeen: boolean; elapsedMs: number }>;
+	requestOutcomes: Array<{
+		requestSequence: number;
+		outcome: string;
+		receivedBytes: number;
+		usageSeen: boolean;
+		doneSeen: boolean;
+		elapsedMs: number;
+	}>;
 	limits: BudgetGatewayLimits;
 }
 
 class BudgetLedger {
-	private nextId = 1;
 	private state: BudgetGatewayStatus;
 	private readonly limits: BudgetGatewayLimits;
 	private readonly pricing: BudgetGatewayPricing;
 	private readonly runId: string;
+	private readonly telemetry?: EvaluationTelemetry;
 
-	constructor(runId: string, limits: BudgetGatewayLimits, pricing: BudgetGatewayPricing) {
+	constructor(
+		runId: string,
+		limits: BudgetGatewayLimits,
+		pricing: BudgetGatewayPricing,
+		telemetry?: EvaluationTelemetry,
+	) {
+		this.telemetry = telemetry;
 		this.runId = runId;
 		this.limits = limits;
 		this.pricing = pricing;
@@ -121,8 +135,10 @@ class BudgetLedger {
 
 	reserve(bodyBytes: number, requestedOutputTokens: number, requestSequence: number): Reservation {
 		if (this.state.state !== "ready") return this.reject("GATEWAY_FAILED_CLOSED", requestSequence);
-		if (this.state.activeRequests >= this.limits.maxConcurrency) return this.reject("GATEWAY_CONCURRENCY_LIMIT", requestSequence);
-		if (this.state.requestsStarted >= this.limits.maxRequests) return this.reject("GATEWAY_REQUEST_LIMIT", requestSequence);
+		if (this.state.activeRequests >= this.limits.maxConcurrency)
+			return this.reject("GATEWAY_CONCURRENCY_LIMIT", requestSequence);
+		if (this.state.requestsStarted >= this.limits.maxRequests)
+			return this.reject("GATEWAY_REQUEST_LIMIT", requestSequence);
 		const outputTokenLimit = Math.max(1, Math.min(requestedOutputTokens, this.limits.maxOutputTokensPerRequest));
 		// A UTF-8 token cannot contain fewer than one byte. The fixed allowance covers provider-side
 		// message framing that is not present in the serialized request body.
@@ -149,7 +165,6 @@ class BudgetLedger {
 		this.state.reservedTokens += reservedTokens;
 		this.state.reservedCostUsd += reservedCostUsd;
 		return {
-			id: this.nextId++,
 			inputTokenUpperBound,
 			outputTokenLimit,
 			reservedTokens,
@@ -191,6 +206,30 @@ class BudgetLedger {
 	}
 
 	deny(reason: string, requestSequence: number): void {
+		this.telemetry?.provider({
+			runId: this.runId,
+			requestSequence,
+			startedAt: Date.now(),
+			endedAt: Date.now(),
+			upstreamForwarded: false,
+			outcome: reason,
+			usageSeen: false,
+			doneSeen: false,
+			inputTokens: null,
+			outputTokens: null,
+			totalTokens: null,
+			conservativeCostUsd: null,
+			reservedTokenUpperBound: null,
+			reservedCostUpperBoundUsd: null,
+			responseIds: [],
+			pricing: { ...this.pricing },
+			budgetSnapshot: {
+				requestsStarted: this.state.requestsStarted,
+				actualTotalTokens: this.state.actualTotalTokens,
+				committedTokenUpperBound: this.state.committedTokenUpperBound,
+				committedCostUpperBoundUsd: this.state.committedCostUpperBoundUsd,
+			},
+		});
 		this.state.requestsRejected += 1;
 		this.state.denials.push({
 			runId: this.runId,
@@ -217,7 +256,9 @@ class BudgetLedger {
 		this.state.state = "closed";
 	}
 
-	stopForIsolation(): void { this.failClosed("GATEWAY_ISOLATION_STOP"); }
+	stopForIsolation(): void {
+		this.failClosed("GATEWAY_ISOLATION_STOP");
+	}
 
 	snapshot(): BudgetGatewayStatus {
 		return JSON.parse(JSON.stringify(this.state)) as BudgetGatewayStatus;
@@ -258,7 +299,7 @@ export interface RunningBudgetGateway {
 
 export async function startBudgetGateway(options: BudgetGatewayOptions): Promise<RunningBudgetGateway> {
 	validateOptions(options);
-	const ledger = new BudgetLedger(options.runId, options.limits, options.pricing);
+	const ledger = new BudgetLedger(options.runId, options.limits, options.pricing, options.telemetry);
 	const server = createServer((request, response) => {
 		void handleRequest(request, response, options, ledger);
 	});
@@ -330,7 +371,10 @@ async function handleRequest(
 		ledger.deny("GATEWAY_STREAM_REQUIRED", requestSequence);
 		return sendJson(response, 400, { error: "GATEWAY_STREAM_REQUIRED" });
 	}
-	const requestedOutput = positiveInteger(body.max_tokens) ?? positiveInteger(body.max_completion_tokens) ?? options.limits.maxOutputTokensPerRequest;
+	const requestedOutput =
+		positiveInteger(body.max_tokens) ??
+		positiveInteger(body.max_completion_tokens) ??
+		options.limits.maxOutputTokensPerRequest;
 	let reservation: Reservation;
 	try {
 		reservation = ledger.reserve(bodyBytes.byteLength, requestedOutput, requestSequence);
@@ -348,23 +392,63 @@ async function handleRequest(
 	let usage: ProviderUsage | null = null;
 	let doneSeen = false;
 	let receivedBytes = 0;
+	const startedAt = Date.now();
+	let usageAccounted = false;
+	const responseIds = new Set<string>();
 	const started = performance.now();
-	const recordOutcome = (outcome: string) => ledger.recordOutcome({ requestSequence, outcome, receivedBytes, usageSeen: usage !== null, doneSeen, elapsedMs: Number((performance.now() - started).toFixed(3)) });
-	const timeout = setTimeout(() => controller.abort(new Error("GATEWAY_UPSTREAM_TIMEOUT")), options.limits.requestTimeoutMs);
+	const recordOutcome = (outcome: string) => {
+		ledger.recordOutcome({
+			requestSequence,
+			outcome,
+			receivedBytes,
+			usageSeen: usage !== null,
+			doneSeen,
+			elapsedMs: Number((performance.now() - started).toFixed(3)),
+		});
+		options.telemetry?.provider({
+			runId: options.runId,
+			requestSequence,
+			startedAt,
+			endedAt: Date.now(),
+			upstreamForwarded: true,
+			outcome,
+			usageSeen: usage !== null,
+			doneSeen,
+			inputTokens: usageAccounted ? usage!.promptTokens : null,
+			outputTokens: usageAccounted ? usage!.completionTokens : null,
+			totalTokens: usageAccounted ? usage!.totalTokens : null,
+			conservativeCostUsd: usageAccounted
+				? (usage!.promptTokens * options.pricing.inputUsdPerMillion +
+						usage!.completionTokens * options.pricing.outputUsdPerMillion) /
+					1_000_000
+				: null,
+			reservedTokenUpperBound: reservation.reservedTokens,
+			reservedCostUpperBoundUsd: reservation.reservedCostUsd,
+			responseIds: [...responseIds],
+			pricing: { ...options.pricing },
+		});
+	};
+	const timeout = setTimeout(
+		() => controller.abort(new Error("GATEWAY_UPSTREAM_TIMEOUT")),
+		options.limits.requestTimeoutMs,
+	);
 	response.on("close", () => {
 		if (!settled && !response.writableEnded) controller.abort(new Error("GATEWAY_CLIENT_DISCONNECTED"));
 	});
 	try {
-		const upstream = await (options.fetch ?? globalThis.fetch)(`${options.upstreamBaseUrl.replace(/\/$/u, "")}/chat/completions`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${options.upstreamApiKey}`,
-				"Content-Type": "application/json",
-				Accept: "text/event-stream",
+		const upstream = await (options.fetch ?? globalThis.fetch)(
+			`${options.upstreamBaseUrl.replace(/\/$/u, "")}/chat/completions`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${options.upstreamApiKey}`,
+					"Content-Type": "application/json",
+					Accept: "text/event-stream",
+				},
+				body: JSON.stringify(body),
+				signal: controller.signal,
 			},
-			body: JSON.stringify(body),
-			signal: controller.signal,
-		});
+		);
 		response.statusCode = upstream.status;
 		response.setHeader("Content-Type", upstream.headers.get("content-type") ?? "text/event-stream; charset=utf-8");
 		response.setHeader("Cache-Control", "no-store");
@@ -381,7 +465,7 @@ async function handleRequest(
 			const bytes = Buffer.from(chunk);
 			receivedBytes += bytes.length;
 			pending += decoder.decode(bytes, { stream: true });
-			const parsed = consumeSseLines(pending);
+			const parsed = consumeSseLines(pending, options.telemetry ? responseIds : undefined);
 			pending = parsed.remainder;
 			if (parsed.hasUsage) usage = parsed.usage;
 			doneSeen ||= parsed.done;
@@ -389,6 +473,7 @@ async function handleRequest(
 			if (doneSeen) {
 				if (upstream.ok) ledger.complete(reservation, usage);
 				else ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
+				usageAccounted = upstream.ok && usage !== null;
 				settled = true;
 				recordOutcome(ledger.snapshot().lastError ?? "completed_done");
 			}
@@ -396,11 +481,12 @@ async function handleRequest(
 			if (doneSeen) break;
 		}
 		pending += decoder.decode();
-		const final = consumeSseLines(`${pending}\n`);
+		const final = consumeSseLines(`${pending}\n`, options.telemetry ? responseIds : undefined);
 		if (final.hasUsage) usage = final.usage;
 		if (!settled) {
 			if (upstream.ok) ledger.complete(reservation, usage);
 			else ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
+			usageAccounted = upstream.ok && usage !== null;
 			settled = true;
 			recordOutcome(ledger.snapshot().lastError ?? "completed_eof");
 		}
@@ -420,7 +506,10 @@ async function handleRequest(
 	}
 }
 
-function consumeSseLines(input: string): { remainder: string; usage: ProviderUsage | null; done: boolean; hasUsage: boolean } {
+function consumeSseLines(
+	input: string,
+	responseIds?: Set<string>,
+): { remainder: string; usage: ProviderUsage | null; done: boolean; hasUsage: boolean } {
 	const lines = input.split(/\r?\n/u);
 	const remainder = lines.pop() ?? "";
 	let usage: ProviderUsage | null = null;
@@ -429,10 +518,21 @@ function consumeSseLines(input: string): { remainder: string; usage: ProviderUsa
 	for (const line of lines) {
 		if (!line.startsWith("data:")) continue;
 		const data = line.slice(5).trim();
-		if (data === "[DONE]") { done = true; continue; }
+		if (data === "[DONE]") {
+			done = true;
+			continue;
+		}
 		if (!data) continue;
 		try {
-			const parsed = JSON.parse(data) as { usage?: Record<string, unknown> };
+			const parsed = JSON.parse(data) as { id?: unknown; usage?: Record<string, unknown> };
+			if (
+				responseIds &&
+				typeof parsed.id === "string" &&
+				parsed.id.length > 0 &&
+				parsed.id.length <= 512 &&
+				responseIds.size < 8
+			)
+				responseIds.add(parsed.id);
 			if (parsed.usage !== undefined && parsed.usage !== null) {
 				hasUsage = true;
 				usage = typeof parsed.usage === "object" ? parseUsage(parsed.usage) : null;
@@ -446,7 +546,8 @@ function parseUsage(value: Record<string, unknown>): ProviderUsage | null {
 	const promptTokens = nonnegativeInteger(value.prompt_tokens);
 	const completionTokens = nonnegativeInteger(value.completion_tokens);
 	if (promptTokens === undefined || completionTokens === undefined) return null;
-	const totalTokens = value.total_tokens === undefined ? promptTokens + completionTokens : nonnegativeInteger(value.total_tokens);
+	const totalTokens =
+		value.total_tokens === undefined ? promptTokens + completionTokens : nonnegativeInteger(value.total_tokens);
 	if (totalTokens === undefined) return null;
 	if (totalTokens !== promptTokens + completionTokens) return null;
 	return {
@@ -494,11 +595,16 @@ function nonnegativeInteger(value: unknown): number | undefined {
 
 function validateOptions(options: BudgetGatewayOptions): void {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(options.runId)) throw new Error("GATEWAY_RUN_ID_INVALID");
-	if (!/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(options.upstreamBaseUrl) && options.upstreamBaseUrl !== "https://api.deepseek.com") {
+	if (
+		!/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(options.upstreamBaseUrl) &&
+		options.upstreamBaseUrl !== "https://api.deepseek.com"
+	) {
 		throw new Error("GATEWAY_UPSTREAM_NOT_ALLOWED");
 	}
-	if (!options.upstreamApiKey || !options.clientToken || !options.adminToken) throw new Error("GATEWAY_SECRET_MISSING");
-	for (const value of Object.values(options.limits)) if (!Number.isFinite(value) || value <= 0) throw new Error("GATEWAY_LIMIT_INVALID");
+	if (!options.upstreamApiKey || !options.clientToken || !options.adminToken)
+		throw new Error("GATEWAY_SECRET_MISSING");
+	for (const value of Object.values(options.limits))
+		if (!Number.isFinite(value) || value <= 0) throw new Error("GATEWAY_LIMIT_INVALID");
 	if (options.limits.maxConcurrency !== 1) throw new Error("GATEWAY_CONCURRENCY_MUST_BE_ONE");
 }
 

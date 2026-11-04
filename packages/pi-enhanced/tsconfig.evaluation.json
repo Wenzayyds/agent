@@ -6,6 +6,8 @@
 		"tests/e2e/batch-j-runner.test.ts",
 		"tests/e2e/docker-verifier.test.ts",
 		"tests/e2e/batch-l-comparison.test.ts",
+		"tests/e2e/batch-n-observability.test.ts",
+		"tests/unit/evaluation-telemetry.test.ts",
 		"tests/e2e/real-agent-runner-e2e.test.ts",
 		"tests/unit/docker-ci-evidence.test.ts",
 		"tests/fixtures/sandbox-audit-child.ts",

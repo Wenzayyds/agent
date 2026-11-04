@@ -3,7 +3,7 @@ import { type DockerTestReport, requireDockerEvidence } from "../../scripts/ci/r
 
 function report(): DockerTestReport {
 	return {
-		numTotalTests: 8,
+		numTotalTests: 9,
 		numFailedTests: 0,
 		numPendingTests: 0,
 		testResults: [
@@ -11,6 +11,7 @@ function report(): DockerTestReport {
 			"controlled-batch.test.ts",
 			"real-agent-runner-e2e.test.ts",
 			"batch-j-runner.test.ts",
+			"batch-n-observability.test.ts",
 			"docker-verifier.test.ts",
 		].map((file) => ({
 			name: `/repo/tests/e2e/${file}`,

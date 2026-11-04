@@ -1,5 +1,3 @@
-import { lstatSync } from "node:fs";
-import { dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DockerSandboxBroker } from "./broker.ts";
 import { loadSandboxConfig, type SandboxConfig } from "./config.ts";
@@ -48,24 +46,5 @@ export function createSandboxExtension(
 			broker = undefined;
 			config = undefined;
 		});
-	};
-}
-
-export function sandboxConfigForTesting(overrides: Partial<SandboxConfig>): SandboxConfig {
-	const workspace = overrides.workspace ?? process.cwd();
-	const stat = lstatSync(workspace);
-	return {
-		enabled: true,
-		trusted: true,
-		runId: "sandbox-test",
-		runRoot: dirname(workspace),
-		workspace,
-		workspaceDevice: stat.dev,
-		workspaceInode: stat.ino,
-		image: "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
-		timeoutMs: 10_000,
-		maxRequestBytes: 1024 * 1024,
-		maxResponseBytes: 2 * 1024 * 1024,
-		...overrides,
 	};
 }

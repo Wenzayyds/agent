@@ -1,26 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
 import { verifyPatchInDocker } from "../../benchmarks/real-agent/docker-verifier.ts";
-import { sandboxConfigForTesting } from "../../src/sandbox/extension.ts";
+import { assertIsolatedMount, createSandboxFixture, dockerImageAvailable } from "../fixtures/runner-support.ts";
 
-const available =
-	spawnSync("docker", ["image", "inspect", CONTROLLED_IMAGE], { stdio: "ignore", timeout: 10_000 }).status === 0;
+const available = dockerImageAvailable(CONTROLLED_IMAGE);
 const roots: string[] = [];
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture(source: string) {
-	const root = mkdtempSync(join(tmpdir(), "pi-verifier-security-"));
-	roots.push(root);
-	const workspace = join(root, "project");
-	mkdirSync(workspace);
-	writeFileSync(join(workspace, "package.json"), '{"type":"module"}');
-	writeFileSync(join(workspace, "math.js"), source);
-	return { root, workspace, config: sandboxConfigForTesting({ workspace }) };
+	const result = createSandboxFixture("pi-verifier-security-", {
+		"package.json": '{"type":"module"}',
+		"math.js": source,
+	});
+	roots.push(result.root);
+	return result;
 }
 
 describe.skipIf(!available)("Isolated hidden verifier", () => {
@@ -39,7 +36,7 @@ describe.skipIf(!available)("Isolated hidden verifier", () => {
 				mounts: [{ destination: "/workspace", readWrite: false }],
 			},
 		});
-		expect(result.evidence?.user).not.toBe("0:0");
+		assertIsolatedMount(result.evidence, false);
 		const residue = spawnSync(
 			"docker",
 			["ps", "-a", "--filter", `id=${result.evidence!.containerId}`, "--format", "{{.ID}}"],
