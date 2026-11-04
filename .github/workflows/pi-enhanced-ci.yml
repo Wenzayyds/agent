@@ -1,3 +1,4 @@
+# Offline version-freeze validation: Windows, Linux and Docker.
 name: Pi Enhanced CI
 
 permissions:
