@@ -78,6 +78,7 @@ jobs:
           PI_ENHANCED_VERIFIER_RUNNER_EVIDENCE_DIR: packages/pi-enhanced/batch-j-stub
           PI_ENHANCED_BATCH_L_STUB_EVIDENCE: packages/pi-enhanced/batch-j-stub/batch-l-stub.json
           PI_ENHANCED_BATCH_N_EVIDENCE: packages/pi-enhanced/batch-j-stub
+          PI_ENHANCED_TASK_PAIR_STUB_EVIDENCE: packages/pi-enhanced/batch-j-stub
       - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/require-docker-evidence.ts packages/pi-enhanced/.ci-sandbox-vitest.json
       - if: always()
         uses: actions/upload-artifact@v4

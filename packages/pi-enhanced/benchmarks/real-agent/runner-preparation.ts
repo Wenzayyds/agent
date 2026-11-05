@@ -8,11 +8,19 @@ import { ensureProjectStorage } from "../../src/memory/storage.ts";
 import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
 import type { BatchLAuthorization } from "./batch-l-authorization.ts";
-import { BATCH_L_MODULE_TOOLS, batchLPrompt, batchLReferences, digest } from "./batch-l-profile.ts";
+import {
+	BATCH_L_MODULE_TOOLS,
+	batchLPrompt,
+	batchLReferences,
+	digest,
+	TASK_PAIR_INSTRUCTIONS,
+	TASK_PAIR_PROFILE,
+} from "./batch-l-profile.ts";
 import { type ControlledCell, LONG_REPORT_TASK, longReport, MEMORY_RULE, TASK_STEPS } from "./controlled-cases.ts";
 import type { EvaluationPlan } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_INSTRUCTIONS, NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import type { OfflineDenialPolicy } from "./offline-denial-policy.ts";
+import type { TaskPairAuthorization, TaskPairInput } from "./task-pair-authorization.ts";
 export interface ExperimentTask {
 	id: string;
 	category: string;
@@ -39,6 +47,8 @@ export interface RunnerContext {
 	telemetryEnabled: boolean;
 	localStubUrl?: string;
 	authorization?: BatchLAuthorization;
+	taskPairAuthorization?: TaskPairAuthorization;
+	taskPairExpected?: TaskPairInput;
 	offlinePolicy?: OfflineDenialPolicy;
 	observedCost: number;
 }
@@ -49,6 +59,7 @@ export function prepareWorkspace(
 	root: string,
 	cell: ControlledCell | undefined,
 	batchL: boolean,
+	comparisonProfile?: string,
 ) {
 	const cwd = join(root, task.id);
 	mkdirSync(cwd);
@@ -64,7 +75,7 @@ export function prepareWorkspace(
 	);
 	initGit(cwd);
 	// Only pristine, host-generated fixtures reach this check, before any Agent is started.
-	const initialVerifierPassed = verifyTrustedFixture(task.id, cwd);
+	const initialVerifierPassed = comparisonProfile === TASK_PAIR_PROFILE ? null : verifyTrustedFixture(task.id, cwd);
 	if (initialVerifierPassed) throw new Error(`Fixture ${task.id} is not initially failing`);
 	const repositoryCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
 	return { cwd, inputFixtureHash, repositoryCommit };
@@ -138,7 +149,12 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 			? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])]
 			: [];
 	const prompt = batchL
-		? batchLPrompt(cell!) + (comparisonProfile === NEXT_EVALUATION_PROFILE ? `\n${NEXT_EVALUATION_INSTRUCTIONS}` : "")
+		? batchLPrompt(cell!) +
+			(comparisonProfile === TASK_PAIR_PROFILE
+				? `\n${TASK_PAIR_INSTRUCTIONS}`
+				: comparisonProfile === NEXT_EVALUATION_PROFILE
+					? `\n${NEXT_EVALUATION_INSTRUCTIONS}`
+					: "")
 		: task.prompt +
 			(cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") +
 			(cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") +

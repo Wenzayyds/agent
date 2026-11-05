@@ -4,12 +4,244 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { TASK_PAIR_INSTRUCTIONS } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
+import { assertIsolatedMount, close, startStubProvider, textSse, toolCallSse } from "../fixtures/runner-support.ts";
 
 const root = resolve(import.meta.dirname, "../../../..");
 const docker =
 	spawnSync("docker", ["image", "inspect", CONTROLLED_IMAGE], { stdio: "ignore", timeout: 10000 }).status === 0;
 describe.skipIf(!docker)("Batch N production telemetry", () => {
+	it.each(["complete", "request_limit", "strict_denial", "fingerprint_mismatch"])(
+		"runs only the Task pair through the Stub (%s)",
+		async (mode) => {
+			const dir = mkdtempSync(join(tmpdir(), "pi-task-pair-"));
+			const initial: Array<{
+				prompt: string;
+				tools: unknown;
+				model: unknown;
+				thinking: unknown;
+				outputCap: unknown;
+			}> = [];
+			let calls = 0;
+			const provider = await startStubProvider((body, res) => {
+				const messages = body.messages as Array<{ role: string; content: unknown }>;
+				const toolResults = messages.filter((m) => m.role === "tool").length;
+				if (!toolResults) {
+					initial.push({
+						prompt: JSON.stringify(messages.find((m) => m.role === "user")?.content),
+						tools: body.tools,
+						model: body.model,
+						thinking: body.thinking,
+						outputCap: body.max_tokens,
+					});
+				}
+				calls++;
+				const input = 100 + calls;
+				const sse =
+					mode === "request_limit"
+						? toolCallSse("read", { path: "formatter.js" }, input, 10)
+						: mode === "strict_denial"
+							? toolCallSse("ls", { path: ".." }, input, 10)
+							: toolResults === 0
+								? toolCallSse("enhanced_task_get", { taskId: "current" }, input, 10)
+								: toolResults === 1
+									? toolCallSse("read", { path: "task-plan.json" }, input, 10)
+									: toolResults === 2
+										? toolCallSse(
+												"edit",
+												{
+													path: "formatter.js",
+													edits: [{ oldText: "const formatName", newText: "export const formatName" }],
+												},
+												input,
+												10,
+											)
+										: textSse("fixed", input, 10);
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				res.end(sse);
+			});
+			try {
+				const batchId = `task_pair_${mode}`;
+				const expectedPath = join(dir, "expected.json");
+				if (mode === "fingerprint_mismatch")
+					writeFileSync(
+						expectedPath,
+						JSON.stringify({
+							fixtureSha256: "0".repeat(64),
+							fixtureCommit: "0".repeat(40),
+							userPromptSha256: "0".repeat(64),
+							systemPromptSha256: "0".repeat(64),
+							toolSchemaSha256: "0".repeat(64),
+							firstRequestSha256: "0".repeat(64),
+						}),
+					);
+				const run = async (id: string, expected?: string) => {
+					const child = spawn(
+						process.execPath,
+						[
+							"--experimental-strip-types",
+							join(root, "packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts"),
+							"--execute",
+							"--comparison-profile",
+							"task-pair-v1",
+							"--batch-id",
+							id,
+							"--output-dir",
+							dir,
+							"--local-stub-url",
+							provider.url,
+							...(expected ? ["--task-pair-expected-input", expected] : []),
+						],
+						{
+							cwd: root,
+							windowsHide: true,
+							stdio: ["ignore", "ignore", "pipe"],
+							env: {
+								PATH: process.env.PATH,
+								SystemRoot: process.env.SystemRoot,
+								TEMP: process.env.TEMP,
+								TMP: process.env.TMP,
+								HOME: process.env.HOME,
+								USERPROFILE: process.env.USERPROFILE,
+								PI_ENHANCED_REAL_MODEL_EVAL: "1",
+								PI_ENHANCED_LOCAL_STUB_EVAL: "1",
+								MOCK_PROVIDER_KEY: "mock-upstream-key",
+							},
+						},
+					);
+					let stderr = "";
+					child.stderr.on("data", (chunk) => {
+						stderr += String(chunk);
+					});
+					const code = await new Promise<number | null>((done, reject) => {
+						child.once("error", reject);
+						child.once("close", done);
+					});
+					expect(code, stderr).toBe(0);
+					return JSON.parse(readFileSync(join(dir, id, "batch.json"), "utf8"));
+				};
+				const report = await run(batchId, mode === "fingerprint_mismatch" ? expectedPath : undefined);
+				const admission = (id: string, cell: string) =>
+					JSON.parse(
+						readFileSync(join(dir, id, `${id}_${cell}`, "cross-file-export", "input-admission.json"), "utf8"),
+					);
+				expect(report.evaluationClass).toBe("simulated_provider_real_runner_task");
+				expect(report.cells.map(({ id }: { id: string }) => id)).toEqual(["t_inline", "t_task"]);
+				const [off, on] = report.cells;
+				const initialVerifications = report.cells
+					.filter((cell: { resultStatus: string }) => cell.resultStatus !== "not_run")
+					.map((cell: { id: string }) =>
+						JSON.parse(
+							readFileSync(
+								join(dir, batchId, `${batchId}_${cell.id}`, "cross-file-export", "initial-verification.json"),
+								"utf8",
+							),
+						),
+					);
+				for (const verification of initialVerifications) {
+					expect(verification).toMatchObject({ status: "verification_failed", passed: false, cleanup: "removed" });
+					assertIsolatedMount(verification.evidence, false);
+				}
+				if (mode === "complete") {
+					expect(report.stoppedReason).toBeNull();
+					expect(calls).toBe(8);
+					expect(initial).toHaveLength(2);
+					expect(initial[1]).toEqual(initial[0]);
+					expect(initial[0]?.prompt.split(TASK_PAIR_INSTRUCTIONS)).toHaveLength(2);
+					expect(initial[0]?.tools).toHaveLength(8);
+					expect(initial[0]).toMatchObject({ model: "deepseek-flash", outputCap: 2048 });
+					expect(off.result.fairness).toEqual(on.result.fairness);
+					expect(off.result.fairness.inputAudit).toMatchObject({ thinking: "off", model: "deepseek-flash" });
+					for (const cell of [off, on]) {
+						expect(cell.result).toMatchObject({ evaluationAccepted: true, auditComplete: true });
+						expect(cell.result.telemetry.complete).toBe(true);
+						expect(cell.result.telemetry.requests).toHaveLength(4);
+						assertIsolatedMount(cell.result.verification.evidence, false);
+					}
+					expect(off.result.telemetry.modules.task).toMatchObject({
+						planReturned: false,
+						before: "draft",
+						after: "draft",
+					});
+					expect(on.result.telemetry.modules.task).toMatchObject({
+						planReturned: true,
+						before: "draft",
+						after: "draft",
+					});
+					const offInput = admission(batchId, "t_inline").input;
+					expect(admission(batchId, "t_task").input).toEqual(offInput);
+					writeFileSync(expectedPath, JSON.stringify(offInput));
+					const replayId = "task_pair_pin_match";
+					const pinned = await run(replayId, expectedPath);
+					expect(pinned.stoppedReason).toBeNull();
+					expect(pinned.cells.map((c: { resultStatus: string }) => c.resultStatus)).toEqual(["passed", "passed"]);
+					expect(admission(replayId, "t_inline")).toMatchObject({ status: "matched", input: offInput });
+					expect(admission(replayId, "t_task")).toMatchObject({ status: "matched", input: offInput });
+					expect(calls).toBe(16);
+				} else {
+					expect(on.resultStatus).toBe("not_run");
+					if (mode === "request_limit") {
+						expect(calls).toBe(12);
+						expect(report.stoppedReason).toBe("gateway_budget_stop");
+						expect(off.result.telemetry.requests.at(-1)).toMatchObject({
+							requestSequence: 13,
+							upstreamForwarded: false,
+							totalTokens: null,
+							outcome: "GATEWAY_REQUEST_LIMIT",
+						});
+					} else if (mode === "strict_denial") {
+						expect(calls).toBe(1);
+						expect(report.stoppedReason).toBe("isolation_boundary_stop");
+					} else {
+						expect(calls).toBe(0);
+						expect(report.stoppedReason).toBe("task_pair_input_admission_failed");
+						expect(admission(batchId, "t_inline")).toMatchObject({
+							status: "denied",
+							upstreamForwarded: false,
+							previouslyForwarded: 0,
+							reason: "TASK_PAIR_INPUT_FINGERPRINT_MISMATCH",
+						});
+					}
+				}
+				const evidenceDir = process.env.PI_ENHANCED_TASK_PAIR_STUB_EVIDENCE;
+				if (evidenceDir)
+					writeFileSync(
+						join(evidenceDir, `stub-${mode}.json`),
+						JSON.stringify(
+							{
+								evaluationClass: report.evaluationClass,
+								commit: report.commit,
+								limits: report.limits,
+								stoppedReason: report.stoppedReason,
+								stubCalls: calls,
+								initialVerifications,
+								admissions: report.cells
+									.filter((c: { resultStatus: string }) => c.resultStatus !== "not_run")
+									.map((c: { id: string }) => admission(batchId, c.id)),
+								cells: report.cells.map(
+									(cell: { id: string; resultStatus: string; result?: Record<string, unknown> }) => ({
+										id: cell.id,
+										status: cell.resultStatus,
+										fairness: cell.result?.fairness,
+										verification: cell.result?.verification,
+										telemetry: cell.result?.telemetry,
+										evaluationAccepted: cell.result?.evaluationAccepted,
+									}),
+								),
+							},
+							null,
+							2,
+						),
+					);
+			} finally {
+				await close(provider.server);
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+		150_000,
+	);
+
 	it("runs paired six-cell Stub with trusted tool correlation and identical patches when disabled", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-n-e2e-"));
 		let calls = 0;

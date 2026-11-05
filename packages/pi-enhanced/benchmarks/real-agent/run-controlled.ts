@@ -1,9 +1,18 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { claimBatchLAuthorization, loadBatchLAuthorization } from "./batch-l-authorization.ts";
-import { BATCH_L_LIMITS, BATCH_L_PROFILE } from "./batch-l-profile.ts";
+import {
+	BATCH_L_LIMITS,
+	BATCH_L_PROFILE,
+	digest,
+	TASK_PAIR_CELLS,
+	TASK_PAIR_CONFIGURATION,
+	TASK_PAIR_LIMITS,
+	TASK_PAIR_PROFILE,
+} from "./batch-l-profile.ts";
 import {
 	CONTROLLED_CELLS,
 	CONTROLLED_IMAGE,
@@ -11,6 +20,12 @@ import {
 } from "./controlled-cases.ts";
 import { type ControlledResult, controlledStopReason, verifyControlledCi } from "./controlled-policy.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
+import {
+	claimTaskPairAuthorization,
+	loadTaskPairAuthorization,
+	readTaskPairInput,
+	type TaskPairInput,
+} from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, "../../../..");
@@ -20,23 +35,44 @@ const batchId = argument("--batch-id");
 const stub = argument("--local-stub-url");
 const offlinePolicyPath = argument("--offline-denial-policy");
 const comparisonProfile = argument("--comparison-profile");
-const CONTROLLED_LIMITS =
-	comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE
+const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
+const CONTROLLED_LIMITS = taskPair
+	? TASK_PAIR_LIMITS
+	: comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE
 		? BATCH_L_LIMITS
 		: LEGACY_CONTROLLED_LIMITS;
-if (comparisonProfile && ![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE].includes(comparisonProfile))
+if (comparisonProfile && ![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE].includes(comparisonProfile))
 	throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !stub)
 	throw new Error("BATCH_N_SEPARATE_AUTHORIZATION_REQUIRED");
 const authorizationPath = argument("--batch-l-authorization");
+const taskPairPath = argument("--task-pair-authorization");
+const taskPairExpected = argument("--task-pair-expected-input");
+const ciPath = argument("--ci-evidence");
+if (taskPair && (authorizationPath || offlinePolicyPath)) throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
+if (taskPairPath && (!taskPair || stub)) throw new Error("TASK_PAIR_AUTHORIZATION_SCOPE_INVALID");
+if (taskPairExpected && (!taskPair || !stub)) throw new Error("TASK_PAIR_EXPECTED_INPUT_SCOPE_INVALID");
+const taskPairAuthorization =
+	taskPair && execute && !stub
+		? loadTaskPairAuthorization(taskPairPath, repositoryRoot, commit, batchId ?? "", ciPath)
+		: undefined;
+const telemetryEnabled = taskPair || process.argv.includes("--evaluation-telemetry");
 const authorization =
-	comparisonProfile && execute && !stub
+	comparisonProfile && !taskPair && execute && !stub
 		? loadBatchLAuthorization(authorizationPath, repositoryRoot, commit, batchId ?? "")
 		: undefined;
 if (offlinePolicyPath && !stub) throw new Error("OFFLINE_DENIAL_POLICY_UNTRUSTED");
 if (!execute) {
 	process.stdout.write(
-		JSON.stringify({ status: "not_run", commit, limits: CONTROLLED_LIMITS, cells: CONTROLLED_CELLS }),
+		JSON.stringify({
+			status: "not_run",
+			commit,
+			limits: CONTROLLED_LIMITS,
+			cells: taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
+			...(taskPair
+				? { configuration: TASK_PAIR_CONFIGURATION, configurationSha256: digest(TASK_PAIR_CONFIGURATION) }
+				: {}),
+		}),
 	);
 	process.exit(0);
 }
@@ -52,9 +88,8 @@ if (stub) {
 	)
 		throw new Error("CONTROLLED_STUB_NOT_AUTHORIZED");
 } else {
-	const path = argument("--ci-evidence");
-	if (!path) throw new Error("CONTROLLED_CI_REQUIRED");
-	verifyControlledCi(JSON.parse(readFileSync(path, "utf8")), commit);
+	if (!ciPath) throw new Error("CONTROLLED_CI_REQUIRED");
+	if (!taskPairAuthorization) verifyControlledCi(JSON.parse(readFileSync(ciPath, "utf8")), commit);
 	if (
 		execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
 			cwd: repositoryRoot,
@@ -64,21 +99,26 @@ if (stub) {
 		throw new Error("CONTROLLED_TRACKED_WORKTREE_DIRTY");
 }
 const outputBase = resolve(argument("--output-dir") ?? join(repositoryRoot, "packages/pi-enhanced/evaluation-output"));
+if (taskPairAuthorization && realpathSync(outputBase) !== taskPairAuthorization.outputBase)
+	throw new Error("TASK_PAIR_OUTPUT_MISMATCH");
 mkdirSync(outputBase, { recursive: true });
 const batchDir = join(outputBase, batchId);
 // Exclusive directory creation makes a started or interrupted batch non-resumable.
 mkdirSync(batchDir);
 if (authorization) claimBatchLAuthorization(authorizationPath!, authorization, batchDir);
-const specs = comparisonProfile
-	? [
-			CONTROLLED_CELLS[0],
-			CONTROLLED_CELLS[1],
-			CONTROLLED_CELLS[3],
-			CONTROLLED_CELLS[2],
-			CONTROLLED_CELLS[5],
-			CONTROLLED_CELLS[4],
-		]
-	: CONTROLLED_CELLS;
+if (taskPairAuthorization) claimTaskPairAuthorization(taskPairPath!, taskPairAuthorization);
+const specs = taskPair
+	? TASK_PAIR_CELLS
+	: comparisonProfile
+		? [
+				CONTROLLED_CELLS[0],
+				CONTROLLED_CELLS[1],
+				CONTROLLED_CELLS[3],
+				CONTROLLED_CELLS[2],
+				CONTROLLED_CELLS[5],
+				CONTROLLED_CELLS[4],
+			]
+		: CONTROLLED_CELLS;
 const cells: Array<{
 	id: string;
 	status: string;
@@ -89,6 +129,7 @@ const cells: Array<{
 }> = specs.map(({ id }) => ({ id, status: "not_run", resultStatus: "not_run" }));
 let stoppedReason: string | null = null;
 let reservedMaximumUsd = 0;
+let firstPairInput: TaskPairInput | undefined;
 const save = () =>
 	writeFileSync(
 		join(batchDir, "batch.json"),
@@ -98,9 +139,11 @@ const save = () =>
 				batchId,
 				commit,
 				comparisonProfile,
-				authorization: authorization
-					? { id: authorization.authorizationId, recovery: authorization.recovery }
-					: undefined,
+				authorization: taskPairAuthorization
+					? { id: taskPairAuthorization.authorizationId, recovery: "strict" }
+					: authorization
+						? { id: authorization.authorizationId, recovery: authorization.recovery }
+						: undefined,
 				evaluationClass: stub ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task",
 				limits: CONTROLLED_LIMITS,
 				reservedMaximumUsd,
@@ -140,15 +183,15 @@ for (let index = 0; index < specs.length; index++) {
 		"--api-key-env",
 		stub ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY",
 		"--max-total-cost-usd",
-		"0.03",
+		String(CONTROLLED_LIMITS.maxCostUsd),
 		"--max-tasks",
 		"1",
 		"--max-tokens-per-task",
-		"40000",
+		String(CONTROLLED_LIMITS.maxTokens),
 		"--max-calls-per-task",
-		"8",
+		String(CONTROLLED_LIMITS.maxRequests),
 		"--timeout-ms",
-		"180000",
+		String(CONTROLLED_LIMITS.timeoutMs),
 		"--concurrency",
 		"1",
 		"--budget-enforcement",
@@ -160,10 +203,19 @@ for (let index = 0; index < specs.length; index++) {
 		...(stub ? ["--local-stub-url", stub] : []),
 	];
 	if (offlinePolicyPath) args.push("--offline-denial-policy", offlinePolicyPath);
-	if (process.argv.includes("--evaluation-telemetry")) args.push("--evaluation-telemetry");
+	if (telemetryEnabled) args.push("--evaluation-telemetry");
 	if (comparisonProfile) args.push("--comparison-profile", comparisonProfile);
 	if (authorization) args.push("--batch-l-authorization", authorizationPath!, "--authorization-batch-id", batchId!);
-	args[args.indexOf("--max-tokens-per-task") + 1] = String(CONTROLLED_LIMITS.maxTokens);
+	if (taskPairAuthorization)
+		args.push(
+			"--task-pair-authorization",
+			taskPairPath!,
+			"--authorization-batch-id",
+			batchId!,
+			"--ci-evidence",
+			ciPath!,
+		);
+	if (taskPairExpected) args.push("--task-pair-expected-input", taskPairExpected);
 	const cellStarted = performance.now();
 	const child = spawnSync(process.execPath, args, {
 		cwd: repositoryRoot,
@@ -180,7 +232,9 @@ for (let index = 0; index < specs.length; index++) {
 		state.terminationClassification = /SANDBOX_/u.test(child.stderr?.toString() ?? "")
 			? "sandbox_runtime_error"
 			: "agent_execution_error";
-		stoppedReason = "runner_or_isolation_failure";
+		stoppedReason = /TASK_PAIR_INPUT_/u.test(child.stderr?.toString() ?? "")
+			? "task_pair_input_admission_failed"
+			: "runner_or_isolation_failure";
 		save();
 		break;
 	}
@@ -194,10 +248,17 @@ for (let index = 0; index < specs.length; index++) {
 		state.terminationClassification = String(result.terminationClassification ?? "legacy_result");
 		state.status = "run";
 		stoppedReason = controlledStopReason(result, CONTROLLED_LIMITS);
-		if (process.argv.includes("--evaluation-telemetry")) {
+		if (telemetryEnabled) {
 			const trace = result.telemetry as { complete?: boolean; contextTelemetryComplete?: boolean } | undefined;
 			if (!stoppedReason && (!trace?.complete || trace.contextTelemetryComplete === false))
 				stoppedReason = "evaluation_telemetry_incomplete";
+		}
+		if (taskPair) {
+			const admission = JSON.parse(readFileSync(join(batchDir, runId, spec.taskId, "input-admission.json"), "utf8"));
+			const input = readTaskPairInput(admission.input);
+			if (firstPairInput && !isDeepStrictEqual(firstPairInput, input))
+				stoppedReason = "task_pair_input_admission_failed";
+			firstPairInput ??= input;
 		}
 		if (comparisonProfile) {
 			const own = result.fairness as {
@@ -219,7 +280,7 @@ for (let index = 0; index < specs.length; index++) {
 			)
 				stoppedReason = "comparison_fairness_mismatch";
 			if (
-				comparisonProfile === NEXT_EVALUATION_PROFILE &&
+				(comparisonProfile === NEXT_EVALUATION_PROFILE || taskPair) &&
 				peerResult &&
 				peerResult.repositoryCommit !== result.repositoryCommit
 			)

@@ -5,14 +5,21 @@ import { dirname, join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 import { claimBatchLCell, loadBatchLAuthorization } from "./batch-l-authorization.ts";
-import { BATCH_L_LIMITS, BATCH_L_PROFILE } from "./batch-l-profile.ts";
-import { CONTROLLED_LIMITS, controlledCell, LONG_REPORT_TASK, MEMORY_TASK_PROMPT } from "./controlled-cases.ts";
+import { BATCH_L_LIMITS, BATCH_L_PROFILE, TASK_PAIR_LIMITS, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
+import {
+	CONTROLLED_IMAGE,
+	CONTROLLED_LIMITS,
+	controlledCell,
+	LONG_REPORT_TASK,
+	MEMORY_TASK_PROMPT,
+} from "./controlled-cases.ts";
 import { buildEvaluationPlan, preflightView } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
+import { claimTaskPairCell, loadTaskPairAuthorization, readTaskPairInput } from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "../..");
@@ -23,17 +30,36 @@ async function main(): Promise<void> {
 	const localStubUrl = argument("--local-stub-url");
 	const cell = controlledCell(argument("--controlled-cell"));
 	const comparisonProfile = argument("--comparison-profile");
-	if (comparisonProfile && ![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE].includes(comparisonProfile))
+	const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
+	if (comparisonProfile && ![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE].includes(comparisonProfile))
 		throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 	if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !localStubUrl)
 		throw new Error("BATCH_N_SEPARATE_AUTHORIZATION_REQUIRED");
-	const batchL = comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE;
-	const telemetryEnabled = process.argv.includes("--evaluation-telemetry");
-	const experimentalLimits = batchL ? BATCH_L_LIMITS : CONTROLLED_LIMITS;
+	const taskPairPath = argument("--task-pair-authorization");
+	const taskPairExpectedPath = argument("--task-pair-expected-input");
+	if (taskPairPath && (!taskPair || localStubUrl)) throw new Error("TASK_PAIR_AUTHORIZATION_SCOPE_INVALID");
+	if (taskPairExpectedPath && (!taskPair || !localStubUrl)) throw new Error("TASK_PAIR_EXPECTED_INPUT_SCOPE_INVALID");
+	if (taskPair && execute && !localStubUrl && !taskPairPath) throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
+	if (taskPair && (argument("--batch-l-authorization") || argument("--offline-denial-policy")))
+		throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
+	if (taskPair && cell?.module !== "task") throw new Error("TASK_PAIR_INVALID_CELL");
+	const batchL = taskPair || comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE;
+	const telemetryEnabled = taskPair || process.argv.includes("--evaluation-telemetry");
+	const experimentalLimits = taskPair ? TASK_PAIR_LIMITS : batchL ? BATCH_L_LIMITS : CONTROLLED_LIMITS;
 	if (batchL && !cell) throw new Error("BATCH_L_REAL_AUTHORIZATION_REQUIRED");
 	const authorizationBatchId = argument("--authorization-batch-id");
+	const taskPairAuthorization =
+		taskPair && execute && !localStubUrl
+			? loadTaskPairAuthorization(
+					taskPairPath,
+					repositoryRoot,
+					execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+					authorizationBatchId ?? "",
+					argument("--ci-evidence"),
+				)
+			: undefined;
 	const authorization =
-		batchL && execute && !localStubUrl
+		batchL && !taskPair && execute && !localStubUrl
 			? loadBatchLAuthorization(
 					argument("--batch-l-authorization"),
 					repositoryRoot,
@@ -65,6 +91,22 @@ async function main(): Promise<void> {
 		outputDir: argument("--output-dir"),
 		sandboxImage: argument("--sandbox-image"),
 	};
+	if (
+		taskPair &&
+		execute &&
+		(input.apiKeyEnv !== (localStubUrl ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY") ||
+			input.provider !== "deepseek" ||
+			input.model !== "deepseek-flash" ||
+			input.sandboxImage !== CONTROLLED_IMAGE ||
+			input.budgetEnforcement !== "local_hard_gateway" ||
+			input.maxTasks !== "1" ||
+			input.concurrency !== "1" ||
+			input.maxTotalCostUsd !== String(TASK_PAIR_LIMITS.maxCostUsd) ||
+			input.maxTokensPerTask !== String(TASK_PAIR_LIMITS.maxTokens) ||
+			input.maxCallsPerTask !== String(TASK_PAIR_LIMITS.maxRequests) ||
+			input.timeoutMs !== String(TASK_PAIR_LIMITS.timeoutMs))
+	)
+		throw new Error("TASK_PAIR_CONFIGURATION_MISMATCH");
 	if (process.argv.includes("--preflight")) {
 		const repositoryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: repositoryRoot,
@@ -79,6 +121,19 @@ async function main(): Promise<void> {
 		if (!execute || process.env.PI_ENHANCED_LOCAL_STUB_EVAL !== "1" || !isLoopbackUrl(localStubUrl)) {
 			throw new Error("EVAL_GATE_LOCAL_STUB_UNAUTHORIZED");
 		}
+	}
+	if (taskPairAuthorization) {
+		if (
+			process.env.PI_ENHANCED_REAL_MODEL_EVAL !== "1" ||
+			input.runId !== `${authorizationBatchId}_${cell!.id}` ||
+			!input.outputDir ||
+			execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+				cwd: repositoryRoot,
+				encoding: "utf8",
+			}).trim()
+		)
+			throw new Error("TASK_PAIR_RUN_SCOPE_INVALID");
+		claimTaskPairCell(taskPairPath!, taskPairAuthorization, cell!.id, input.outputDir);
 	}
 	if (execute && !localStubUrl) {
 		const projectEnv = join(repositoryRoot, ".env");
@@ -141,7 +196,7 @@ async function main(): Promise<void> {
 	try {
 		let observedCost = 0;
 		for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
-			const workspace = prepareWorkspace(task, root, cell, batchL);
+			const workspace = prepareWorkspace(task, root, cell, batchL, comparisonProfile);
 			const { repositoryCommit } = workspace;
 			if (!execute) {
 				results.push({
@@ -150,7 +205,7 @@ async function main(): Promise<void> {
 					experimentClass: "real_model_coding_agent_task",
 					status: "not_run",
 					reason: "explicit-model-authorization-required",
-					fixtureInitiallyFailed: true,
+					fixtureInitiallyFailed: taskPair ? null : true,
 					repositoryCommit,
 				});
 				continue;
@@ -173,6 +228,12 @@ async function main(): Promise<void> {
 				authorization,
 				offlinePolicy,
 				comparisonProfile,
+				taskPairAuthorization,
+				taskPairExpected:
+					taskPairAuthorization?.input ??
+					(taskPairExpectedPath
+						? readTaskPairInput(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))
+						: undefined),
 				observedCost,
 			};
 			const prepared = await prepareAgent(context, workspace);

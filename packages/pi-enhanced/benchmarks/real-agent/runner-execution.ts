@@ -1,15 +1,19 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
+import { digest, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { type BudgetGatewayStatus, startBudgetGateway } from "./budget-gateway.ts";
 import { verifyPatchInDocker } from "./docker-verifier.ts";
 import { EvaluationTelemetry } from "./evaluation-telemetry.ts";
 import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
+import { readTaskPairInput } from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** Owns gateway/container/process lifetimes; no fixture generation or result interpretation. */
@@ -33,6 +37,9 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	} = context;
 	const { cwd, agentDir, seededTaskId, moduleTools, prompt } = prepared;
 	const { provider, model, apiKeyEnv } = plan;
+	const taskPair = context.comparisonProfile === TASK_PAIR_PROFILE;
+	if (taskPair && !localStubUrl && (!context.taskPairAuthorization || !context.taskPairExpected))
+		throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
 	const gatewayToken = randomUUID().replaceAll("-", "");
 	const adminToken = randomUUID().replaceAll("-", "");
 	const sandboxAuditPath = join(root, `${task.id}-sandbox-audit.json`);
@@ -66,6 +73,14 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		},
 	});
 	const verifierScope = preflightSandbox(childEnvironment, cwd, root);
+	if (taskPair) {
+		const initialVerification = await verifyPatchInDocker(task.id, verifierScope);
+		const directory = join(runOutput, task.id);
+		mkdirSync(directory, { recursive: true });
+		writeFileSync(join(directory, "initial-verification.json"), JSON.stringify(initialVerification, null, 2));
+		if (initialVerification.status !== "verification_failed" || initialVerification.cleanup !== "removed")
+			throw new Error("SANDBOX_TASK_PAIR_INITIAL_VERIFICATION_UNEXPECTED");
+	}
 	let telemetry: EvaluationTelemetry | undefined;
 	if (telemetryEnabled) {
 		const directory = join(runOutput!, task.id);
@@ -77,8 +92,74 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			verifierScope.runId,
 		);
 	}
+	let forwarded = 0;
+	let admissionDenied = false;
+	const gatedFetch: typeof fetch = (input, init) => {
+		const evidencePath = join(runOutput, task.id, "input-admission.json");
+		try {
+			if (context.taskPairAuthorization && Date.parse(context.taskPairAuthorization.expiresAt) <= Date.now())
+				throw new Error("TASK_PAIR_INPUT_AUTHORIZATION_EXPIRED");
+			if (forwarded === 0) {
+				const audit = JSON.parse(readFileSync(join(root, "batch-l-input-audit.json"), "utf8"));
+				if (
+					typeof init?.body !== "string" ||
+					audit.userPromptSha256 !== digest(prompt) ||
+					audit.model !== model ||
+					audit.provider !== provider ||
+					audit.thinking !== TASK_PAIR_CONFIGURATION.thinking
+				)
+					throw new Error("TASK_PAIR_INPUT_AUDIT_INVALID");
+				const wire = JSON.parse(init.body);
+				if (wire.model !== model || wire.max_tokens !== TASK_PAIR_CONFIGURATION.maxOutputTokens)
+					throw new Error("TASK_PAIR_INPUT_WIRE_INVALID");
+				// Only the system message may contain the ephemeral project root. Keep user text and tools exact.
+				for (const message of wire.messages) {
+					if (message.role === "system")
+						message.content = JSON.parse(
+							JSON.stringify(message.content)
+								.replaceAll(JSON.stringify(cwd).slice(1, -1), "[PROJECT_ROOT]")
+								.replaceAll(cwd.replaceAll("\\", "/"), "[PROJECT_ROOT]"),
+						);
+				}
+				const observed = readTaskPairInput({
+					fixtureSha256: prepared.inputFixtureHash,
+					fixtureCommit: prepared.repositoryCommit,
+					userPromptSha256: audit.userPromptSha256,
+					systemPromptSha256: audit.canonicalSystemPromptSha256,
+					toolSchemaSha256: audit.toolSchemaSha256,
+					firstRequestSha256: digest(wire),
+				});
+				if (context.taskPairExpected && !isDeepStrictEqual(observed, context.taskPairExpected))
+					throw new Error("TASK_PAIR_INPUT_FINGERPRINT_MISMATCH");
+				atomicPrivateJson(evidencePath, {
+					status: context.taskPairExpected ? "matched" : "stub_capture",
+					runId: plan.runId,
+					input: observed,
+				});
+			}
+		} catch (error) {
+			admissionDenied = true;
+			atomicPrivateJson(evidencePath, {
+				status: "denied",
+				runId: plan.runId,
+				upstreamForwarded: false,
+				previouslyForwarded: forwarded,
+				reason:
+					error instanceof Error && error.message.startsWith("TASK_PAIR_INPUT_")
+						? error.message
+						: "TASK_PAIR_INPUT_EVIDENCE_INVALID",
+			});
+			throw new Error("TASK_PAIR_INPUT_ADMISSION_FAILED");
+		}
+		forwarded++;
+		return globalThis.fetch(input, init);
+	};
 	const gateway = await startBudgetGateway({
-		...(telemetry ? { telemetry } : {}),
+		// The gateway has reserved a request at this point. A local veto is recorded only in input-admission.json.
+		get telemetry() {
+			return admissionDenied ? undefined : telemetry;
+		},
+		...(taskPair ? { fetch: gatedFetch } : {}),
 		runId: plan!.runId,
 		upstreamBaseUrl: localStubUrl ?? "https://api.deepseek.com",
 		upstreamApiKey: process.env[apiKeyEnv!]!,
@@ -168,7 +249,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		);
 	} finally {
 		gatewayStatus = gateway.status();
-		if (cell) {
+		if (cell && !admissionDenied) {
 			const evidenceDir = join(runOutput!, task.id);
 			mkdirSync(evidenceDir, { recursive: true });
 			writeFileSync(
@@ -196,6 +277,8 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			}
 		}
 	}
+	if (admissionDenied) throw new Error("TASK_PAIR_INPUT_ADMISSION_FAILED");
+	if (taskPair && forwarded === 0) throw new Error("TASK_PAIR_INPUT_NO_REQUEST");
 	const verification = await verifyPatchInDocker(task.id, verifierScope);
 	return { child, gatewayStatus, verification, telemetry, sandboxAuditPath, contextReportPath, started };
 }
