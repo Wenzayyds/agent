@@ -1,6 +1,6 @@
 # SWE-bench Verified 与 Task V2 设计
 
-本轮基线为 pi-agent / `7ceae806eb21a03e90e78981f6c7660cd89198ac`。新增代码尚未提交。
+当前准入适配基于 pi-agent / `0ba05f6418780dcb4e9cb3e696536c42cd8ae6ae`。该基线三项 CI 已通过；本轮适配源码尚未提交，不能引用基线 CI 作为新源码验收。
 
 ## 实际调用关系
 
@@ -64,4 +64,10 @@ Gold 环境实例为 astropy__astropy-12907。候选为 astropy__astropy-13033�
 
 Gold 控制容器的直接环境和挂载不含 Provider 密钥、宿主 .env 或 Agent 私有数据，但共享 Docker socket 赋予广泛 daemon 权限，不能宣称完全隔离宿主数据。更强边界需专用、无凭据的评测宿主或 daemon。原第三方导入是否加载凭据仍保留 unknown。
 
-当前 SWE 真实路径保持 SWE_STUB_ONLY。Task Pair 的授权绑定两格合成任务和相同整体工具 Schema，不适用于本轮三种 Task 工具定义。后续应复用现有宿主授权链补齐 SWE 实例、Commit、共同输入及逐模式工具定义的范围绑定，并检查真实输出目录与标签，不另建 Runner 或授权框架。最终测试与 Pilot 方案见同目录验收报告。
+当前 SWE 真实执行通过原 run-controlled → run-real-agent 四阶段链路，使用 swe-task-v1 配置。复用 task-pair-authorization.ts，在原授权记录中增加三个模式的 modeInputs；旧两格授权的配置与校验规则保持。固定 13033、问题与 Base SHA、模式顺序、模型、预算、镜像和工具配置，授权绑定源码 Commit、CI Run、批次/输出身份及不超过 24 小时的有效期。宿主独占输出位于检出目录之外，整批与每格均以 wx 消费标记防止重试；后续格必须等前一格完成安全检查。
+
+首次上游转发前校验逐模式完整请求指纹，且每次请求检查授权有效期。只规范化系统消息中的临时项目根路径；用户问题和工具定义不做改写。三种完整 Task schema 是实验变量，不能要求整体指纹相同；共同 Issue、Base、Tree、系统提示和基础文件工具必须相同。Stub 校准取得的逐模式指纹需要在真实执行宿主与干净的新 Commit 上重新生成并核对，不能直接沿用本工作树的临时证据。
+
+SWE 不写历史 P5 报告。每格独占 run/task 目录保存有界脱敏 Agent JSONL、stderr、Gateway、Telemetry、审计、结果、Patch 及 predictions.jsonl。异常退出也可在工作区身份及静态 Patch 安全检查通过后保留部分补丁，不能据此标记 Agent 正常结束。补丁导出发生安全异常则停止整批。模型名称分别标记 stub/real、模式和模型。官方 Harness 使用另一独占目录，要求 --agent-result，将实例和补丁 SHA 绑定到运行结果，保存原官方报告、outcome.json 及 assessment.json。resolved/unresolved 只来自官方结果；未判分为 not_run，resolved=null。基础设施异常与 unresolved 分开记录，不更改原 Agent 结果。
+
+用户已批准本次全新 $0.09 上限：每格 12 请求、80,000 Token、$0.03、180 秒，串行 OFF→V1→V2，不重试。仍需本轮源码提交授权、新 Commit 的 Windows/Linux/Docker CI 通过，以及有效一次性宿主授权；尚未调用付费模型。

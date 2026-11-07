@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
-import { digest, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
+import { digest, SWE_TASK_PROFILE, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { type BudgetGatewayStatus, startBudgetGateway } from "./budget-gateway.ts";
 import { verifyPatchInDocker } from "./docker-verifier.ts";
 import { EvaluationTelemetry } from "./evaluation-telemetry.ts";
@@ -39,7 +39,11 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	const controlled = Boolean(cell || task.swebench);
 	const { provider, model, apiKeyEnv } = plan;
 	const taskPair = context.comparisonProfile === TASK_PAIR_PROFILE;
-	if (taskPair && !localStubUrl && (!context.taskPairAuthorization || !context.taskPairExpected))
+	if (
+		(taskPair || context.comparisonProfile === SWE_TASK_PROFILE) &&
+		!localStubUrl &&
+		(!context.taskPairAuthorization || !context.taskPairExpected)
+	)
 		throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
 	const gatewayToken = randomUUID().replaceAll("-", "");
 	const adminToken = randomUUID().replaceAll("-", "");
@@ -162,7 +166,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		get telemetry() {
 			return admissionDenied ? undefined : telemetry;
 		},
-		...(taskPair ? { fetch: gatedFetch } : {}),
+		...(taskPair || task.swebench ? { fetch: gatedFetch } : {}),
 		runId: plan!.runId,
 		upstreamBaseUrl: localStubUrl ?? "https://api.deepseek.com",
 		upstreamApiKey: process.env[apiKeyEnv!]!,
@@ -282,9 +286,18 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		}
 	}
 	if (admissionDenied) throw new Error("TASK_PAIR_INPUT_ADMISSION_FAILED");
-	if (taskPair && forwarded === 0) throw new Error("TASK_PAIR_INPUT_NO_REQUEST");
+	if ((taskPair || task.swebench) && forwarded === 0) throw new Error("TASK_PAIR_INPUT_NO_REQUEST");
 	const verification = task.swebench ? null : await verifyPatchInDocker(task.id, verifierScope);
-	return { child, gatewayStatus, verification, telemetry, sandboxAuditPath, contextReportPath, started };
+	return {
+		child,
+		gatewayStatus,
+		verification,
+		telemetry,
+		sandboxAuditPath,
+		contextReportPath,
+		started,
+		workspaceScope: verifierScope,
+	};
 }
 export type AgentExecution = Awaited<ReturnType<typeof executeAgent>>;
 function preflightSandbox(environment: NodeJS.ProcessEnv, cwd: string, runRoot: string) {

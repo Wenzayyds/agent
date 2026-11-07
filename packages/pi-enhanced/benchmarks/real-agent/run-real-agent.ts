@@ -5,8 +5,16 @@ import { dirname, join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
+import { assertSandboxWorkspaceIdentity } from "../../src/sandbox/config.ts";
 import { claimBatchLCell, loadBatchLAuthorization } from "./batch-l-authorization.ts";
-import { BATCH_L_LIMITS, BATCH_L_PROFILE, TASK_PAIR_LIMITS, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
+import {
+	BATCH_L_LIMITS,
+	BATCH_L_PROFILE,
+	SWE_TASK_CONFIGURATION,
+	SWE_TASK_PROFILE,
+	TASK_PAIR_LIMITS,
+	TASK_PAIR_PROFILE,
+} from "./batch-l-profile.ts";
 import {
 	CONTROLLED_IMAGE,
 	CONTROLLED_LIMITS,
@@ -14,15 +22,28 @@ import {
 	LONG_REPORT_TASK,
 	MEMORY_TASK_PROMPT,
 } from "./controlled-cases.ts";
-import { buildEvaluationPlan, preflightView } from "./evaluation-policy.ts";
+import type { SafetyEvent } from "./controlled-stop.ts";
+import {
+	buildEvaluationPlan,
+	executionOutcome,
+	parseAgentEvents,
+	preflightView,
+	redactEvaluationText,
+} from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import { gatewayEvidence } from "./gateway-integration.ts";
 import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
+import { classifyTermination } from "./result-classification.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
 import { exportSwePrediction, loadSweTask, SWE_EVALUATION_PROTOCOL } from "./swebench.ts";
-import { claimTaskPairCell, loadTaskPairAuthorization, readTaskPairInput } from "./task-pair-authorization.ts";
+import {
+	claimTaskPairCell,
+	loadTaskPairAuthorization,
+	readSweModeInputs,
+	readTaskPairInput,
+} from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "../..");
@@ -36,34 +57,42 @@ async function main(): Promise<void> {
 	const sweMirror = argument("--swebench-mirror");
 	const taskMode = argument("--task-mode");
 	const comparisonProfile = argument("--comparison-profile");
+	const swe = comparisonProfile === SWE_TASK_PROFILE;
+	if (swe && (sweId !== SWE_TASK_CONFIGURATION.instanceId || !sweMirror || !taskMode))
+		throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 	if (sweId || sweMirror) {
 		if (
 			!sweId ||
 			!sweMirror ||
 			!execute ||
-			!localStubUrl ||
+			(!localStubUrl && !swe) ||
 			cell ||
-			comparisonProfile ||
+			(comparisonProfile && !swe) ||
 			argument("--offline-denial-policy") ||
 			argument("--condition") ||
 			argument("--variant") ||
-			argument("--api-key-env") !== "MOCK_PROVIDER_KEY"
+			argument("--api-key-env") !== (localStubUrl ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY")
 		)
 			throw new Error("SWE_STUB_ONLY");
 	}
 	if (taskMode && (!sweId || (taskMode !== "off" && taskMode !== "v1" && taskMode !== "v2")))
 		throw new Error("SWE_TASK_MODE_INVALID");
 	const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
-	if (comparisonProfile && ![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE].includes(comparisonProfile))
+	if (
+		comparisonProfile &&
+		![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE].includes(comparisonProfile)
+	)
 		throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 	if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !localStubUrl)
 		throw new Error("BATCH_N_SEPARATE_AUTHORIZATION_REQUIRED");
 	const taskPairPath = argument("--task-pair-authorization");
 	const taskPairExpectedPath = argument("--task-pair-expected-input");
-	if (taskPairPath && (!taskPair || localStubUrl)) throw new Error("TASK_PAIR_AUTHORIZATION_SCOPE_INVALID");
-	if (taskPairExpectedPath && (!taskPair || !localStubUrl)) throw new Error("TASK_PAIR_EXPECTED_INPUT_SCOPE_INVALID");
-	if (taskPair && execute && !localStubUrl && !taskPairPath) throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
-	if (taskPair && (argument("--batch-l-authorization") || argument("--offline-denial-policy")))
+	if (taskPairPath && (!(taskPair || swe) || localStubUrl)) throw new Error("TASK_PAIR_AUTHORIZATION_SCOPE_INVALID");
+	if (taskPairExpectedPath && (!(taskPair || swe) || !localStubUrl))
+		throw new Error("TASK_PAIR_EXPECTED_INPUT_SCOPE_INVALID");
+	if ((taskPair || swe) && execute && !localStubUrl && !taskPairPath)
+		throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
+	if ((taskPair || swe) && (argument("--batch-l-authorization") || argument("--offline-denial-policy")))
 		throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
 	if (taskPair && cell?.module !== "task") throw new Error("TASK_PAIR_INVALID_CELL");
 	const batchL = taskPair || comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE;
@@ -72,13 +101,14 @@ async function main(): Promise<void> {
 	if (batchL && !cell) throw new Error("BATCH_L_REAL_AUTHORIZATION_REQUIRED");
 	const authorizationBatchId = argument("--authorization-batch-id");
 	const taskPairAuthorization =
-		taskPair && execute && !localStubUrl
+		(taskPair || swe) && execute && !localStubUrl
 			? loadTaskPairAuthorization(
 					taskPairPath,
 					repositoryRoot,
 					execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
 					authorizationBatchId ?? "",
 					argument("--ci-evidence"),
+					swe ? SWE_TASK_PROFILE : TASK_PAIR_PROFILE,
 				)
 			: undefined;
 	const authorization =
@@ -100,7 +130,7 @@ async function main(): Promise<void> {
 		? [
 				{
 					id: "swebench",
-					category: "swebench_verified_stub",
+					category: localStubUrl ? "swebench_verified_stub" : "swebench_verified_real",
 					prompt: swebench.issue.problem_statement,
 					swebench,
 				},
@@ -125,7 +155,7 @@ async function main(): Promise<void> {
 		sandboxImage: argument("--sandbox-image"),
 	};
 	if (
-		taskPair &&
+		(taskPair || swe) &&
 		execute &&
 		(input.apiKeyEnv !== (localStubUrl ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY") ||
 			input.provider !== "deepseek" ||
@@ -158,7 +188,7 @@ async function main(): Promise<void> {
 	if (taskPairAuthorization) {
 		if (
 			process.env.PI_ENHANCED_REAL_MODEL_EVAL !== "1" ||
-			input.runId !== `${authorizationBatchId}_${cell!.id}` ||
+			input.runId !== `${authorizationBatchId}_${swe ? taskMode : cell!.id}` ||
 			!input.outputDir ||
 			execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
 				cwd: repositoryRoot,
@@ -166,7 +196,7 @@ async function main(): Promise<void> {
 			}).trim()
 		)
 			throw new Error("TASK_PAIR_RUN_SCOPE_INVALID");
-		claimTaskPairCell(taskPairPath!, taskPairAuthorization, cell!.id, input.outputDir);
+		claimTaskPairCell(taskPairPath!, taskPairAuthorization, swe ? taskMode! : cell!.id, input.outputDir);
 	}
 	if (execute && !localStubUrl) {
 		const projectEnv = join(repositoryRoot, ".env");
@@ -277,9 +307,15 @@ async function main(): Promise<void> {
 				comparisonProfile,
 				taskPairAuthorization,
 				taskPairExpected:
-					taskPairAuthorization?.input ??
+					(swe && taskPairAuthorization
+						? taskPairAuthorization.modeInputs![taskMode as "off" | "v1" | "v2"]
+						: taskPairAuthorization?.input) ??
 					(taskPairExpectedPath
-						? readTaskPairInput(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))
+						? swe
+							? readSweModeInputs(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))[
+									taskMode as "off" | "v1" | "v2"
+								]
+							: readTaskPairInput(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))
 						: undefined),
 				observedCost,
 				taskMode: swebench ? ((taskMode as "off" | "v1" | "v2" | undefined) ?? "off") : undefined,
@@ -311,17 +347,84 @@ async function main(): Promise<void> {
 					!execution.child.timedOut &&
 					execution.gatewayStatus.state === "ready" &&
 					execution.gatewayStatus.requestsRejected === 0;
-				const prediction =
-					agentCompleted && audit?.complete === true && trace?.complete && inputAudit
-						? exportSwePrediction(
-								task.swebench,
-								prepared.cwd,
-								join(dir, "predictions.jsonl"),
-								`pi-enhanced-stub-${plan!.model}`,
-							)
-						: { status: "agent_failed", reason: "runner_or_audit_incomplete" };
+				const secrets = [process.env[plan!.apiKeyEnv!]!];
+				writeFileSync(join(dir, "agent.stdout.jsonl"), redactEvaluationText(execution.child.stdout, secrets), {
+					flag: "wx",
+					mode: 0o600,
+				});
+				writeFileSync(join(dir, "agent.stderr.log"), redactEvaluationText(execution.child.stderr, secrets), {
+					flag: "wx",
+					mode: 0o600,
+				});
+				let prediction: ReturnType<typeof exportSwePrediction> | { status: "agent_failed"; reason: string };
+				try {
+					// Preserve a safe partial patch too. Runtime completion never substitutes for official grading.
+					assertSandboxWorkspaceIdentity(execution.workspaceScope);
+					prediction = exportSwePrediction(
+						task.swebench,
+						prepared.cwd,
+						join(dir, "predictions.jsonl"),
+						`pi-enhanced-${localStubUrl ? "stub" : "real"}-${context.taskMode}-${plan!.model}`,
+					);
+					if (prediction.status === "not_run") {
+						const exported = JSON.parse(readFileSync(join(dir, "predictions.jsonl"), "utf8"));
+						writeFileSync(join(dir, "patch.diff"), exported.model_patch, { flag: "wx", mode: 0o600 });
+					}
+				} catch (error) {
+					prediction = {
+						status: "agent_failed",
+						reason:
+							error instanceof Error && /^(?:SWE|SANDBOX)_[A-Z_]+$/u.test(error.message)
+								? error.message
+								: "SWE_PATCH_EXPORT_FAILED",
+					};
+				}
+				const events = parseAgentEvents(execution.child.stdout);
+				const safetyPath = join(root, "tool-safety.json");
+				const safety = existsSync(safetyPath)
+					? (JSON.parse(readFileSync(safetyPath, "utf8")) as { events: SafetyEvent[] })
+					: { events: [] };
+				const { runStatus } = executionOutcome({
+					overBudget: false,
+					budgetRejected: execution.gatewayStatus.requestsRejected > 0,
+					gatewayFailed: execution.gatewayStatus.state !== "ready",
+					timedOut: execution.child.timedOut,
+					exitCode: execution.child.status,
+					verifierPassed: false,
+				});
 				const result = {
 					...prediction,
+					// These fields let the existing batch safety checks apply unchanged. No local test claims resolution.
+					controlledCell: context.taskMode,
+					runStatus,
+					patchStatus: "not_run",
+					terminationClassification:
+						prediction.status === "agent_failed" && prediction.reason !== "empty_patch"
+							? "isolation_boundary_stop"
+							: classifyTermination({
+									events: safety.events,
+									lastError: execution.gatewayStatus.lastError,
+									gatewayState: execution.gatewayStatus.state,
+									rejected: execution.gatewayStatus.requestsRejected,
+									runStatus,
+									verifierPassed: null,
+									auditComplete: audit?.complete === true,
+								}),
+					sandboxAudit: audit,
+					toolFailures: events
+						.filter((event) => event.type === "tool_execution_end" && event.isError)
+						.map((event) => ({ toolName: event.toolName, result: event.result })),
+					fairness: {
+						userPromptSha256: inputAudit?.userPromptSha256,
+						inputFixtureSha256: prepared.inputFixtureHash,
+						inputAudit,
+					},
+					agentCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+						cwd: repositoryRoot,
+						encoding: "utf8",
+					}).trim(),
+					runId: plan!.runId,
+					evaluationClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task",
 					agentAttempted: true,
 					patchExportStatus: prediction.status === "not_run" ? "exported" : "not_exported",
 					officialHarnessStatus: "not_run",
@@ -362,7 +465,18 @@ async function main(): Promise<void> {
 			if (result.overBudget) break;
 		}
 		const summary = saveRunReport(
-			{ plan, execute, localStubUrl, variant, condition, telemetryEnabled, packageRoot, runOutput, batchL },
+			{
+				plan,
+				execute,
+				localStubUrl,
+				variant,
+				condition,
+				telemetryEnabled,
+				packageRoot,
+				runOutput,
+				batchL,
+				swebench: Boolean(swebench),
+			},
 			results,
 			observedCost,
 		);

@@ -38,6 +38,25 @@ export const TASK_PAIR_CONFIGURATION = Object.freeze({
 	image: CONTROLLED_IMAGE,
 	limits: TASK_PAIR_LIMITS,
 });
+export const SWE_TASK_PROFILE = "swe-task-v1";
+export const SWE_TASK_CELLS = ["off", "v1", "v2"].map((id) => ({
+	id,
+	taskId: "swebench",
+	variant: id === "off" ? "baseline" : "task-only",
+	module: "task",
+	treatment: id !== "off",
+}));
+export const SWE_TASK_LIMITS = Object.freeze({ ...TASK_PAIR_LIMITS, maxRuns: 3, maxBatchCostUsd: 0.09 });
+export const SWE_TASK_CONFIGURATION = Object.freeze({
+	...TASK_PAIR_CONFIGURATION,
+	profile: SWE_TASK_PROFILE,
+	instanceId: "astropy__astropy-13033",
+	baseCommit: "298ccb478e6bf092953bca67a3d29dc6c35f6752",
+	problemSha256: "a295c83e68ff62290947b0796b75659b94621b7f2340d6f0055512d04be3f1d1",
+	cells: SWE_TASK_CELLS.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+	moduleTools: { off: [], v1: ["enhanced_task_get"], v2: ["enhanced_task_get", "enhanced_task_plan_update"] },
+	limits: SWE_TASK_LIMITS,
+});
 export function batchLPrompt(cell: ControlledCell): string {
 	const common =
 		"工作目录就是项目根目录，请只在当前工作区内操作，不访问父目录。保留公开 API，不修改测试或参考资料。只读服务可能未启用，参考资料始终可通过文件工具读取。";

@@ -203,6 +203,35 @@ export function officialOutcome(report: unknown, id: string, timeout = false) {
 	return found[0]?.[1] ?? "not_run";
 }
 
+/** Join only a matching exported patch to official scoring; an Agent exit code is never a benchmark score. */
+export function assessSwePrediction(
+	agent: Record<string, unknown>,
+	prediction: { instance_id: string; model_patch: string },
+	status: string,
+) {
+	if (
+		agent.instanceId !== prediction.instance_id ||
+		agent.patchExportStatus !== "exported" ||
+		agent.patchSha256 !== sha(prediction.model_patch) ||
+		!["resolved", "unresolved", "not_run", "timeout", "evaluation_error", "environment_blocked"].includes(status)
+	)
+		throw new Error("SWE_AGENT_PREDICTION_BINDING_INVALID");
+	return {
+		instanceId: agent.instanceId,
+		agentCommit: agent.agentCommit ?? "unknown",
+		runId: agent.runId ?? "unknown",
+		taskMode: agent.taskMode,
+		evaluationClass: agent.evaluationClass,
+		evaluationProtocol: SWE_EVALUATION_PROTOCOL,
+		patchSha256: agent.patchSha256,
+		agentCompleted: agent.agentCompleted === true,
+		auditComplete: agent.auditComplete === true,
+		officialHarnessStatus: status,
+		resolved: status === "resolved" ? true : status === "unresolved" ? false : null,
+		evaluationAccepted: status === "resolved" && agent.agentCompleted === true && agent.auditComplete === true,
+	};
+}
+
 /** One isolated invocation. The operator passes a fixed evaluator-only data file and records preflight separately. */
 export function harnessCommand(input: {
 	id: string;
@@ -327,12 +356,15 @@ function runOfficialHarness() {
 	const dataset = arg("--parquet");
 	const output = arg("--output-dir");
 	const predictionPath = arg("--prediction");
+	const agentResultPath = arg("--agent-result");
 	if (
 		!checkout ||
 		!dataset ||
 		!output ||
 		![checkout, dataset, output].every(isAbsolute) ||
-		(row.role === "gold" ? predictionPath !== undefined : !predictionPath || !isAbsolute(predictionPath))
+		(row.role === "gold"
+			? predictionPath !== undefined || agentResultPath !== undefined
+			: !predictionPath || !isAbsolute(predictionPath) || !agentResultPath || !isAbsolute(agentResultPath))
 	)
 		throw new Error("SWE_HARNESS_PATHS_REQUIRED");
 	if (git(checkout, ["rev-parse", "HEAD"]).trim() !== SWE_HARNESS_COMMIT || git(checkout, ["status", "--porcelain"]))
@@ -347,6 +379,14 @@ function runOfficialHarness() {
 	if (predictionPath && lstatSync(predictionPath).size > 300_000) throw new Error("SWE_PREDICTION_TOO_LARGE");
 	const prediction = predictionPath ? JSON.parse(readFileSync(predictionPath, "utf8")) : null;
 	if (
+		agentResultPath &&
+		(lstatSync(agentResultPath).size > 4 * 1024 * 1024 || realpathSync(agentResultPath) !== agentResultPath)
+	)
+		throw new Error("SWE_AGENT_RESULT_UNTRUSTED");
+	const agent = agentResultPath
+		? (JSON.parse(readFileSync(agentResultPath, "utf8")) as Record<string, unknown>)
+		: null;
+	if (
 		prediction &&
 		(Object.keys(prediction).sort().join(",") !== "instance_id,model_name_or_path,model_patch" ||
 			prediction.instance_id !== row.instance_id ||
@@ -355,6 +395,12 @@ function runOfficialHarness() {
 			!prediction.model_patch.trim())
 	)
 		throw new Error("SWE_PREDICTION_INVALID");
+	if (agent && prediction) {
+		assessSwePrediction(agent, prediction, "not_run");
+		const rel = relative(realpathSync(dirname(agentResultPath!)), resolve(output));
+		if (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`))
+			throw new Error("SWE_EVALUATOR_OUTPUT_IN_AGENT_OUTPUT");
+	}
 	const command = harnessCommand({
 		id: row.instance_id,
 		datasetPath: join(output, "verified-one.json"),
@@ -394,7 +440,16 @@ function runOfficialHarness() {
 	writeFileSync(join(output, "verified-one.json"), selection, { flag: "wx", mode: 0o600 });
 	if (prediction)
 		writeFileSync(join(output, "predictions.jsonl"), `${JSON.stringify(prediction)}\n`, { flag: "wx", mode: 0o600 });
-	writeFileSync(join(output, "invocation.json"), JSON.stringify({ ...record, ...command }, null, 2), { flag: "wx" });
+	const provenance = prediction
+		? {
+				predictionSha256: sha(readFileSync(predictionPath!)),
+				patchSha256: sha(prediction.model_patch),
+				agentResultSha256: sha(readFileSync(agentResultPath!)),
+			}
+		: {};
+	writeFileSync(join(output, "invocation.json"), JSON.stringify({ ...record, ...command, ...provenance }, null, 2), {
+		flag: "wx",
+	});
 	let failure: string | null = null;
 	try {
 		execFileSync("python", command.args, { cwd: output, env, timeout: 3_600_000, stdio: "inherit" });
@@ -409,6 +464,7 @@ function runOfficialHarness() {
 		JSON.stringify(
 			{
 				...record,
+				...provenance,
 				runId: command.runId,
 				status,
 				evaluationClass: prediction ? "official_harness_prediction" : "gold_environment_probe",
@@ -419,6 +475,12 @@ function runOfficialHarness() {
 		),
 		{ flag: "wx" },
 	);
+	if (agent && prediction)
+		writeFileSync(
+			join(output, "assessment.json"),
+			JSON.stringify(assessSwePrediction(agent, prediction, status), null, 2),
+			{ flag: "wx" },
+		);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runOfficialHarness();

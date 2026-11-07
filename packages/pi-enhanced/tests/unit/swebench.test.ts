@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { digest } from "../../benchmarks/real-agent/batch-l-profile.ts";
+import { saveRunReport } from "../../benchmarks/real-agent/runner-results.ts";
 import {
+	assessSwePrediction,
 	exportSwePrediction,
 	harnessCommand,
 	officialOutcome,
@@ -14,6 +17,67 @@ import {
 } from "../../benchmarks/real-agent/swebench.ts";
 
 describe("SWE-bench Verified adapter", () => {
+	it("keeps real SWE output separate from the historical P5 report", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-swe-output-"));
+		try {
+			mkdirSync(join(dir, "docs"));
+			const legacy = join(dir, "docs/p5-real-model-results.json");
+			writeFileSync(legacy, "historical evidence");
+			saveRunReport(
+				{
+					execute: true,
+					variant: "baseline",
+					condition: "cold",
+					telemetryEnabled: true,
+					packageRoot: dir,
+					runOutput: dir,
+					batchL: false,
+					swebench: true,
+				},
+				[{ agentAttempted: true, status: "not_run", agentCompleted: true, resolved: null }],
+				0,
+			);
+			expect(readFileSync(legacy, "utf8")).toBe("historical evidence");
+			expect(JSON.parse(readFileSync(join(dir, "run.json"), "utf8")).summary).toMatchObject({
+				run: 1,
+				passed: 0,
+				normallyCompleted: 1,
+				notRun: 0,
+			});
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	it("binds official scores to the exported patch independently of Agent completion", () => {
+		const prediction = { instance_id: "org__project-1", model_patch: "safe patch" };
+		const agent = {
+			instanceId: prediction.instance_id,
+			patchExportStatus: "exported",
+			patchSha256: digest(prediction.model_patch),
+			agentCompleted: false,
+			auditComplete: false,
+		};
+		for (const status of ["resolved", "unresolved", "not_run", "timeout", "evaluation_error"])
+			expect(assessSwePrediction(agent, prediction, status)).toMatchObject({
+				officialHarnessStatus: status,
+				resolved: status === "resolved" ? true : status === "unresolved" ? false : null,
+				agentCompleted: false,
+				auditComplete: false,
+				evaluationAccepted: false,
+			});
+		expect(
+			assessSwePrediction({ ...agent, agentCompleted: true, auditComplete: true }, prediction, "resolved")
+				.evaluationAccepted,
+		).toBe(true);
+		for (const invalid of [
+			{ ...agent, instanceId: "other" },
+			{ ...agent, patchSha256: "0".repeat(64) },
+			{ ...agent, patchExportStatus: "not_exported" },
+		])
+			expect(() => assessSwePrediction(invalid, prediction, "resolved")).toThrow(
+				"SWE_AGENT_PREDICTION_BINDING_INVALID",
+			);
+	});
 	it("measures the configured Docker disk after migration and refuses a missing configured disk", () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-docker-storage-"));
 		const local = join(root, "local");

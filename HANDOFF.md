@@ -515,3 +515,11 @@
 - 最终源码整轮 TS 268 项：265 passed/0 failed/3 skipped，Python 新跑15/15。五项 SWE 实际运行；旧266和版本基线243的测试身份均无丢失。类型/工程检查8项、22文件Biome、离线构建、候选Docker smoke通过。证据 .artifacts/swebench-task-v2/final-acceptance-20261107/。首轮 Docker 未启动/包目录启动的失败、代码收口期间的中间回归及额外候选副本调试失败均单独保留，不拼接为最终统计。
 - 7ceae806 直接继承上次用户确认通过 CI 的 82afedb54，两提交之间只有6行 HANDOFF；12个关键安全文件在工作树与82af逐字节一致。现有42项用户文档删除及75个历史保护文件保持。候选29文件含此前未提交实现、本轮必要修正和3份核心报告，排除历史报告/数据/密钥/数据库/session/运行产物，暂存区为空。
 - Gold 控制容器无直接凭据环境变量或私有挂载，但共享 Docker socket 具有宿主数据访问能力，不能声称完全隔离；更强隔离需要无凭据的专用评测宿主/daemon。历史第三方导入是否加载凭据仍为unknown。真实 SWE入口仍SWE_STUB_ONLY，旧两格授权不适用，未来需在原授权链补齐SWE范围及真实输出边界。三组Pilot仅提出每组12请求/80,000Token/$0.03/180秒、总$0.09的新待审方案，没有授权或执行。
+
+## 2026-11-07 SWE 三模式真实准入适配
+
+- 基线0ba05f641（CI Run42356930905三项通过）；在现有 Task Pair 授权协议/批次执行器中补齐 swe-task-v1，不新增 Runner/授权框架。固定13033、Commit/配置/CI/模式输入、输出身份、24h有效期及wx一次性消费；每格首个上游请求前匹配指纹，严格停止不放宽。
+- 用户本轮已明确批准新$0.09：OFF→V1→V2各一次、每格12请求/80kToken/$0.03/180s、不重试。当前未读真实Key、未调用模型、未创建grant；必须先取得新源码提交/推送授权及新Commit三项CI。
+- 实际修复真实SWE标签、独占输出与历史P5 writer隔离；保存脱敏Agent JSONL、审计和安全部分Patch。官方入口增加--agent-result，按实例/Patch SHA绑定独立assessment，不把Agent完成或Stub当resolved。
+- 最终全量TS 270/0/3（总273，旧268身份无丢失），Python15/15；类型/工程8、Biome13文件0诊断、离线build/pack扫描通过。新生产三模式Stub校准/匹配/失配拒绝实跑，旧五项SWE和安全回归保留。详细证据.artifacts/swe-pilot-admission/；三份原swebench-task-v2报告更新，不新增核心报告。
+- 原42项文档删除及75个历史保护文件不变。新源码CI未运行，状态pending_remote_authorization。官方可信控制容器共享Docker socket的限制及历史dotenv未知事实保持；停止等待精确清单Git授权。

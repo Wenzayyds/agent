@@ -1,16 +1,167 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { TASK_PAIR_INSTRUCTIONS } from "../../benchmarks/real-agent/batch-l-profile.ts";
+import {
+	SWE_TASK_CONFIGURATION,
+	SWE_TASK_PROFILE,
+	TASK_PAIR_INSTRUCTIONS,
+} from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
+import { loadSweTask } from "../../benchmarks/real-agent/swebench.ts";
+import { readSweModeInputs, type TaskPairInput } from "../../benchmarks/real-agent/task-pair-authorization.ts";
 import { assertIsolatedMount, close, startStubProvider, textSse, toolCallSse } from "../fixtures/runner-support.ts";
 
 const root = resolve(import.meta.dirname, "../../../..");
 const docker =
 	spawnSync("docker", ["image", "inspect", CONTROLLED_IMAGE], { stdio: "ignore", timeout: 10000 }).status === 0;
+it.skipIf(!docker || !process.env.PI_ENHANCED_SWE_LOCAL_MIRROR)(
+	"runs the SWE three-mode batch through production admission and stops before a mismatched upstream request",
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-swe-batch-"));
+		const task = loadSweTask(SWE_TASK_CONFIGURATION.instanceId, process.env.PI_ENHANCED_SWE_LOCAL_MIRROR!);
+		const path = "astropy/__init__.py";
+		const source = execFileSync("git", ["-C", task.mirror, "show", `${task.issue.base_commit}:${path}`], {
+			encoding: "utf8",
+		});
+		const old = source.split(/\r?\n/u).find((line) => line.trim().length >= 16 && source.split(line).length === 2)!;
+		let calls = 0;
+		const provider = await startStubProvider((body, response) => {
+			calls++;
+			const tools = (body.messages as Array<{ role: string }>).filter((message) => message.role === "tool");
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end(
+				tools.length
+					? textSse("Stub done.", 100, 10)
+					: toolCallSse(
+							"edit",
+							{ path, edits: [{ oldText: old, newText: `${old}\n# Stub transport only.` }] },
+							100,
+							10,
+						),
+			);
+		});
+		try {
+			const run = async (id: string, expected?: string) => {
+				const child = spawn(
+					process.execPath,
+					[
+						"--experimental-strip-types",
+						join(root, "packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts"),
+						"--execute",
+						"--comparison-profile",
+						SWE_TASK_PROFILE,
+						"--swebench-id",
+						task.issue.instance_id,
+						"--swebench-mirror",
+						task.mirror,
+						"--batch-id",
+						id,
+						"--output-dir",
+						dir,
+						"--local-stub-url",
+						provider.url,
+						...(expected ? ["--task-pair-expected-input", expected] : []),
+					],
+					{
+						cwd: root,
+						windowsHide: true,
+						stdio: ["ignore", "ignore", "pipe"],
+						env: {
+							PATH: process.env.PATH,
+							SystemRoot: process.env.SystemRoot,
+							TEMP: process.env.TEMP,
+							TMP: process.env.TMP,
+							HOME: process.env.HOME,
+							USERPROFILE: process.env.USERPROFILE,
+							PI_ENHANCED_REAL_MODEL_EVAL: "1",
+							PI_ENHANCED_LOCAL_STUB_EVAL: "1",
+							MOCK_PROVIDER_KEY: "mock-upstream-key",
+						},
+					},
+				);
+				let stderr = "";
+				child.stderr.on("data", (chunk) => {
+					stderr += String(chunk);
+				});
+				const code = await new Promise<number | null>((done, reject) => {
+					child.once("error", reject);
+					child.once("close", done);
+				});
+				expect(code, stderr).toBe(0);
+				return JSON.parse(readFileSync(join(dir, id, "batch.json"), "utf8"));
+			};
+			const captureId = "swe_task_capture";
+			const capture = await run(captureId);
+			expect(capture.stoppedReason).toBeNull();
+			expect(capture.cells.map((cell: { id: string }) => cell.id)).toEqual(["off", "v1", "v2"]);
+			const inputs = readSweModeInputs(
+				Object.fromEntries(
+					["off", "v1", "v2"].map((mode) => [
+						mode,
+						JSON.parse(
+							readFileSync(
+								join(dir, captureId, `${captureId}_${mode}`, "swebench/input-admission.json"),
+								"utf8",
+							),
+						).input,
+					]),
+				),
+			);
+			expect(new Set(Object.values(inputs).map((input) => input.toolSchemaSha256)).size).toBe(3);
+			const expected = join(dir, "expected.json");
+			writeFileSync(expected, JSON.stringify(inputs));
+			const matched = await run("swe_task_matched", expected);
+			expect(matched.stoppedReason).toBeNull();
+			expect(calls).toBe(12);
+			for (const batch of [capture, matched])
+				for (const cell of batch.cells) {
+					expect(cell.resultStatus).toBe("run");
+					expect(cell.result).toMatchObject({
+						status: "not_run",
+						officialHarnessStatus: "not_run",
+						resolved: null,
+						agentCompleted: true,
+						auditComplete: true,
+						patchExportStatus: "exported",
+						terminationClassification: "completed",
+					});
+					const resultDir = join(dir, batch.batchId, `${batch.batchId}_${cell.id}`, "swebench");
+					expect(readFileSync(join(resultDir, "agent.stdout.jsonl"), "utf8")).toContain("Stub done.");
+					expect(readFileSync(join(resultDir, "patch.diff"), "utf8")).toContain("Stub transport only");
+				}
+			const mismatched: Record<string, TaskPairInput> = {
+				...inputs,
+				v1: { ...inputs.v1, firstRequestSha256: "0".repeat(64) },
+			};
+			writeFileSync(expected, JSON.stringify(mismatched));
+			const denied = await run("swe_task_mismatch", expected);
+			expect(calls).toBe(14);
+			expect(denied.stoppedReason).toBe("task_pair_input_admission_failed");
+			expect(denied.cells.map((cell: { resultStatus: string }) => cell.resultStatus)).toEqual([
+				"run",
+				"stopped",
+				"not_run",
+			]);
+			expect(
+				JSON.parse(
+					readFileSync(join(dir, "swe_task_mismatch/swe_task_mismatch_v1/swebench/input-admission.json"), "utf8"),
+				),
+			).toMatchObject({ status: "denied", upstreamForwarded: false, previouslyForwarded: 0 });
+			if (process.env.PI_ENHANCED_BATCH_N_EVIDENCE)
+				writeFileSync(
+					join(process.env.PI_ENHANCED_BATCH_N_EVIDENCE, "swe-task-admission.json"),
+					JSON.stringify({ capture, matched, denied, inputs, stubRequests: calls }, null, 2),
+				);
+		} finally {
+			await close(provider.server);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	},
+	180_000,
+);
 describe.skipIf(!docker)("Batch N production telemetry", () => {
 	it.each(["complete", "request_limit", "strict_denial", "fingerprint_mismatch"])(
 		"runs only the Task pair through the Stub (%s)",

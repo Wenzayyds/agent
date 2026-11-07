@@ -1,14 +1,4 @@
 {
-  "schemaVersion": 1,
-  "baseCommit": "7ceae806eb21a03e90e78981f6c7660cd89198ac",
-  "branch": "pi-agent",
-  "taskSpecSha256": "1a0a67d55da918dc3352ea8aa23a3ce721178a7c453ce3af23a80ef58cc6d8a7",
-  "status": "offline_final_acceptance_complete_pilot_blocked",
-  "actualPaidModelRequests": 0,
-  "actualCostUsd": 0,
-  "newCommit": null,
-  "remoteCi": "configured_only",
-  "providerKeyRead": null,
   "upstream": {
     "swebench": {
       "commit": "726c5461e2ef52d83cf1ea2107870a8bb3328d57",
@@ -112,58 +102,12 @@
       "passToPassFailed": 0
     }
   },
-  "officialScore": null,
   "officialHarnessEnvironmentValidated": true,
   "agentToolImage": {
     "reference": "docker.io/library/node:20-alpine",
     "digest": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
     "verifiedByDockerE2E": true
   },
-  "stub": {
-    "classification": "deterministic_stub_only",
-    "actuallyExecutedCases": [
-      {
-        "identity": "exports an applicable non-Gold Stub patch for astropy__astropy-13033 in off",
-        "status": "passed"
-      },
-      {
-        "identity": "exports an applicable non-Gold Stub patch for astropy__astropy-13033 in v1",
-        "status": "passed"
-      },
-      {
-        "identity": "exports an applicable non-Gold Stub patch for astropy__astropy-13033 in v2",
-        "status": "passed"
-      },
-      {
-        "identity": "exports an applicable non-Gold Stub patch for astropy__astropy-13453 in off",
-        "status": "passed"
-      },
-      {
-        "identity": "exports an applicable non-Gold Stub patch for astropy__astropy-14365 in v2",
-        "status": "passed"
-      }
-    ],
-    "officialResolved": null,
-    "evidenceDirectory": ".artifacts/swebench-task-v2/final-acceptance-20261107/accepted-swe",
-    "effectivenessClaim": false
-  },
-  "futureRealExperiments": [
-    {
-      "mode": "off",
-      "instanceId": "astropy__astropy-13033",
-      "status": "not_run"
-    },
-    {
-      "mode": "v1",
-      "instanceId": "astropy__astropy-13033",
-      "status": "not_run"
-    },
-    {
-      "mode": "v2",
-      "instanceId": "astropy__astropy-13033",
-      "status": "not_run"
-    }
-  ],
   "taskV2": {
     "defaultEnabled": false,
     "hostAndProjectTrustRequired": true,
@@ -177,619 +121,171 @@
     "attributableAdditionalTokens": null,
     "processInterruptionRecoveryVerified": true
   },
+  "providerCredentialHandling": {
+    "status": "unknown_for_initial_third_party_import",
+    "reason": "Initial v5 compatibility import used upstream load_dotenv before it was disabled. Whether provider credentials were loaded into that child process is unknown; no values were printed or recorded. Subsequent Python probes and evaluator execution explicitly disable dotenv. No model API was called.",
+    "finalEvaluatorDotenvDisabled": true
+  },
+  "evaluationProtocol": "swebench_verified_source_restricted_v1",
+  "schemaVersion": 2,
+  "baseCommit": "0ba05f6418780dcb4e9cb3e696536c42cd8ae6ae",
+  "branch": "pi-agent",
+  "status": "pending_remote_authorization",
+  "actualPaidModelRequests": 0,
+  "actualCostUsd": 0,
+  "providerKeyRead": false,
+  "newCommit": null,
+  "remoteCi": "not_run_for_new_source",
+  "officialScore": null,
+  "previousCi": {
+    "commit": "0ba05f6418780dcb4e9cb3e696536c42cd8ae6ae",
+    "runId": 42356930905,
+    "jobs": {
+      "Windows": "success",
+      "Linux": "success",
+      "Docker": "success"
+    },
+    "evidence": ".artifacts/swebench-task-v2/commit-review-20261107/ci-verification.json"
+  },
   "tests": {
     "typescript": {
-      "numTotalTests": 268,
-      "numPassedTests": 265,
-      "numFailedTests": 0,
-      "numPendingTests": 3
+      "total": 273,
+      "passed": 270,
+      "failed": 0,
+      "skipped": 3
     },
-    "typescriptEvidence": ".artifacts/swebench-task-v2/final-acceptance-20261107/typescript-accepted.json",
     "python": {
       "passed": 15,
       "failed": 0,
-      "skipped": 0,
-      "evidence": ".artifacts/swebench-task-v2/final-acceptance-20261107/python-final.log"
+      "skipped": 0
     },
-    "skipped": [
-      {
-        "identity": "Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
-        "reason": "Linux-only mounted identity replacement"
-      },
-      {
-        "identity": "locked external MCP components negotiates with @upstash/context7-mcp@4.4.4 and reaches its query endpoint",
-        "reason": "External MCP opt-in is disabled"
-      },
-      {
-        "identity": "Serena 2.1.0 official Docker image finds a real symbol and its references through stdio MCP",
-        "reason": "External MCP opt-in is disabled"
-      }
-    ],
-    "baseline243Missing": [],
-    "previousFull266Missing": [],
+    "missingBaselineTestIdentities": [],
     "checks": [
       {
         "check": "check --workspace=@wz-agent/pi-enhanced",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-0.log"
       },
       {
         "check": "check:evaluation --workspace=@wz-agent/pi-enhanced",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-evaluation-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-1.log"
       },
       {
         "check": "check:pinned-deps",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-pinned-deps-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-2.log"
       },
       {
         "check": "check:runtime-deps",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-runtime-deps-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-3.log"
       },
       {
         "check": "check:ts-imports",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-ts-imports-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-4.log"
       },
       {
         "check": "check:entry-graphs",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-entry-graphs-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-5.log"
       },
       {
         "check": "check:install-lock:coding-agent",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-install-lock-coding-agent-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-6.log"
       },
       {
         "check": "check:browser-smoke",
         "exitCode": 0,
-        "log": ".artifacts\\swebench-task-v2\\final-acceptance-20261107\\check-browser-smoke-final.log"
+        "log": ".artifacts/swe-pilot-admission/check-7.log"
       }
     ],
-    "offlineBuild": {
-      "status": "passed",
-      "evidence": ".artifacts/swebench-task-v2/final-acceptance-20261107/build-final.log"
-    },
     "biome": {
-      "files": 22,
+      "checkedFiles": 13,
       "diagnostics": 0
     },
-    "dockerSmoke": {
-      "status": "passed",
-      "evidence": ".artifacts/swebench-task-v2/final-acceptance-20261107/docker-smoke.json"
-    },
-    "packageInstall": "passed in the full E2E run, including installed Sandbox and Python Worker",
-    "pack": {
-      "status": "passed",
-      "entries": 159,
-      "forbidden": 0,
-      "contentLeaks": 0,
-      "evidence": ".artifacts/swebench-task-v2/final-acceptance-20261107/pack-final.log"
-    },
-    "statisticsPolicy": "One complete final source run only. CI subset, smoke and prior runs are not added into the 268 identities.",
-    "intermediateRuns": [
-      {
-        "evidence": "typescript.json",
-        "result": "215 passed/2 failed/51 skipped",
-        "reason": "Docker was stopped and invocation used the package directory; root-relative crash fixtures could not launch."
-      },
-      {
-        "evidence": "typescript-final.json",
-        "result": "264 passed/1 failed/3 skipped",
-        "reason": "Intermediate run while source/build closeout was still in progress. Batch L input audit missing once. The exact transient cause was not established; the final frozen full run passed it."
-      },
-      {
-        "evidence": "batch-l-reproduction.log",
-        "result": "Current source case passed; an unbuilt archived candidate copy also matched the debug filter and failed. Final commands exclude all .artifacts."
-      }
+    "offlineBuild": "passed",
+    "packScan": "passed",
+    "evidenceDirectory": ".artifacts/swe-pilot-admission"
+  },
+  "stub": {
+    "classification": "simulated_provider_real_runner_task",
+    "officialResolved": null,
+    "effectivenessClaim": false,
+    "threeModeAdmission": {
+      "capture": "passed",
+      "matched": "passed",
+      "v1Mismatch": "blocked_before_upstream",
+      "followingV2": "not_run",
+      "stubForwardedRequests": 14
+    }
+  },
+  "authorization": {
+    "status": "budget_approved_ci_and_host_grant_pending",
+    "profile": "swe-task-v1",
+    "instanceId": "astropy__astropy-13033",
+    "order": [
+      "off",
+      "v1",
+      "v2"
+    ],
+    "model": "deepseek-flash",
+    "maxRequestsPerCell": 12,
+    "maxTokensPerCell": 80000,
+    "maxCostUsdPerCell": 0.03,
+    "timeoutMsPerCell": 180000,
+    "maxBatchCostUsd": 0.09,
+    "retry": false,
+    "recovery": "strict",
+    "grantCreated": false,
+    "scope": [
+      "source commit",
+      "configuration digest",
+      "per-mode first-wire fingerprints",
+      "CI run",
+      "batch and output identity",
+      "expiry <=24h",
+      "single-use ordered cell claims"
     ]
   },
-  "candidatePaths": [
+  "futureRealExperiments": [
     {
-      "path": ".github/workflows/pi-enhanced-ci.yml",
-      "sha256": "38f3a9b5b99c5bb963d4d3bef594502ab25729ac0954158925a07499e845af7a"
+      "mode": "off",
+      "status": "not_run",
+      "agentCompleted": null,
+      "patchSha256": null,
+      "officialHarnessStatus": "not_run",
+      "resolved": null
     },
     {
-      "path": "HANDOFF.md",
-      "sha256": "6c1e7b35c67877119f2ee1ef0140319c60060e5308486379b54133123811de5a"
+      "mode": "v1",
+      "status": "not_run",
+      "agentCompleted": null,
+      "patchSha256": null,
+      "officialHarnessStatus": "not_run",
+      "resolved": null
     },
     {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/batch-l-tools.ts",
-      "sha256": "628373b8d165e089567d3065835c1932145f0cffe1c95847474c7837bf9ef495"
-    },
-    {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/evaluation-telemetry.ts",
-      "sha256": "e999e7fa07b098ab8b06c83a8535b93511e6467da8598dd8fcf60f0a335d2c95"
-    },
-    {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/run-real-agent.ts",
-      "sha256": "fe3b3280591372a7106d59368e7c25a6fde09362cfcd5e9cb9affc62d1e3ff57"
-    },
-    {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/runner-execution.ts",
-      "sha256": "6f432333f156d53256c1cdd4cdb72fdb7be2de3bc16523ec6fbcb12cd3b0410a"
-    },
-    {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/runner-preparation.ts",
-      "sha256": "fe6487ff651bcd3c49c676e13726c5b345b97318c9521e5cdf0ce6a92e8937a9"
-    },
-    {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/runner-results.ts",
-      "sha256": "486acd7416abcee5d46ae2cccc489694e93be17ea395c1288ac57930d5416539"
-    },
-    {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/swebench-verified.json",
-      "sha256": "1c56acb719af8f90c23e1c76c2f187af60a86e6e62228bc697721fbef47621f5"
-    },
-    {
-      "path": "packages/pi-enhanced/benchmarks/real-agent/swebench.ts",
-      "sha256": "85ac7bf568344c89d78bd7d3900b5272e56be4c9f1663a44943ed9c0c8a0820c"
-    },
-    {
-      "path": "packages/pi-enhanced/scripts/ci/require-docker-evidence.ts",
-      "sha256": "d6ca8e97fb09b90181be887132272d0412a3f3f666b7195090b67db04d379a9d"
-    },
-    {
-      "path": "packages/pi-enhanced/src/sandbox/config.ts",
-      "sha256": "d5b662edad6f685b19ef627e602f267a3783f4cde0402d1fd064cc6a88a91656"
-    },
-    {
-      "path": "packages/pi-enhanced/src/sandbox/extension.ts",
-      "sha256": "e1c42231fa0ed41b37971e2f8c8fa8e4cafc7420bdd34267ca42c7731235c480"
-    },
-    {
-      "path": "packages/pi-enhanced/src/shared/config.ts",
-      "sha256": "7921a388b22dd9243ddd381c1dc54d49cf66e47053c6f5864ed46caef1f8793e"
-    },
-    {
-      "path": "packages/pi-enhanced/src/task-manager/config.ts",
-      "sha256": "fe4e22b4a289292db68e109aa3192c5562b1b47f73c0df4a1d2e945bfef47fbd"
-    },
-    {
-      "path": "packages/pi-enhanced/src/task-manager/extension.ts",
-      "sha256": "087014b6fa49ef2dce711fd55a24adf25631d80377c19b8da9acdc91e8cd70c4"
-    },
-    {
-      "path": "packages/pi-enhanced/src/task-manager/provider.ts",
-      "sha256": "96bd35c73b356a9ec2a51d193de5ae6137f0e08b2b681061ccb88a68788f1199"
-    },
-    {
-      "path": "packages/pi-enhanced/src/task-manager/runtime.ts",
-      "sha256": "8c41eeb680e5db899365e2dec65f92967afeb7e2e466d4677c79db6d77f07519"
-    },
-    {
-      "path": "packages/pi-enhanced/src/task-manager/v2.ts",
-      "sha256": "ed1546347e10c36fcdbf69efe4538473d38433623f39be6c0e7d19eefd3d0925"
-    },
-    {
-      "path": "packages/pi-enhanced/tests/e2e/swebench-stub.test.ts",
-      "sha256": "d74dfb9b53c6d137540c3eeb4c02a803d8720e6a3ca67d42deef1544600a2cb5"
-    },
-    {
-      "path": "packages/pi-enhanced/tests/e2e/task-crash-recovery.test.ts",
-      "sha256": "c3555f2bea98f2fb2f3475eb017412abb236b0ecb9f158c000377567617b651c"
-    },
-    {
-      "path": "packages/pi-enhanced/tests/fixtures/task-crash-child.ts",
-      "sha256": "02639291072c1e0f6864ff67a4ce43e28bdc00b1c788d3d066761b8c4638687a"
-    },
-    {
-      "path": "packages/pi-enhanced/tests/unit/docker-ci-evidence.test.ts",
-      "sha256": "82b082ed5632c4d6a95e5a037a89fc4319018c4a488d56bcf8e1776aa356b458"
-    },
-    {
-      "path": "packages/pi-enhanced/tests/unit/swebench.test.ts",
-      "sha256": "3f8635f2aa231dcff3a6682b5c91d8233f2b214545021cc28a7ea70ad2cd82db"
-    },
-    {
-      "path": "packages/pi-enhanced/tests/unit/task-v2.test.ts",
-      "sha256": "5fa312f6fa136beceaf270faf583e790c9876f65e3c444f4077c13b669d27f11"
-    },
-    {
-      "path": "packages/pi-enhanced/tsconfig.evaluation.json",
-      "sha256": "1844c34bcd2a7943b0cd5be9e9e5221aa6f0d099a59bc85d6226b0fa3d949ece"
+      "mode": "v2",
+      "status": "not_run",
+      "agentCompleted": null,
+      "patchSha256": null,
+      "officialHarnessStatus": "not_run",
+      "resolved": null
     }
-  ],
-  "localReports": [
-    "packages/pi-enhanced/docs/swebench-task-v2-design.md",
-    "packages/pi-enhanced/docs/swebench-task-v2-verification.md",
-    "packages/pi-enhanced/docs/swebench-task-v2-results.json"
   ],
   "historicalIntegrity": {
     "protectedCount": 75,
     "allHashesMatched": true,
     "existingDeletedDocs": 42
   },
-  "readiness": {
-    "readyForPaidPilot": false,
-    "realSWEApproved": false,
-    "blockers": [
-      "Final source Windows/Linux/Docker remote CI not run or authorized.",
-      "Existing SWE execution is Stub-only; no trusted three-mode SWE authorization scope exists.",
-      "Shared evaluator Docker socket is not complete host-data isolation; use a credential-free dedicated evaluator daemon/host for that boundary."
-    ],
-    "requiredBeforeRealActivation": [
-      "The current SWE collector labels predictions as stub; a real activation must give them truthful model/mode labels.",
-      "The generic real non-comparison report writer targets historical P5 docs; a real SWE activation must keep outputs exclusively in its run directory.",
-      "Patch export currently requires normal Agent completion and complete audit/telemetry; abnormal cases may have no exported patch. Record null/not_run, never invent a failed official grade or silently score a missing patch."
-    ]
-  },
-  "previousGoldPreflight": {
-    "status": "environment_blocked",
-    "evidence": ".artifacts/swebench-task-v2/gold-preflight.json"
-  },
-  "providerCredentialHandling": {
-    "status": "unknown_for_initial_third_party_import",
-    "reason": "Initial v5 compatibility import used upstream load_dotenv before it was disabled. Whether provider credentials were loaded into that child process is unknown; no values were printed or recorded. Subsequent Python probes and evaluator execution explicitly disable dotenv. No model API was called.",
-    "finalEvaluatorDotenvDisabled": true
-  },
-  "migration": {
-    "dockerDataDirectory": "F:/DockerDesktopWSL/disk",
-    "preflightEvidence": ".artifacts/swebench-task-v2/post-move-v4-preflight.json",
-    "diskGatePassed": true,
-    "harnessV5Compatibility": {
-      "status": "failed",
-      "reason": "KeyError: image",
-      "evidence": ".artifacts/swebench-task-v2/harness-v5-compatibility.log"
-    },
-    "nativeWindowsV4Import": {
-      "status": "failed",
-      "reason": "ModuleNotFoundError: resource",
-      "evidence": ".artifacts/swebench-task-v2/harness-v4-compatibility.log"
-    },
-    "officialExecution": "Unmodified official v4.1.0 CLI in dedicated native linux/amd64 evaluator container, using args from the production harnessCommand helper.",
-    "preliminaryArm64Setup": "Stopped before any Harness invocation; native amd64 container used for the single actual Gold run.",
-    "containerCleanupEvidence": ".artifacts/swebench-task-v2/evaluator-container-cleanup.log"
-  },
-  "evaluationProtocol": "swebench_verified_source_restricted_v1",
-  "finalAcceptance": {
-    "audit": {
-      "head": "7ceae806eb21a03e90e78981f6c7660cd89198ac",
-      "lastCiCommit": "82afedb54e1611e65643df46e970d358f52b8b14",
-      "reportedLastCiRunId": 41998332584,
-      "previousCiEvidence": "Existing task-real-paired-results.json and prior user-confirmed success; remote evidence was not fetched in this batch.",
-      "ancestryVerified": true,
-      "commitsSinceLastCi": [
-        "7ceae806eb21a03e90e78981f6c7660cd89198ac docs: record local workspace cleanup"
-      ],
-      "diffSinceLastCi": "HANDOFF.md | 6 ++++++\n 1 file changed, 6 insertions(+)",
-      "safetySourceIdentities": [
-        {
-          "path": "packages/pi-enhanced/benchmarks/real-agent/budget-gateway.ts",
-          "sha256": "2c45b866593442d371682ae7469bb9d60c7c0a7023a864633f1792949bfd786c",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/benchmarks/real-agent/gateway-integration.ts",
-          "sha256": "dea2e15822467f83f4a6f51714628244e98f93019c9804e6bc21acc865f46233",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/benchmarks/real-agent/controlled-policy.ts",
-          "sha256": "b55b6321f31e45f678bdf68167a1837ea3ae21df65a901a7e5488124facf177b",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/benchmarks/real-agent/task-pair-authorization.ts",
-          "sha256": "5023f5030b302cf0653a0a1975d75c2d3215348216ae32cb5a434e80816c7089",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/benchmarks/real-agent/docker-verifier.ts",
-          "sha256": "01d0ec543fe63c7af0c7e79e66296bd997f3d8702a544fe51f28fa510b6df109",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/src/mcp-policy/native-tool-guard.ts",
-          "sha256": "800ef1bc2a5a1a1e9b58757800ca0bab3e1f565888eb49a993a60d2f4ed8ef71",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/src/mcp-policy/policy.ts",
-          "sha256": "d29e78e25446d9c6486404c7f480187f3ea098bb866d9c4189db2cc74aa87e5b",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/src/sandbox/audit.ts",
-          "sha256": "e5c83b849872d15176a082d8c23a0f750201f3bb3147e5a1bd322f5759ac5f57",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/src/sandbox/broker.ts",
-          "sha256": "ddd6c17912aa5a30da3897cbbfd475062a76781fa0728f5d04cedb67d29ea861",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/src/sandbox/protocol.ts",
-          "sha256": "28b87d4c011bf7fc51f2bd63f0a66944b41f6347c94f51e9dc3978d5737e098c",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/src/sandbox/tools.ts",
-          "sha256": "841411961b56dd32d911ae27ce2597d7448bfcadaebb6b1a6973a25472e986bf",
-          "matchesLastCi": true
-        },
-        {
-          "path": "packages/pi-enhanced/src/sandbox/worker-source.ts",
-          "sha256": "d7577457e04191ac327176341cb1047595f35cedc66266fd370e82a1e1b776f1",
-          "matchesLastCi": true
-        }
-      ],
-      "workingSandboxChanges": "Only the existing default-off host Task plan capability and its tool guard integration; no filesystem mount/permission fallback changes.",
-      "workflow": {
-        "status": "configured_only",
-        "jobs": [
-          "offline-engineering",
-          "docker-isolation"
-        ],
-        "pinnedCommits": [
-          "298ccb478e6bf092953bca67a3d29dc6c35f6752",
-          "19cc80471739bcb67b7e8099246b391c355023ee",
-          "7269fa3e33e8d02485a647da91a5a2a60a06af61"
-        ],
-        "mirrorActuallyPrepared": true,
-        "expectedSweCases": 5,
-        "goldInCi": false
-      },
-      "permissions": {
-        "answerLocationAllowlist": false,
-        "policy": "Same tracked-source extension and metadata/test/credential exclusions for every instance; no issue-specific file allowlist.",
-        "protocol": "swebench_verified_source_restricted_v1",
-        "historicalAllowlistProvenance": "unknown; no auditable generation record was available"
-      },
-      "evaluator": {
-        "environmentKeys": [
-          "PYTHON_DOTENV_DISABLED",
-          "PYTHONUNBUFFERED",
-          "PATH",
-          "LANG",
-          "GPG_KEY",
-          "PYTHON_VERSION",
-          "PYTHON_SHA256"
-        ],
-        "mounts": [
-          {
-            "source": "/var/run/docker.sock",
-            "destination": "/var/run/docker.sock",
-            "readWrite": true
-          },
-          {
-            "source": "F:/项目代码/pi-agent/.artifacts/swebench-task-v2/harness-checkout",
-            "destination": "/harness",
-            "readWrite": false
-          },
-          {
-            "source": "F:/项目代码/pi-agent/.artifacts/swebench-task-v2/gold-linux-amd64",
-            "destination": "/evaluation",
-            "readWrite": true
-          }
-        ],
-        "directCredentialEnvironment": [],
-        "dotenvDisabled": true,
-        "dockerSocketPresent": true,
-        "strongHostDataIsolation": false,
-        "reason": "Shared Docker socket grants broad daemon authority. Direct mounts/environment exclude credentials, but a malicious trusted evaluator dependency could use the daemon to access host data. A credential-free dedicated evaluator daemon/host is required for that stronger claim.",
-        "historicalCredentialLoad": "unknown_for_initial_third_party_import"
-      }
-    },
-    "fairness": {
-      "equal": true,
-      "instanceId": "astropy__astropy-13033",
-      "common": {
-        "repositoryCommit": "298ccb478e6bf092953bca67a3d29dc6c35f6752",
-        "inputFixtureSha256": "7c48a2d6ae15e527b4233fde867702a4e6882fbc9e8a9e3f00df291ab7a03b9f",
-        "userPromptSha256": "a295c83e68ff62290947b0796b75659b94621b7f2340d6f0055512d04be3f1d1",
-        "canonicalSystemPromptSha256": "b34607791ff69e2f6d74dd49b96317acda1a7ff0e2b1010f586ad7cb5bc8051e",
-        "baseToolSchemaSha256": "961c0846b2761ecc9e70d2e48ff622d71487d387cffffdb92eba14f04eb93c6c",
-        "configuration": {
-          "provider": "deepseek",
-          "model": "deepseek-flash",
-          "maxRequests": 12,
-          "maxTokens": 80000,
-          "maxCostUsd": 0.03,
-          "timeoutMs": 180000,
-          "memory": false,
-          "context": false,
-          "thinking": "off"
-        },
-        "taskSeeded": false,
-        "evaluationProtocol": "swebench_verified_source_restricted_v1"
-      },
-      "wireBaseToolAndMaxOutputEquality": "asserted by the production Stub E2E before first reply; raw wire fingerprints were not persisted separately",
-      "groups": [
-        {
-          "mode": "off",
-          "tools": [
-            "read",
-            "grep",
-            "find",
-            "ls",
-            "write",
-            "edit"
-          ],
-          "fullToolSchemaSha256": "53190530f3623ff8bb98bfd807edf32403a199d99a5f8d5dd15e62700a60cecf",
-          "agentCompleted": true,
-          "auditComplete": true,
-          "patchExportStatus": "exported",
-          "officialHarnessStatus": "not_run",
-          "resolved": null,
-          "actualTaskUpdateMetadata": null,
-          "telemetrySource": "accepted-swe/swe_13033_off.json"
-        },
-        {
-          "mode": "v1",
-          "tools": [
-            "read",
-            "grep",
-            "find",
-            "ls",
-            "write",
-            "edit",
-            "enhanced_task_get"
-          ],
-          "fullToolSchemaSha256": "683971144c6223ad60d33a0c436e897fbd8ce67d007baec19d55375646a12be7",
-          "agentCompleted": true,
-          "auditComplete": true,
-          "patchExportStatus": "exported",
-          "officialHarnessStatus": "not_run",
-          "resolved": null,
-          "actualTaskUpdateMetadata": null,
-          "telemetrySource": "accepted-swe/swe_13033_v1.json"
-        },
-        {
-          "mode": "v2",
-          "tools": [
-            "read",
-            "grep",
-            "find",
-            "ls",
-            "write",
-            "edit",
-            "enhanced_task_get",
-            "enhanced_task_plan_update"
-          ],
-          "fullToolSchemaSha256": "27c8a3bd2bfe0dd870f43c3cbfa5205704e696b983fb3c1af459e51ae67380ab",
-          "agentCompleted": true,
-          "auditComplete": true,
-          "patchExportStatus": "exported",
-          "officialHarnessStatus": "not_run",
-          "resolved": null,
-          "actualTaskUpdateMetadata": {
-            "version": 2,
-            "updates": [
-              {
-                "toolCallId": "12de79417e8af91a61bdee9542a97771fe6b85a66e526f1596fecdad9733e761",
-                "state": "observing",
-                "revision": 4,
-                "planRevision": 1,
-                "planUpdates": 1,
-                "replans": 0,
-                "stallCount": 0,
-                "attemptCount": 0,
-                "requestSequence": 1
-              },
-              {
-                "toolCallId": "d92125c808cbe1c760764bbc2affc76d8143990dd61848d8552459c072b739ae",
-                "state": "observing",
-                "revision": 10,
-                "planRevision": 2,
-                "planUpdates": 2,
-                "replans": 1,
-                "stallCount": 0,
-                "attemptCount": 3,
-                "requestSequence": 5
-              }
-            ],
-            "notices": [
-              {
-                "state": "replan_requested",
-                "reason": "repeated_operation",
-                "revision": 7,
-                "replans": 0,
-                "stallCount": 3
-              }
-            ],
-            "additionalModelRequests": 0,
-            "additionalModelTokens": null
-          },
-          "telemetrySource": "accepted-swe/swe_13033_v2.json"
-        }
-      ],
-      "calibrationClass": "deterministic_stub_only_no_effectiveness_claim"
-    },
-    "dockerCiSubset": {
-      "numTotalTests": 100,
-      "numFailedTests": 0,
-      "numPendingTests": 1,
-      "gate": "CI_DOCKER_TESTS_NOT_ALL_PASSED",
-      "platform": "win32",
-      "skipped": [
-        "Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker"
-      ],
-      "remoteStatus": "configured_only"
-    },
-    "historicalIntegrity": {
-      "protectedFiles": 75,
-      "hashMismatches": [],
-      "userDeletedDocs": 42,
-      "unchanged": true
-    },
-    "goldEvidence": "Earlier official Gold result is retained unchanged; this batch did not rerun Gold or any real model.",
-    "resources": {
-      "harnessCommit": "726c5461e2ef52d83cf1ea2107870a8bb3328d57",
-      "datasetRevision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
-      "instanceId": "astropy__astropy-12907",
-      "baseCommit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
-      "role": "gold",
-      "preflight": {
-        "reasons": [],
-        "architecture": "x86_64",
-        "cpu": 24,
-        "memoryBytes": 16466989056,
-        "freeBytes": 146980249600,
-        "storage": "F:\\DockerDesktopWSL\\disk"
-      },
-      "officialResolved": null,
-      "imageDigest": null,
-      "status": "not_run"
-    }
-  },
-  "pilot": {
-    "status": "not_run",
-    "authorized": false,
-    "proposalOnly": true,
-    "instanceId": "astropy__astropy-13033",
-    "baseCommit": "298ccb478e6bf092953bca67a3d29dc6c35f6752",
-    "model": "deepseek-flash",
-    "order": [
-      "off",
-      "v1",
-      "v2"
-    ],
-    "perCell": {
-      "maxRequests": 12,
-      "maxTokens": 80000,
-      "maxGatewayCostUsd": 0.03,
-      "timeoutMs": 180000
-    },
-    "batchProposal": {
-      "maxRequests": 36,
-      "maxTokens": 240000,
-      "maxGatewayCostUsd": 0.09,
-      "maxRuns": 3,
-      "concurrency": 1,
-      "retries": 0
-    },
-    "entry": "packages/pi-enhanced/benchmarks/real-agent/run-real-agent.ts",
-    "currentRealEntryStatus": "blocked_before_credentials_by_SWE_STUB_ONLY",
-    "authorizationMechanism": "Reuse the existing host authorization and CI binding chain; no SWE-specific trusted scope is implemented yet. Do not reuse the historical synthetic Task pair grant.",
-    "memory": false,
-    "context": false,
-    "readonlyDenialPolicy": "strict",
-    "metrics": [
-      "official resolved/unresolved/error/timeout/not_run",
-      "patch and hash",
-      "agentCompleted",
-      "auditComplete",
-      "gateway requests/denials",
-      "per-request provider usage",
-      "gateway conservative cost; provider invoice unknown unless independently available",
-      "file tools",
-      "Task updates and replans"
-    ],
-    "interpretation": "One instance and one run per mode are exploratory paired observations. No population success-rate or module-benefit claim.",
-    "preActivationCodeReview": [
-      "The current SWE collector labels predictions as stub; a real activation must give them truthful model/mode labels.",
-      "The generic real non-comparison report writer targets historical P5 docs; a real SWE activation must keep outputs exclusively in its run directory.",
-      "Patch export currently requires normal Agent completion and complete audit/telemetry; abnormal cases may have no exported patch. Record null/not_run, never invent a failed official grade or silently score a missing patch."
-    ]
-  },
-  "candidateManifest": {
-    "path": ".artifacts/swebench-task-v2/final-acceptance-20261107/candidates.json",
-    "totalFiles": 29,
-    "staged": false
-  }
+  "candidateManifest": ".artifacts/swe-pilot-admission/candidates.json",
+  "limitations": [
+    "Source-restricted SWE protocol, not a standard full SWE-bench score.",
+    "V1 has no pre-seeded plan and only exposes read-only Task queries.",
+    "Trusted official evaluator controller shares a Docker socket; it is not complete host-data isolation. Historical initial third-party dotenv loading remains unknown.",
+    "No fresh source commit, remote CI, one-use host grant or paid trial executed in this batch."
+  ]
 }

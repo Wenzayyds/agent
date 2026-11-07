@@ -349,6 +349,7 @@ export function saveRunReport(
 		packageRoot: string;
 		runOutput?: string;
 		batchL: boolean;
+		swebench?: boolean;
 	},
 	results: Record<string, unknown>[],
 	observedCost: number,
@@ -406,7 +407,7 @@ export function saveRunReport(
 		Object.assign(report.summary, {
 			evaluationPassed: ran.filter((item) => item.evaluationAccepted === true).length,
 		});
-	if (!localStubUrl && !batchL)
+	if (!localStubUrl && !batchL && !options.swebench)
 		writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 	return report.summary;

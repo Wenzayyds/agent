@@ -8,6 +8,10 @@ import {
 	BATCH_L_LIMITS,
 	BATCH_L_PROFILE,
 	digest,
+	SWE_TASK_CELLS,
+	SWE_TASK_CONFIGURATION,
+	SWE_TASK_LIMITS,
+	SWE_TASK_PROFILE,
 	TASK_PAIR_CELLS,
 	TASK_PAIR_CONFIGURATION,
 	TASK_PAIR_LIMITS,
@@ -36,12 +40,23 @@ const stub = argument("--local-stub-url");
 const offlinePolicyPath = argument("--offline-denial-policy");
 const comparisonProfile = argument("--comparison-profile");
 const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
-const CONTROLLED_LIMITS = taskPair
-	? TASK_PAIR_LIMITS
-	: comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE
-		? BATCH_L_LIMITS
-		: LEGACY_CONTROLLED_LIMITS;
-if (comparisonProfile && ![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE].includes(comparisonProfile))
+const swe = comparisonProfile === SWE_TASK_PROFILE;
+const hostGrantProfile = taskPair || swe;
+const sweId = argument("--swebench-id");
+const sweMirror = argument("--swebench-mirror");
+if (swe && (sweId !== SWE_TASK_CONFIGURATION.instanceId || !sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
+if (!swe && (sweId || sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
+const CONTROLLED_LIMITS = swe
+	? SWE_TASK_LIMITS
+	: taskPair
+		? TASK_PAIR_LIMITS
+		: comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE
+			? BATCH_L_LIMITS
+			: LEGACY_CONTROLLED_LIMITS;
+if (
+	comparisonProfile &&
+	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE].includes(comparisonProfile)
+)
 	throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !stub)
 	throw new Error("BATCH_N_SEPARATE_AUTHORIZATION_REQUIRED");
@@ -49,16 +64,23 @@ const authorizationPath = argument("--batch-l-authorization");
 const taskPairPath = argument("--task-pair-authorization");
 const taskPairExpected = argument("--task-pair-expected-input");
 const ciPath = argument("--ci-evidence");
-if (taskPair && (authorizationPath || offlinePolicyPath)) throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
-if (taskPairPath && (!taskPair || stub)) throw new Error("TASK_PAIR_AUTHORIZATION_SCOPE_INVALID");
-if (taskPairExpected && (!taskPair || !stub)) throw new Error("TASK_PAIR_EXPECTED_INPUT_SCOPE_INVALID");
+if (hostGrantProfile && (authorizationPath || offlinePolicyPath)) throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
+if (taskPairPath && (!hostGrantProfile || stub)) throw new Error("TASK_PAIR_AUTHORIZATION_SCOPE_INVALID");
+if (taskPairExpected && (!hostGrantProfile || !stub)) throw new Error("TASK_PAIR_EXPECTED_INPUT_SCOPE_INVALID");
 const taskPairAuthorization =
-	taskPair && execute && !stub
-		? loadTaskPairAuthorization(taskPairPath, repositoryRoot, commit, batchId ?? "", ciPath)
+	hostGrantProfile && execute && !stub
+		? loadTaskPairAuthorization(
+				taskPairPath,
+				repositoryRoot,
+				commit,
+				batchId ?? "",
+				ciPath,
+				swe ? SWE_TASK_PROFILE : TASK_PAIR_PROFILE,
+			)
 		: undefined;
-const telemetryEnabled = taskPair || process.argv.includes("--evaluation-telemetry");
+const telemetryEnabled = hostGrantProfile || process.argv.includes("--evaluation-telemetry");
 const authorization =
-	comparisonProfile && !taskPair && execute && !stub
+	comparisonProfile && !hostGrantProfile && execute && !stub
 		? loadBatchLAuthorization(authorizationPath, repositoryRoot, commit, batchId ?? "")
 		: undefined;
 if (offlinePolicyPath && !stub) throw new Error("OFFLINE_DENIAL_POLICY_UNTRUSTED");
@@ -68,9 +90,12 @@ if (!execute) {
 			status: "not_run",
 			commit,
 			limits: CONTROLLED_LIMITS,
-			cells: taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
-			...(taskPair
-				? { configuration: TASK_PAIR_CONFIGURATION, configurationSha256: digest(TASK_PAIR_CONFIGURATION) }
+			cells: swe ? SWE_TASK_CELLS : taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
+			...(hostGrantProfile
+				? {
+						configuration: swe ? SWE_TASK_CONFIGURATION : TASK_PAIR_CONFIGURATION,
+						configurationSha256: digest(swe ? SWE_TASK_CONFIGURATION : TASK_PAIR_CONFIGURATION),
+					}
 				: {}),
 		}),
 	);
@@ -107,18 +132,20 @@ const batchDir = join(outputBase, batchId);
 mkdirSync(batchDir);
 if (authorization) claimBatchLAuthorization(authorizationPath!, authorization, batchDir);
 if (taskPairAuthorization) claimTaskPairAuthorization(taskPairPath!, taskPairAuthorization);
-const specs = taskPair
-	? TASK_PAIR_CELLS
-	: comparisonProfile
-		? [
-				CONTROLLED_CELLS[0],
-				CONTROLLED_CELLS[1],
-				CONTROLLED_CELLS[3],
-				CONTROLLED_CELLS[2],
-				CONTROLLED_CELLS[5],
-				CONTROLLED_CELLS[4],
-			]
-		: CONTROLLED_CELLS;
+const specs = swe
+	? SWE_TASK_CELLS
+	: taskPair
+		? TASK_PAIR_CELLS
+		: comparisonProfile
+			? [
+					CONTROLLED_CELLS[0],
+					CONTROLLED_CELLS[1],
+					CONTROLLED_CELLS[3],
+					CONTROLLED_CELLS[2],
+					CONTROLLED_CELLS[5],
+					CONTROLLED_CELLS[4],
+				]
+			: CONTROLLED_CELLS;
 const cells: Array<{
 	id: string;
 	status: string;
@@ -172,8 +199,9 @@ for (let index = 0; index < specs.length; index++) {
 		"--experimental-strip-types",
 		join(here, "run-real-agent.ts"),
 		"--execute",
-		"--controlled-cell",
-		spec.id,
+		...(swe
+			? ["--swebench-id", sweId!, "--swebench-mirror", sweMirror!, "--task-mode", spec.id]
+			: ["--controlled-cell", spec.id]),
 		"--run-id",
 		runId,
 		"--provider",
@@ -253,10 +281,22 @@ for (let index = 0; index < specs.length; index++) {
 			if (!stoppedReason && (!trace?.complete || trace.contextTelemetryComplete === false))
 				stoppedReason = "evaluation_telemetry_incomplete";
 		}
-		if (taskPair) {
+		if (hostGrantProfile) {
 			const admission = JSON.parse(readFileSync(join(batchDir, runId, spec.taskId, "input-admission.json"), "utf8"));
 			const input = readTaskPairInput(admission.input);
-			if (firstPairInput && !isDeepStrictEqual(firstPairInput, input))
+			if (
+				firstPairInput &&
+				!isDeepStrictEqual(
+					swe
+						? {
+								...firstPairInput,
+								toolSchemaSha256: input.toolSchemaSha256,
+								firstRequestSha256: input.firstRequestSha256,
+							}
+						: firstPairInput,
+					input,
+				)
+			)
 				stoppedReason = "task_pair_input_admission_failed";
 			firstPairInput ??= input;
 		}
@@ -264,7 +304,11 @@ for (let index = 0; index < specs.length; index++) {
 			const own = result.fairness as {
 				userPromptSha256: string;
 				inputFixtureSha256: string;
-				inputAudit: { toolSchemaSha256: string; canonicalSystemPromptSha256: string } | null;
+				inputAudit: {
+					toolSchemaSha256: string;
+					canonicalSystemPromptSha256: string;
+					baseToolSchemaSha256?: string;
+				} | null;
 			};
 			if (!own?.inputAudit) stoppedReason = "comparison_input_audit_missing";
 			const peerResult = cells
@@ -275,7 +319,10 @@ for (let index = 0; index < specs.length; index++) {
 				peer &&
 				(peer.userPromptSha256 !== own.userPromptSha256 ||
 					peer.inputFixtureSha256 !== own.inputFixtureSha256 ||
-					peer.inputAudit?.toolSchemaSha256 !== own.inputAudit?.toolSchemaSha256 ||
+					(!swe && peer.inputAudit?.toolSchemaSha256 !== own.inputAudit?.toolSchemaSha256) ||
+					(swe &&
+						(!own.inputAudit?.baseToolSchemaSha256 ||
+							peer.inputAudit?.baseToolSchemaSha256 !== own.inputAudit.baseToolSchemaSha256)) ||
 					peer.inputAudit?.canonicalSystemPromptSha256 !== own.inputAudit?.canonicalSystemPromptSha256)
 			)
 				stoppedReason = "comparison_fairness_mismatch";
@@ -286,7 +333,13 @@ for (let index = 0; index < specs.length; index++) {
 			)
 				stoppedReason = "comparison_fixture_commit_mismatch";
 		}
-		state.resultStatus = stoppedReason ? "stopped" : result.patchStatus === "passed" ? "passed" : "failed";
+		state.resultStatus = stoppedReason
+			? "stopped"
+			: swe
+				? "run"
+				: result.patchStatus === "passed"
+					? "passed"
+					: "failed";
 	} catch {
 		state.status = "evidence_error";
 		state.resultStatus = "stopped";

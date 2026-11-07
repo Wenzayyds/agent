@@ -3,7 +3,7 @@ import { type DockerTestReport, requireDockerEvidence } from "../../scripts/ci/r
 
 function report(): DockerTestReport {
 	return {
-		numTotalTests: 14,
+		numTotalTests: 15,
 		numFailedTests: 0,
 		numPendingTests: 0,
 		testResults: [
@@ -18,6 +18,9 @@ function report(): DockerTestReport {
 				name: `/repo/tests/e2e/${file}`,
 				assertionResults: [
 					"suite passes",
+					...(file === "batch-n-observability.test.ts"
+						? ["runs the SWE three-mode batch through production admission"]
+						: []),
 					...(file === "batch-j-runner.test.ts" ? ["enforces identity through real Pi"] : []),
 					...(file === "real-agent-runner-e2e.test.ts"
 						? ["keeps early-exit patch execution", "keeps isolated-attack patch execution"]
@@ -60,6 +63,9 @@ describe("Linux Docker CI evidence requirements", () => {
 		const missingCase = report();
 		missingCase.testResults[3]!.assertionResults.pop();
 		expect(() => requireDockerEvidence(missingCase)).toThrow("CASE_MISSING");
+		const missingAdmission = report();
+		missingAdmission.testResults[4]!.assertionResults.pop();
+		expect(() => requireDockerEvidence(missingAdmission)).toThrow("CASE_MISSING");
 	});
 	it("rejects a nominally green SWE suite with a missing or duplicated mode", () => {
 		const missing = report();

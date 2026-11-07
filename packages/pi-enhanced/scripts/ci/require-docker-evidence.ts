@@ -56,6 +56,7 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 		"enforces identity through real Pi",
 		"keeps early-exit patch execution",
 		"keeps isolated-attack patch execution",
+		"runs the SWE three-mode batch through production admission",
 	]) {
 		if (!assertions.some((test) => test.fullName.includes(name) && test.status === "passed"))
 			throw new Error(`CI_DOCKER_REQUIRED_CASE_MISSING:${name}`);

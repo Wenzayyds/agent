@@ -1,7 +1,15 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { digest, TASK_PAIR_CELLS, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
+import {
+	digest,
+	SWE_TASK_CELLS,
+	SWE_TASK_CONFIGURATION,
+	SWE_TASK_PROFILE,
+	TASK_PAIR_CELLS,
+	TASK_PAIR_CONFIGURATION,
+	TASK_PAIR_PROFILE,
+} from "./batch-l-profile.ts";
 import { verifyControlledCi } from "./controlled-policy.ts";
 
 export interface TaskPairInput {
@@ -17,7 +25,7 @@ export interface TaskPairAuthorization {
 	schemaVersion: 1;
 	status: "authorized";
 	authorizationId: string;
-	profile: typeof TASK_PAIR_PROFILE;
+	profile: typeof TASK_PAIR_PROFILE | typeof SWE_TASK_PROFILE;
 	commit: string;
 	batchId: string;
 	outputBase: string;
@@ -25,6 +33,7 @@ export interface TaskPairAuthorization {
 	ciRunId: number;
 	configurationSha256: string;
 	input: TaskPairInput;
+	modeInputs?: Record<"off" | "v1" | "v2", TaskPairInput>;
 }
 
 export function readTaskPairInput(value: unknown): TaskPairInput {
@@ -56,6 +65,7 @@ export function loadTaskPairAuthorization(
 	commit: string,
 	batchId: string,
 	ciPath: string | undefined,
+	expectedProfile: typeof TASK_PAIR_PROFILE | typeof SWE_TASK_PROFILE = TASK_PAIR_PROFILE,
 ): TaskPairAuthorization {
 	if (!path || !isAbsolute(path)) throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
 	const stat = lstatSync(path);
@@ -67,18 +77,21 @@ export function loadTaskPairAuthorization(
 	const now = Date.now();
 	if (
 		!grant ||
-		Object.keys(grant).length !== 11 ||
+		Object.keys(grant).length !== (expectedProfile === SWE_TASK_PROFILE ? 12 : 11) ||
 		grant.schemaVersion !== 1 ||
 		grant.status !== "authorized" ||
 		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(grant.authorizationId) ||
-		grant.profile !== TASK_PAIR_PROFILE ||
+		grant.profile !== expectedProfile ||
 		grant.commit !== commit ||
-		!/^task_pair_[a-z0-9_]{4,20}$/u.test(batchId) ||
+		!(expectedProfile === SWE_TASK_PROFILE ? /^swe_task_[a-z0-9_]{4,20}$/u : /^task_pair_[a-z0-9_]{4,20}$/u).test(
+			batchId,
+		) ||
 		grant.batchId !== batchId ||
 		!Number.isFinite(expiry) ||
 		expiry <= now ||
 		expiry > now + 86_400_000 ||
-		grant.configurationSha256 !== digest(TASK_PAIR_CONFIGURATION) ||
+		grant.configurationSha256 !==
+			digest(expectedProfile === SWE_TASK_PROFILE ? SWE_TASK_CONFIGURATION : TASK_PAIR_CONFIGURATION) ||
 		typeof grant.outputBase !== "string" ||
 		!isAbsolute(grant.outputBase) ||
 		realpathSync(grant.outputBase) !== grant.outputBase ||
@@ -89,6 +102,10 @@ export function loadTaskPairAuthorization(
 	)
 		throw new Error("TASK_PAIR_AUTHORIZATION_INVALID_OR_EXPIRED");
 	readTaskPairInput(grant.input);
+	if (expectedProfile === SWE_TASK_PROFILE) {
+		const inputs = readSweModeInputs(grant.modeInputs);
+		if (!isDeepStrictEqual(inputs.off, grant.input)) throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
+	}
 	if (!ciPath) throw new Error("CONTROLLED_CI_REQUIRED");
 	const ci = JSON.parse(readFileSync(ciPath, "utf8"));
 	verifyControlledCi(ci, commit);
@@ -106,26 +123,50 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 	if (realpathSync(outputDir) !== batchDir || readFileSync(`${path}.used`, "utf8") !== digest(grant))
 		throw new Error("TASK_PAIR_AUTHORIZATION_CLAIM_MISMATCH");
 	const batch = JSON.parse(readFileSync(join(batchDir, "batch.json"), "utf8"));
-	const index = TASK_PAIR_CELLS.findIndex((cell) => cell.id === cellId);
+	const cells = grant.profile === SWE_TASK_PROFILE ? SWE_TASK_CELLS : TASK_PAIR_CELLS;
+	const index = cells.findIndex((cell) => cell.id === cellId);
 	if (
 		index < 0 ||
 		batch.commit !== grant.commit ||
 		batch.batchId !== grant.batchId ||
-		batch.comparisonProfile !== TASK_PAIR_PROFILE ||
+		batch.comparisonProfile !== grant.profile ||
 		batch.authorization?.id !== grant.authorizationId ||
 		batch.stoppedReason !== null ||
 		!isDeepStrictEqual(
 			batch.cells?.map((cell: { id: string }) => cell.id),
-			TASK_PAIR_CELLS.map((cell) => cell.id),
+			cells.map((cell) => cell.id),
 		) ||
 		batch.cells[index]?.resultStatus !== "run" ||
-		(index === 0
-			? batch.cells[1]?.resultStatus !== "not_run"
-			: !["passed", "failed"].includes(batch.cells[0]?.resultStatus) ||
-				readFileSync(`${path}.used.${TASK_PAIR_CELLS[0].id}`, "utf8") !== digest(grant))
+		cells.some((cell, position) =>
+			position > index
+				? batch.cells[position]?.resultStatus !== "not_run"
+				: position < index &&
+					(!(grant.profile === SWE_TASK_PROFILE ? ["run"] : ["passed", "failed"]).includes(
+						batch.cells[position]?.resultStatus,
+					) ||
+						readFileSync(`${path}.used.${cell.id}`, "utf8") !== digest(grant)),
+		)
 	)
 		throw new Error("TASK_PAIR_CELL_ORDER_INVALID");
 	writeFileSync(`${path}.used.${cellId}`, digest(grant), { flag: "wx", mode: 0o600 });
+}
+
+/** Full schemas intentionally differ by mode; the issue, base, tree and system input must remain identical. */
+export function readSweModeInputs(value: unknown): Record<"off" | "v1" | "v2", TaskPairInput> {
+	if (!value || typeof value !== "object" || Object.keys(value).sort().join(",") !== "off,v1,v2")
+		throw new Error("SWE_MODE_INPUTS_INVALID");
+	const inputs = value as Record<"off" | "v1" | "v2", TaskPairInput>;
+	for (const mode of ["off", "v1", "v2"] as const) {
+		const input = readTaskPairInput(inputs[mode]);
+		if (
+			input.fixtureCommit !== SWE_TASK_CONFIGURATION.baseCommit ||
+			input.userPromptSha256 !== SWE_TASK_CONFIGURATION.problemSha256 ||
+			input.fixtureSha256 !== inputs.off.fixtureSha256 ||
+			input.systemPromptSha256 !== inputs.off.systemPromptSha256
+		)
+			throw new Error("SWE_MODE_INPUTS_MISMATCH");
+	}
+	return inputs;
 }
 
 function outside(root: string, path: string): boolean {
