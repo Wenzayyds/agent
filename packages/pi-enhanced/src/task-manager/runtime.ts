@@ -101,11 +101,20 @@ export class TaskRuntime {
 		if (!binding || !this.service) return;
 		const metadata = resultMetadata(event.result);
 		const state = event.isError ? "failed" : "succeeded";
+		let resultDigest = createHash("sha256").update(JSON.stringify(metadata)).digest("hex");
+		if (this.config.mode === "v2") {
+			const serialized = JSON.stringify(event.result) ?? "";
+			// Hash bounded observations without retaining tool output. Oversized results cannot prove repetition.
+			resultDigest =
+				Buffer.byteLength(serialized) <= 1024 * 1024
+					? createHash("sha256").update(serialized).digest("hex")
+					: "unknown";
+		}
 		const attempt = this.service.provider.endAttempt(
 			binding.taskId,
 			event.toolCallId,
 			state,
-			createHash("sha256").update(JSON.stringify(metadata)).digest("hex"),
+			resultDigest,
 			Date.now(),
 		);
 		if (!attempt) return;

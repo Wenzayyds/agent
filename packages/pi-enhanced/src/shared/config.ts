@@ -49,11 +49,21 @@ function readConfig(path: string, errors: string[]): ConfigPatch | undefined {
 			errors.push(`${path}: unknown module "${name}"`);
 			continue;
 		}
-		if (!isRecord(value) || typeof value.enabled !== "boolean") {
+		const enabled =
+			name === "task-manager" && isRecord(value) && ["off", "v1", "v2"].includes(String(value.mode))
+				? value.mode !== "off"
+				: isRecord(value)
+					? value.enabled
+					: undefined;
+		if (
+			!isRecord(value) ||
+			typeof enabled !== "boolean" ||
+			(name === "task-manager" && typeof value.enabled === "boolean" && value.enabled !== enabled)
+		) {
 			errors.push(`${path}: module "${name}" must contain a boolean "enabled" field`);
 			continue;
 		}
-		modules[name as EnhancedModuleName] = { enabled: value.enabled };
+		modules[name as EnhancedModuleName] = { enabled };
 	}
 	return { modules };
 }

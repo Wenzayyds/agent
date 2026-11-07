@@ -14,6 +14,7 @@ import { TaskError } from "./errors.ts";
 import { registerScopedTaskReaderBroker } from "./reader.ts";
 import { createCheckpoint, recoveryPreflight } from "./recovery.ts";
 import { branchLeaf, TaskRuntime } from "./runtime.ts";
+import { ownsModelPlan, progressLedger, registerTaskV2, TASK_V2_TOOL } from "./v2.ts";
 
 export interface TaskManagerExtensionOptions {
 	agentDir?: string;
@@ -27,6 +28,7 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 	let generation = 0;
 	let interactionsRegistered = false;
 	let unsubscribeReader: (() => void) | undefined;
+	let registerV2: () => void;
 	const start = async (ctx: ExtensionContext): Promise<void> => {
 		generation += 1;
 		const currentGeneration = generation;
@@ -69,6 +71,7 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 				sessionId: ctx.sessionManager.getSessionId(),
 			});
 		} else if (interactionsRegistered) registerTools(pi, () => runtime, false);
+		registerV2();
 	};
 
 	pi.on("session_start", async (_event, ctx) => start(ctx));
@@ -79,11 +82,13 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 		unsubscribeReader?.();
 		unsubscribeReader = undefined;
 		if (interactionsRegistered) registerTools(pi, () => runtime, false);
+		registerV2();
 		current?.close();
 	});
 	pi.on("session_tree", () => runtime?.service?.unbind());
 	pi.on("tool_execution_start", (event, ctx) => {
 		const current = runtime;
+		if (current?.config.mode === "v2" && [TASK_V2_TOOL, "enhanced_task_get"].includes(event.toolName)) return;
 		if (current) {
 			try {
 				current.onToolStart(event, ctx);
@@ -94,6 +99,7 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 	});
 	pi.on("tool_execution_end", (event, ctx) => {
 		const current = runtime;
+		if (current?.config.mode === "v2" && [TASK_V2_TOOL, "enhanced_task_get"].includes(event.toolName)) return;
 		if (current) {
 			try {
 				current.onToolEnd(event, ctx);
@@ -102,6 +108,7 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 			}
 		}
 	});
+	registerV2 = registerTaskV2(pi, () => runtime);
 	pi.on("agent_settled", () => {
 		/* settlement is deliberately not completion evidence */
 	});
@@ -366,12 +373,25 @@ function registerTools(pi: ExtensionAPI, getRuntime: RuntimeGetter, available: b
 			{ taskId: Type.String({ minLength: 1, maxLength: 100 }) },
 			{ additionalProperties: false },
 		),
-		execute: async (_id, input) => {
-			const snapshot = requireTask(ready(getRuntime()).get(input.taskId));
+		execute: async (_id, input, _signal, _update, ctx) => {
+			const runtime = getRuntime();
+			const service = ready(runtime);
+			const snapshot = requireTask(service.get(input.taskId));
+			const progress =
+				runtime?.config.mode === "v2" &&
+				ownsModelPlan(
+					service,
+					input.taskId,
+					ctx.sessionManager.getSessionId(),
+					ctx.sessionManager.getBranch().map((entry) => entry.id),
+				)
+					? progressLedger(service, snapshot)
+					: undefined;
 			const text = JSON.stringify(
 				{
 					task: snapshot.task,
 					steps: snapshot.steps,
+					...(progress ? { progress } : {}),
 					evidence: snapshot.evidence.map(({ evidenceId, stepId, kind, outcome, confidenceClass, sourceRef }) => ({
 						evidenceId,
 						stepId,
@@ -391,7 +411,8 @@ function registerTools(pi: ExtensionAPI, getRuntime: RuntimeGetter, available: b
 		name: "enhanced_task_propose_plan",
 		label: "Draft task plan",
 		description: "Create a review-required draft plan; it cannot approve, execute, verify, or complete",
-		exposure: available && getRuntime()?.config.modelPlanTool ? "direct" : "hidden",
+		exposure:
+			available && getRuntime()?.config.modelPlanTool && getRuntime()?.config.mode !== "v2" ? "direct" : "hidden",
 		parameters: Type.Object(
 			{
 				goal: Type.String({ minLength: 1, maxLength: 4_000 }),
@@ -411,7 +432,7 @@ function registerTools(pi: ExtensionAPI, getRuntime: RuntimeGetter, available: b
 		),
 		execute: async (_id, input, _signal, _update, ctx) => {
 			const runtime = getRuntime();
-			if (!runtime?.config.modelPlanTool)
+			if (!runtime?.config.modelPlanTool || runtime.config.mode === "v2")
 				throw new TaskError("TASK_RUNTIME_UNAVAILABLE", "Model plan proposals are disabled");
 			const snapshot = ready(runtime).create(
 				input.goal,

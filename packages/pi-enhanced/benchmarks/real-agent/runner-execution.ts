@@ -36,6 +36,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		observedCost,
 	} = context;
 	const { cwd, agentDir, seededTaskId, moduleTools, prompt } = prepared;
+	const controlled = Boolean(cell || task.swebench);
 	const { provider, model, apiKeyEnv } = plan;
 	const taskPair = context.comparisonProfile === TASK_PAIR_PROFILE;
 	if (taskPair && !localStubUrl && (!context.taskPairAuthorization || !context.taskPairExpected))
@@ -61,8 +62,10 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			PI_ENHANCED_SANDBOX_WORKSPACE: cwd,
 			PI_ENHANCED_SANDBOX_IMAGE: plan!.sandboxImage,
 			PI_ENHANCED_SANDBOX_REPORT_PATH: sandboxAuditPath,
-			PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools ? "1" : "0",
+			PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools || (task.swebench && switches.task) ? "1" : "0",
+			...(task.swebench && context.taskMode === "v2" ? { PI_ENHANCED_SANDBOX_TASK_PLAN_TOOL: "1" } : {}),
 			PI_ENHANCED_CONTEXT_REPORT_PATH: contextReportPath,
+			...(task.swebench ? { PI_ENHANCED_SWE_INPUT_AUDIT_ONLY: "1" } : {}),
 			...(batchL
 				? {
 						PI_ENHANCED_BATCH_L_MEMORY: switches.memory ? "1" : "0",
@@ -178,7 +181,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		pricing: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
 	});
 	writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));
-	if (cell) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
+	if (controlled) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
 	const cli = join(repositoryRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
 	const extensionArgs = [
 		"--extension",
@@ -186,7 +189,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		"--extension",
 		join(packageRoot, "extensions", "sandbox.ts"),
 	];
-	if (cell)
+	if (controlled)
 		extensionArgs.push(
 			"--extension",
 			join(
@@ -202,6 +205,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
 	if (batchL) extensionArgs.push("--extension", join(here, "batch-l-tools.ts"));
 	else if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
+	if (task.swebench) extensionArgs.push("--extension", join(here, "batch-l-tools.ts"));
 	const started = performance.now();
 	let gatewayStatus: BudgetGatewayStatus;
 	let child: Awaited<ReturnType<typeof runAgentProcess>>;
@@ -217,7 +221,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 				provider!,
 				"--model",
 				model!,
-				...(batchL ? ["--thinking", "off"] : []),
+				...(batchL || task.swebench ? ["--thinking", "off"] : []),
 				"--tools",
 				["read", "grep", "find", "ls", "write", "edit", ...moduleTools].join(","),
 				...extensionArgs,
@@ -237,7 +241,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 						}
 					: {}),
 				env: childEnvironment,
-				...(cell
+				...(controlled
 					? {
 							stopOnBoundaryFailure: () => {
 								const status = gateway.status();
@@ -249,7 +253,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		);
 	} finally {
 		gatewayStatus = gateway.status();
-		if (cell && !admissionDenied) {
+		if (controlled && !admissionDenied) {
 			const evidenceDir = join(runOutput!, task.id);
 			mkdirSync(evidenceDir, { recursive: true });
 			writeFileSync(
@@ -258,7 +262,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			);
 		}
 		await gateway.close();
-		if (cell) {
+		if (controlled) {
 			const prefix = `pi-enhanced-tools-${plan!.runId.slice(0, 50)}-${task.id}-`;
 			const ids = execFileSync("docker", ["ps", "-a", "--filter", `name=^/${prefix}`, "--format", "{{.ID}}"], {
 				encoding: "utf8",
@@ -279,7 +283,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	}
 	if (admissionDenied) throw new Error("TASK_PAIR_INPUT_ADMISSION_FAILED");
 	if (taskPair && forwarded === 0) throw new Error("TASK_PAIR_INPUT_NO_REQUEST");
-	const verification = await verifyPatchInDocker(task.id, verifierScope);
+	const verification = task.swebench ? null : await verifyPatchInDocker(task.id, verifierScope);
 	return { child, gatewayStatus, verification, telemetry, sandboxAuditPath, contextReportPath, started };
 }
 export type AgentExecution = Awaited<ReturnType<typeof executeAgent>>;

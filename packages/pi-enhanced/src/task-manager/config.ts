@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { getEnhancedConfigPaths } from "../shared/config.ts";
 
 export interface TaskManagerConfig {
+	mode?: "off" | "v1" | "v2";
+	hostV2Writes?: boolean;
 	enabled: boolean;
 	modelPlanTool: boolean;
 	contextSummary: boolean;
@@ -47,12 +49,13 @@ export function loadTaskManagerConfig(options: {
 		}
 		if (!isRecord(root) || !isRecord(root.modules) || root.modules["task-manager"] === undefined) continue;
 		const value = root.modules["task-manager"];
-		if (!isRecord(value) || typeof value.enabled !== "boolean") {
+		if (!isRecord(value) || (typeof value.enabled !== "boolean" && value.mode === undefined)) {
 			errors.push(`${path}: task-manager must contain a boolean enabled field`);
 			continue;
 		}
 		const allowed = new Set([
 			"enabled",
+			"mode",
 			"modelPlanTool",
 			"contextSummary",
 			"maximumTasks",
@@ -66,6 +69,15 @@ export function loadTaskManagerConfig(options: {
 			continue;
 		}
 		const candidate = { ...config, ...value } as Record<string, unknown>;
+		const mode = value.mode ?? (value.enabled === true ? "v1" : value.enabled === false ? "off" : config.mode);
+		if (
+			!["off", "v1", "v2"].includes(String(mode)) ||
+			(typeof value.enabled === "boolean" && value.enabled !== (mode !== "off")) ||
+			(mode === "v2" && path !== paths.global && !config.hostV2Writes)
+		) {
+			errors.push(`${path}: invalid task mode or missing host V2 approval`);
+			continue;
+		}
 		if (
 			typeof candidate.modelPlanTool !== "boolean" ||
 			typeof candidate.contextSummary !== "boolean" ||
@@ -77,7 +89,12 @@ export function loadTaskManagerConfig(options: {
 			errors.push(`${path}: task-manager limits or switches are invalid`);
 			continue;
 		}
-		Object.assign(config, candidate);
+		Object.assign(config, candidate, {
+			mode,
+			enabled: mode !== "off",
+			hostV2Writes:
+				mode === "v2" && (path === paths.global ? value.modelPlanTool === true : config.hostV2Writes === true),
+		});
 		sources.push(path);
 	}
 	if (errors.length > 0) config.enabled = false;

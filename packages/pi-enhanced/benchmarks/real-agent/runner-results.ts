@@ -39,6 +39,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		prompt,
 	} = prepared;
 	const { child, gatewayStatus, verification, telemetry, sandboxAuditPath, contextReportPath, started } = execution;
+	if (!verification) throw new Error("SYNTHETIC_VERIFIER_REQUIRED");
 	const apiKeyEnv = plan.apiKeyEnv;
 	const events = parseAgentEvents(child.stdout ?? "");
 	const agentReportedUsage = summarizeUsage(events);
@@ -356,10 +357,10 @@ export function saveRunReport(
 		options;
 	const provider = plan?.provider,
 		model = plan?.model;
-	const ran = results.filter((item) => item.status !== "not_run");
+	const ran = results.filter((item) => item.agentAttempted === true || item.status !== "not_run");
 	const outcomeSummary = {
 		patchPassed: ran.filter((item) => item.patchStatus === "passed").length,
-		normallyCompleted: ran.filter((item) => item.runStatus === "completed").length,
+		normallyCompleted: ran.filter((item) => item.agentCompleted === true || item.runStatus === "completed").length,
 		budgetStopped: ran.filter((item) => item.runStatus === "budget_stopped").length,
 	};
 	const report = {

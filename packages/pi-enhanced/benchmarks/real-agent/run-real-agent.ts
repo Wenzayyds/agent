@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
+import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
 import { claimBatchLCell, loadBatchLAuthorization } from "./batch-l-authorization.ts";
 import { BATCH_L_LIMITS, BATCH_L_PROFILE, TASK_PAIR_LIMITS, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import {
@@ -15,10 +16,12 @@ import {
 } from "./controlled-cases.ts";
 import { buildEvaluationPlan, preflightView } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
+import { gatewayEvidence } from "./gateway-integration.ts";
 import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
+import { exportSwePrediction, loadSweTask, SWE_EVALUATION_PROTOCOL } from "./swebench.ts";
 import { claimTaskPairCell, loadTaskPairAuthorization, readTaskPairInput } from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -29,7 +32,27 @@ async function main(): Promise<void> {
 	const execute = process.argv.includes("--execute");
 	const localStubUrl = argument("--local-stub-url");
 	const cell = controlledCell(argument("--controlled-cell"));
+	const sweId = argument("--swebench-id");
+	const sweMirror = argument("--swebench-mirror");
+	const taskMode = argument("--task-mode");
 	const comparisonProfile = argument("--comparison-profile");
+	if (sweId || sweMirror) {
+		if (
+			!sweId ||
+			!sweMirror ||
+			!execute ||
+			!localStubUrl ||
+			cell ||
+			comparisonProfile ||
+			argument("--offline-denial-policy") ||
+			argument("--condition") ||
+			argument("--variant") ||
+			argument("--api-key-env") !== "MOCK_PROVIDER_KEY"
+		)
+			throw new Error("SWE_STUB_ONLY");
+	}
+	if (taskMode && (!sweId || (taskMode !== "off" && taskMode !== "v1" && taskMode !== "v2")))
+		throw new Error("SWE_TASK_MODE_INVALID");
 	const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
 	if (comparisonProfile && ![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE].includes(comparisonProfile))
 		throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
@@ -44,7 +67,7 @@ async function main(): Promise<void> {
 		throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
 	if (taskPair && cell?.module !== "task") throw new Error("TASK_PAIR_INVALID_CELL");
 	const batchL = taskPair || comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE;
-	const telemetryEnabled = taskPair || process.argv.includes("--evaluation-telemetry");
+	const telemetryEnabled = Boolean(sweId) || taskPair || process.argv.includes("--evaluation-telemetry");
 	const experimentalLimits = taskPair ? TASK_PAIR_LIMITS : batchL ? BATCH_L_LIMITS : CONTROLLED_LIMITS;
 	if (batchL && !cell) throw new Error("BATCH_L_REAL_AUTHORIZATION_REQUIRED");
 	const authorizationBatchId = argument("--authorization-batch-id");
@@ -72,9 +95,19 @@ async function main(): Promise<void> {
 	const readonlyModuleTools =
 		batchL || (cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools"));
 	const taskId = cell?.taskId ?? argument("--task-id");
-	const selectedTasks = (
-		taskId ? [...manifest.tasks, LONG_REPORT_TASK].filter((task) => task.id === taskId) : manifest.tasks
-	).map((task) => (cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task));
+	const swebench = sweId && sweMirror ? loadSweTask(sweId, sweMirror) : undefined;
+	const selectedTasks: ExperimentTask[] = swebench
+		? [
+				{
+					id: "swebench",
+					category: "swebench_verified_stub",
+					prompt: swebench.issue.problem_statement,
+					swebench,
+				},
+			]
+		: (taskId ? [...manifest.tasks, LONG_REPORT_TASK].filter((task) => task.id === taskId) : manifest.tasks).map(
+				(task) => (cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task),
+			);
 	if (selectedTasks.length === 0) throw new Error("EVAL_UNKNOWN_TASK");
 	const input = {
 		runId: argument("--run-id"),
@@ -140,6 +173,18 @@ async function main(): Promise<void> {
 		if (existsSync(projectEnv)) loadEnvFile(projectEnv);
 	}
 	const plan = execute ? buildEvaluationPlan(input, process.env) : undefined;
+	if (
+		swebench &&
+		(!plan ||
+			plan.maxTasks !== 1 ||
+			plan.sandboxImage !== CONTROLLED_IMAGE ||
+			plan.budgetEnforcement !== "local_hard_gateway" ||
+			plan.maxCallsPerTask > 12 ||
+			plan.maxTokensPerTask > 80_000 ||
+			plan.maxTotalCostUsd > 0.03 ||
+			plan.timeoutMs > 180_000)
+	)
+		throw new Error("SWE_BUDGET_OR_SANDBOX_INVALID");
 	if (
 		authorization &&
 		plan &&
@@ -220,7 +265,9 @@ async function main(): Promise<void> {
 				plan: plan!,
 				cell,
 				batchL,
-				switches: variants[variant]!,
+				switches: swebench
+					? { memory: false, context: false, task: taskMode === "v1" || taskMode === "v2" }
+					: variants[variant]!,
 				condition,
 				readonlyModuleTools,
 				telemetryEnabled,
@@ -235,9 +282,80 @@ async function main(): Promise<void> {
 						? readTaskPairInput(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))
 						: undefined),
 				observedCost,
+				taskMode: swebench ? ((taskMode as "off" | "v1" | "v2" | undefined) ?? "off") : undefined,
 			};
 			const prepared = await prepareAgent(context, workspace);
 			const execution = await executeAgent(context, prepared);
+			if (task.swebench) {
+				const dir = join(runOutput!, task.id);
+				let audit: Record<string, unknown> | null = null;
+				try {
+					audit = readSandboxAuditSnapshot(execution.sandboxAuditPath);
+				} catch {}
+				writeFileSync(
+					join(dir, "sandbox-audit.json"),
+					JSON.stringify(
+						audit ?? {
+							complete: false,
+							integrity: "invalid_or_missing",
+						},
+						null,
+						2,
+					),
+				);
+				const inputAuditPath = join(root, "batch-l-input-audit.json");
+				const inputAudit = existsSync(inputAuditPath) ? JSON.parse(readFileSync(inputAuditPath, "utf8")) : null;
+				const trace = execution.telemetry?.finish(execution.gatewayStatus, audit);
+				const agentCompleted =
+					execution.child.status === 0 &&
+					!execution.child.timedOut &&
+					execution.gatewayStatus.state === "ready" &&
+					execution.gatewayStatus.requestsRejected === 0;
+				const prediction =
+					agentCompleted && audit?.complete === true && trace?.complete && inputAudit
+						? exportSwePrediction(
+								task.swebench,
+								prepared.cwd,
+								join(dir, "predictions.jsonl"),
+								`pi-enhanced-stub-${plan!.model}`,
+							)
+						: { status: "agent_failed", reason: "runner_or_audit_incomplete" };
+				const result = {
+					...prediction,
+					agentAttempted: true,
+					patchExportStatus: prediction.status === "not_run" ? "exported" : "not_exported",
+					officialHarnessStatus: "not_run",
+					evaluationProtocol: SWE_EVALUATION_PROTOCOL,
+					instanceId: task.swebench.issue.instance_id,
+					repositoryCommit,
+					taskMode: context.taskMode,
+					inputFixtureSha256: prepared.inputFixtureHash,
+					inputAudit,
+					exposedModuleTools: prepared.moduleTools,
+					taskSeeded: prepared.seededTaskId !== undefined,
+					configuration: {
+						provider: plan!.provider,
+						model: plan!.model,
+						maxRequests: plan!.maxCallsPerTask,
+						maxTokens: plan!.maxTokensPerTask,
+						maxCostUsd: plan!.maxTotalCostUsd,
+						timeoutMs: plan!.timeoutMs,
+						memory: false,
+						context: false,
+						thinking: "off",
+					},
+					agentCompleted,
+					auditComplete: audit?.complete === true,
+					durationMs: performance.now() - execution.started,
+					gateway: gatewayEvidence(execution.gatewayStatus),
+					telemetry: trace,
+					resolved: null,
+				};
+				writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 2));
+				results.push(result);
+				observedCost = execution.gatewayStatus.actualCostUsd;
+				continue;
+			}
 			const result = collectTaskResult(context, prepared, execution);
 			results.push(result.record);
 			observedCost = result.observedCost;

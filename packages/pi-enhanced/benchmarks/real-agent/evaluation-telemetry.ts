@@ -9,7 +9,17 @@ const TELEMETRY_VERSION = 1;
 export const NEXT_EVALUATION_PROFILE = "batch-n-v1";
 export const NEXT_EVALUATION_INSTRUCTIONS =
 	"当前 Agent 仅可使用受控的文件工具；不能在 Agent 内执行测试脚本。完成最小必要的代码修改后给出简短最终答复。独立隐藏验证由评测 Runner 在 Agent 结束后执行；不要为了自行执行测试而创建临时测试脚本。";
-const TOOLS = ["read", "grep", "find", "ls", "write", "edit", "enhanced_memory_search", "enhanced_task_get"];
+const TOOLS = [
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"write",
+	"edit",
+	"enhanced_memory_search",
+	"enhanced_task_get",
+	"enhanced_task_plan_update",
+];
 const MAX_RECORDS = 256;
 const MAX_TELEMETRY_BYTES = 512 * 1024;
 export const telemetryHash = (runId: string, value: string): string =>
@@ -79,6 +89,23 @@ export class EvaluationTelemetry {
 		candidateHash: string | null;
 	}> = [];
 	private rawToolIds = new Map<string, string>();
+	private taskV2: Array<{
+		toolCallId: string;
+		state: string;
+		revision: number;
+		planRevision: number;
+		planUpdates: number;
+		replans: number;
+		stallCount: number;
+		attemptCount: number;
+	}> = [];
+	private taskV2Notices: Array<{
+		state: string;
+		reason: string;
+		revision: number;
+		replans: number;
+		stallCount: number;
+	}> = [];
 	private previousReads = new Map<string, Array<{ start: number; end: number }>>();
 	private edited = new Set<string>();
 	private turnId: number | null = null;
@@ -143,6 +170,29 @@ export class EvaluationTelemetry {
 		}
 		if (event.type === "message_end") {
 			const message = object(event.message);
+			if (
+				message.role === "custom" &&
+				message.customType === "enhanced-task-progress" &&
+				this.taskV2Notices.length < 32
+			) {
+				const value = object(message.details);
+				if (
+					["replan_requested", "blocked"].includes(String(value.state)) &&
+					["unknown_attempt", "repeated_operation", "dependencies_unavailable"].includes(String(value.reason)) &&
+					["revision", "replans", "stallCount"].every(
+						(key) => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0,
+					)
+				) {
+					this.taskV2Notices.push({
+						state: String(value.state),
+						reason: String(value.reason),
+						revision: Number(value.revision),
+						replans: Number(value.replans),
+						stallCount: Number(value.stallCount),
+					});
+					this.persist();
+				}
+			}
 			if (message.role !== "assistant") return;
 			if (this.replies.length >= MAX_RECORDS) {
 				this.error("record_limit");
@@ -171,6 +221,27 @@ export class EvaluationTelemetry {
 			return;
 		}
 		const toolCallId = telemetryHash(this.runId, raw);
+		if (event.type === "tool_execution_end" && event.toolName === "enhanced_task_plan_update" && !event.isError) {
+			const value = object(object(object(event.result).details).taskV2);
+			const state = value.state;
+			if (
+				value.version === 2 &&
+				["observing", "replan_requested", "blocked"].includes(String(state)) &&
+				["revision", "planRevision", "planUpdates", "replans", "stallCount", "attemptCount"].every(
+					(key) => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0,
+				)
+			)
+				this.taskV2.push({
+					toolCallId,
+					state: String(state),
+					revision: Number(value.revision),
+					planRevision: Number(value.planRevision),
+					planUpdates: Number(value.planUpdates),
+					replans: Number(value.replans),
+					stallCount: Number(value.stallCount),
+					attemptCount: Number(value.attemptCount),
+				});
+		}
 		const toolName = TOOLS.includes(String(event.toolName)) ? String(event.toolName) : "[unknown]";
 		const parent = id(event.parentToolCallId);
 		const phase = event.type === "tool_execution_start" ? "start" : "end";
@@ -345,6 +416,21 @@ export class EvaluationTelemetry {
 			errors: [...this.errors],
 			requests: this.providers,
 			tools: linked,
+			...(this.taskV2.length || this.taskV2Notices.length
+				? {
+						taskV2: {
+							version: 2,
+							updates: this.taskV2.map((update) => ({
+								...update,
+								requestSequence:
+									linked.find((tool) => tool.toolCallId === update.toolCallId)?.requestSequence ?? null,
+							})),
+							notices: this.taskV2Notices,
+							additionalModelRequests: 0,
+							additionalModelTokens: null,
+						},
+					}
+				: {}),
 			rangeClassificationBasis: "requested_line_intervals; actual_visibility_and_clipping_causation_unknown",
 			brokerLinks,
 			brokerScopeStatus: this.expectedSandboxRunId

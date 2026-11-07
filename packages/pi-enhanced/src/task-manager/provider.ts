@@ -448,10 +448,73 @@ export class TaskProvider {
 		).seq;
 	}
 
+	modelPlanEvents(taskId: string): Array<{ type: string; source: string; at: number; data: Record<string, unknown> }> {
+		this.require(taskId);
+		const rows = this.database
+			.prepare(
+				"SELECT type, source_ref, payload_json, payload_hash, created_at FROM task_events WHERE task_id=? AND type LIKE 'v2_%' ORDER BY seq",
+			)
+			.all(taskId) as Array<{
+			type: string;
+			source_ref: string;
+			payload_json: string;
+			payload_hash: string;
+			created_at: number;
+		}>;
+		return rows.map((row) => {
+			if (createHash("sha256").update(row.payload_json).digest("hex") !== row.payload_hash)
+				throw new TaskError("TASK_INVALID_TRANSITION", "Model plan event integrity check failed");
+			return { type: row.type, source: row.source_ref, at: row.created_at, data: JSON.parse(row.payload_json) };
+		});
+	}
+
+	mutateModelPlan(
+		source: string,
+		type: "v2_create" | "v2_advance" | "v2_replan",
+		data: Record<string, unknown>,
+		mutate: () => TaskSnapshot,
+	): TaskSnapshot {
+		return this.transaction(() => {
+			const count = this.database
+				.prepare(
+					"SELECT count(*) AS count FROM task_events JOIN tasks USING(task_id) WHERE project_id=? AND type GLOB 'v2_*' AND json_extract(payload_json,'$.session')=?",
+				)
+				.get(this.scope.projectId, String(data.session)) as { count: number };
+			if (count.count >= 32)
+				throw new TaskError("TASK_INVALID_TRANSITION", "Session model plan update limit reached");
+			if (
+				this.database
+					.prepare(
+						"SELECT 1 FROM task_events JOIN tasks USING(task_id) WHERE project_id=? AND source_ref=? AND type LIKE 'v2_%'",
+					)
+					.get(this.scope.projectId, source)
+			)
+				throw new TaskError("TASK_REVISION_CONFLICT", "This assistant reply already changed a plan");
+			const snapshot = mutate();
+			this.appendEvent(snapshot.task.taskId, type, source, data, Date.now());
+			this.writeSnapshot(snapshot.task.taskId, Date.now());
+			return snapshot;
+		});
+	}
+
+	appendModelSteps(taskId: string, expectedRevision: number, steps: readonly TaskStep[]): TaskSnapshot {
+		return this.transaction(() => {
+			const current = this.require(taskId);
+			if (current.task.revision !== expectedRevision) this.throwMissingOrConflict(taskId);
+			for (const step of steps) this.insertStep(step);
+			this.database
+				.prepare(
+					"UPDATE tasks SET revision=revision+1,plan_revision=plan_revision+1,updated_at=? WHERE task_id=? AND project_id=?",
+				)
+				.run(Date.now(), taskId, this.scope.projectId);
+			return this.require(taskId);
+		});
+	}
+
 	getAttempts(taskId: string): TaskAttempt[] {
 		return (
 			this.database
-				.prepare("SELECT * FROM task_attempts WHERE task_id=? ORDER BY started_at, attempt_id")
+				.prepare("SELECT * FROM task_attempts WHERE task_id=? ORDER BY rowid")
 				.all(taskId) as unknown as AttemptRow[]
 		).map(attemptFromRow);
 	}
@@ -557,6 +620,7 @@ export class TaskProvider {
 	}
 	private transaction<T>(operation: () => T): T {
 		this.assertOpen();
+		if (this.database.isTransaction) return operation();
 		this.database.exec("BEGIN IMMEDIATE");
 		try {
 			const result = operation();

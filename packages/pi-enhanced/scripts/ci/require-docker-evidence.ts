@@ -20,6 +20,7 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 		"batch-j-runner.test.ts",
 		"batch-n-observability.test.ts",
 		"docker-verifier.test.ts",
+		"swebench-stub.test.ts",
 	]) {
 		const suites = report.testResults.filter((suite) => suite.name.replaceAll("\\", "/").endsWith(`/e2e/${file}`));
 		if (
@@ -31,6 +32,25 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 		)
 			throw new Error(`CI_DOCKER_REQUIRED_SUITE_MISSING_OR_SKIPPED:${file}`);
 	}
+	const swe = report.testResults
+		.filter((suite) => suite.name.replaceAll("\\", "/").endsWith("/e2e/swebench-stub.test.ts"))
+		.flatMap((suite) => suite.assertionResults);
+	const requiredSwe = [
+		["astropy__astropy-13033", "off"],
+		["astropy__astropy-13033", "v1"],
+		["astropy__astropy-13033", "v2"],
+		["astropy__astropy-13453", "off"],
+		["astropy__astropy-14365", "v2"],
+	];
+	if (
+		swe.length !== requiredSwe.length ||
+		requiredSwe.some(
+			([id, mode]) =>
+				swe.filter((test) => test.fullName.endsWith(`Stub patch for ${id} in ${mode}`) && test.status === "passed")
+					.length !== 1,
+		)
+	)
+		throw new Error("CI_DOCKER_SWE_CASE_COUNT_OR_IDENTITY_MISMATCH");
 	const assertions = report.testResults.flatMap((suite) => suite.assertionResults);
 	for (const name of [
 		"enforces identity through real Pi",

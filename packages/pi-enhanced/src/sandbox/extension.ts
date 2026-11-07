@@ -4,10 +4,11 @@ import { loadSandboxConfig, type SandboxConfig } from "./config.ts";
 import { SANDBOX_ALLOWED_TOOLS } from "./protocol.ts";
 import { registerSandboxTools } from "./tools.ts";
 
-export function sandboxToolAllowed(toolName: string, readonlyModuleTools = false): boolean {
+export function sandboxToolAllowed(toolName: string, readonlyModuleTools = false, taskPlanTool = false): boolean {
 	return (
 		(SANDBOX_ALLOWED_TOOLS as readonly string[]).includes(toolName) ||
-		(readonlyModuleTools && ["enhanced_memory_search", "enhanced_task_get"].includes(toolName))
+		(readonlyModuleTools && ["enhanced_memory_search", "enhanced_task_get"].includes(toolName)) ||
+		(taskPlanTool && toolName === "enhanced_task_plan_update")
 	);
 }
 
@@ -19,7 +20,7 @@ export function createSandboxExtension(
 		let broker: DockerSandboxBroker | undefined;
 		let config: SandboxConfig | undefined;
 		pi.on("tool_call", (event) => {
-			if (broker && !sandboxToolAllowed(event.toolName, config?.readonlyModuleTools)) {
+			if (broker && !sandboxToolAllowed(event.toolName, config?.readonlyModuleTools, config?.taskPlanTool)) {
 				return { block: true, reason: "Sandbox pilot only permits isolated file tools" };
 			}
 		});

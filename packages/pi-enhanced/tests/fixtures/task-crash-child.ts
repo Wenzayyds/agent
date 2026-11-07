@@ -5,20 +5,36 @@ import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/pro
 import { createCheckpoint } from "../../src/task-manager/recovery.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
 
-const [projectRoot, agentDir] = process.argv.slice(2);
+const [projectRoot, agentDir, mode] = process.argv.slice(2);
 if (!projectRoot || !agentDir || !process.send) throw new Error("project root, agent dir, and IPC are required");
 
 const scope = createProjectScope({ cwd: projectRoot, agentDir });
 const service = new TaskService(new TaskProvider(createTaskStorageScope(scope, agentDir)), 20);
-let snapshot = service.create(
-	"recover a killed child process",
-	[
-		{ stepId: "checked", title: "inspect", expectedOutcome: "inspection recorded" },
-		{ stepId: "mutate", title: "modify fixture", expectedOutcome: "fixture changed", dependsOn: ["checked"], riskClass: "mutating" },
-	],
-	"crash-session",
-	"crash-leaf",
-);
+const create = () =>
+	service.create(
+		"recover a killed child process",
+		[
+			{ stepId: "checked", title: "inspect", expectedOutcome: "inspection recorded" },
+			{
+				stepId: "mutate",
+				title: "modify fixture",
+				expectedOutcome: "fixture changed",
+				dependsOn: ["checked"],
+				riskClass: "mutating",
+			},
+		],
+		"crash-session",
+		"crash-leaf",
+	);
+let snapshot =
+	mode === "v2"
+		? service.provider.mutateModelPlan(
+				"model:crash-reply",
+				"v2_create",
+				{ session: "crash-session", anchor: "crash-leaf", confidence: "model_proposed" },
+				create,
+			)
+		: create();
 snapshot = service.transitionTask(snapshot.task.taskId, snapshot.task.revision, "queued");
 snapshot = service.transitionTask(snapshot.task.taskId, snapshot.task.revision, "running");
 let first = snapshot.steps.find(({ stepId }) => stepId === "checked")!;
@@ -38,7 +54,7 @@ first = service.get(snapshot.task.taskId)!.steps.find(({ stepId }) => stepId ===
 snapshot = service.transitionStep(snapshot.task.taskId, first.stepId, first.revision, "completed");
 createCheckpoint(service.provider, snapshot, "crash-session", "crash-leaf");
 service.bind(snapshot.task.taskId, "mutate", "crash-session", "crash-leaf");
-let second = service.get(snapshot.task.taskId)!.steps.find(({ stepId }) => stepId === "mutate")!;
+const second = service.get(snapshot.task.taskId)!.steps.find(({ stepId }) => stepId === "mutate")!;
 snapshot = service.transitionStep(snapshot.task.taskId, second.stepId, second.revision, "running");
 writeFileSync(join(projectRoot, "fixture.txt"), "changed-once\n");
 service.provider.startAttempt({

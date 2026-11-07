@@ -489,3 +489,29 @@
 - Batch N、Cleanup、核心结构整理的 6 份本地报告移至 `.artifacts/local-archive-20261107/docs/`。上文中的原路径为归档前位置。
 - 8 份旧测试输出移至 `.artifacts/local-archive-20261107/test-evidence/`。归档前后逐文件 SHA-256 一致。清除了 3 个可再生的 Python 测试缓存目录和 4 个空目录。
 - 正式测试、CI 使用的版本基线、最近两格真实实验报告与现存历史实验目录保留。清理前，最近两格实验报告所引用的 `.artifacts/task-real-paired/` 已不在本仓库原路径。
+
+## 2026-11-07 SWE-bench Verified / Task V2
+
+- 基线 7ceae806e。在原 Runner 中增加固定 Verified Issue、独立浅提交工作区、受限 Patch 导出和官方 Harness 调用/结果解析。Gold 资源闸门实际返回 environment_blocked：Docker 数据盘可用约 90 GB，低于 120 GB；官方 Harness 未运行。
+- Task 增加默认关闭的 V2 计划维护、基于真实 attempt 的停滞摘要、最多两次追加式重规划，复用原 SQLite/DAG/CAS/Checkpoint；模型自述只能进入 verifying。OFF/V1 保留，未知写入不重放。
+- 完整回归 TypeScript 263 passed/0 failed/3 skipped（266 项）、Python 15/15，五条真实公开 Issue 的 Stub 通路通过；原 243 项测试身份缺失 0。交付仅 docs/swebench-task-v2-design.md、swebench-task-v2-verification.md、swebench-task-v2-results.json；详细证据 .artifacts/swebench-task-v2/。
+- 现有 CI 尚不准备新 SWE 本地镜像，需后续配置并确认五项实际运行。真实 SWE 模型入口仍拒绝；后续需 Gold 通过、新提交三平台 CI 和独立实例/模式/预算授权。本轮无付费调用、无 commit/push/远端 CI，保留 42 项旧文档删除与 75 个现存历史文件散列。
+
+## 2026-11-07 Docker 迁移后 Gold 补验
+
+- 用户已将 Docker 数据盘迁至 F:/DockerDesktopWSL。修复资源检查只查 C 盘默认 VHD 的问题，改读 Docker Desktop 的 CustomWslDistroDir；配置磁盘缺失时拒绝回退。实际可用约 151.5 GB，120 GB 闸门通过，原 Agent node:20-alpine 镜像身份一致。
+- 原选 Harness 5.x 与固定 Verified 快照实际不兼容，报 KeyError: image。已固定官方发布版 v4.1.0 / 726c5461e2ef52d83cf1ea2107870a8bb3328d57，并匹配其官方报告路径。官方 v4 在 Windows Python 导入缺少 resource；通过独立原生 Linux/amd64 评测容器直接运行官方 CLI，参数复用现有 harnessCommand，没有新增 Agent Runner 或评分器。
+- 唯一正式 Gold 实例 astropy__astropy-12907 官方 resolved=true，退出码 0，无超时；FAIL_TO_PASS 2/2，PASS_TO_PASS 13/13。run_id pi_a45b1fe4e2f0_15f4ce12782c42bc8a75b417e61eeded。证据 .artifacts/swebench-task-v2/gold-linux-amd64/，镜像摘要及官方清理证据保留，两个本轮评测控制容器已移除。ARM64 准备阶段在 Harness 启动前停止，未记为第二次正式评测。
+- 最终适配专项 12/12（7 单元 + 5 生产 Pi/Stub/Gateway/Docker 通路），类型与 Biome 通过；完整 TS 263/0/3、Python 15/15 仍指迁移前快照，本次未重复全仓。75 个现存历史文件散列不变。
+- 官方依赖导入会 load_dotenv。初次 v5 兼容性探测尚未禁用，无法确认该子进程是否加载凭据，报告记 unknown；后续探测与实际 Gold 入口设置 PYTHON_DOTENV_DISABLED=1，没有输出密钥或调用模型。实际 Gold 控制容器不挂载宿主 .env、Agent 工作区或 Provider 配置。
+- 更新原有三份 swebench-task-v2 报告，无新说明报告。真实 SWE Agent 成绩仍为 null，真实入口保持 Stub-only，新源码 CI 和独立宿主授权仍待完成。无付费模型调用、无 Git 暂存/提交/推送或远端 CI。
+
+## 2026-11-07 SWE / Task V2 最终离线验收
+
+- 移除实例级 allowedPaths。原先人工路径没有足够的可审计来源记录，无法证明完全独立于已知答案。所有实例统一使用原有源码扩展名、测试/元数据/凭据路径、文件类型、修改方式与补丁大小限制，标为 swebench_verified_source_restricted_v1；不作为标准完整 SWE-bench 条件。历史 Stub 原件保留。
+- 在现有 Docker CI Job 内加入三条固定 Astropy base SHA 的公开 Git 镜像准备，加入五项 SWE Stub，并在原 require-docker-evidence 强制检查五个实例/模式身份与数量，拒绝缺失、重复和跳过。未增加 Job，未加入 Gold。本机实际按该步骤准备新镜像，最终全量使用该镜像；远端为 configured_only。
+- 三种模式实际比较原始 Issue、base commit/tree、六文件工具定义、模型、thinking 和预算一致，Memory/Context 关闭，taskSeeded=false。Task 工具分别为无、get、get+plan_update。V1 无预置任务且仅有读取工具，结果只能解释为该受限 V1 条件，不能代表完整人工预建任务流程。
+- 修复 SWE Agent 已完成但汇总按官方 not_run 误计未运行的问题，保留原字段并独立记录 Agent 尝试、补丁导出和官方状态；额外持久化有界沙箱审计快照。未新增 Task 功能、Runner 或授权框架。
+- 最终源码整轮 TS 268 项：265 passed/0 failed/3 skipped，Python 新跑15/15。五项 SWE 实际运行；旧266和版本基线243的测试身份均无丢失。类型/工程检查8项、22文件Biome、离线构建、候选Docker smoke通过。证据 .artifacts/swebench-task-v2/final-acceptance-20261107/。首轮 Docker 未启动/包目录启动的失败、代码收口期间的中间回归及额外候选副本调试失败均单独保留，不拼接为最终统计。
+- 7ceae806 直接继承上次用户确认通过 CI 的 82afedb54，两提交之间只有6行 HANDOFF；12个关键安全文件在工作树与82af逐字节一致。现有42项用户文档删除及75个历史保护文件保持。候选29文件含此前未提交实现、本轮必要修正和3份核心报告，排除历史报告/数据/密钥/数据库/session/运行产物，暂存区为空。
+- Gold 控制容器无直接凭据环境变量或私有挂载，但共享 Docker socket 具有宿主数据访问能力，不能声称完全隔离；更强隔离需要无凭据的专用评测宿主/daemon。历史第三方导入是否加载凭据仍为unknown。真实 SWE入口仍SWE_STUB_ONLY，旧两格授权不适用，未来需在原授权链补齐SWE范围及真实输出边界。三组Pilot仅提出每组12请求/80,000Token/$0.03/180秒、总$0.09的新待审方案，没有授权或执行。

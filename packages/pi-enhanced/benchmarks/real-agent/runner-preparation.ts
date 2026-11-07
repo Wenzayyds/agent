@@ -20,11 +20,13 @@ import { type ControlledCell, LONG_REPORT_TASK, longReport, MEMORY_RULE, TASK_ST
 import type { EvaluationPlan } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_INSTRUCTIONS, NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import type { OfflineDenialPolicy } from "./offline-denial-policy.ts";
+import { prepareSweWorkspace, type SweTask } from "./swebench.ts";
 import type { TaskPairAuthorization, TaskPairInput } from "./task-pair-authorization.ts";
 export interface ExperimentTask {
 	id: string;
 	category: string;
 	prompt: string;
+	swebench?: SweTask;
 }
 export interface ModuleSwitches {
 	memory: boolean;
@@ -51,6 +53,7 @@ export interface RunnerContext {
 	taskPairExpected?: TaskPairInput;
 	offlinePolicy?: OfflineDenialPolicy;
 	observedCost: number;
+	taskMode?: "off" | "v1" | "v2";
 }
 
 /** Creates only host-owned synthetic fixtures. Never verifies model-written code here. */
@@ -62,6 +65,10 @@ export function prepareWorkspace(
 	comparisonProfile?: string,
 ) {
 	const cwd = join(root, task.id);
+	if (task.swebench) {
+		const tree = prepareSweWorkspace(task.swebench, cwd);
+		return { cwd, inputFixtureHash: digest(tree), repositoryCommit: task.swebench.issue.base_commit };
+	}
 	mkdirSync(cwd);
 	generate(task.id, cwd);
 	if (batchL)
@@ -89,7 +96,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		join(agentDir, "settings.json"),
 		JSON.stringify({
 			defaultProjectTrust: "always",
-			...(cell ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
+			...(cell || task.swebench ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
 		}),
 	);
 	writeFileSync(
@@ -112,7 +119,9 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 						? { toolOutput: { enabled: cell.treatment, maximumTextCharacters: 2_000 } }
 						: {}),
 				},
-				"task-manager": { enabled: switches.task },
+				"task-manager": context.taskMode
+					? { mode: context.taskMode, modelPlanTool: context.taskMode === "v2" }
+					: { enabled: switches.task },
 			},
 		}),
 	);
@@ -121,7 +130,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		: null;
 	let seededTaskId: string | undefined;
 	let taskStateBefore: ReturnType<TaskService["get"]> = null;
-	if (batchL ? cell!.module === "task" : readonlyModuleTools && switches.task) {
+	if (batchL ? cell!.module === "task" : !task.swebench && readonlyModuleTools && switches.task) {
 		const service = new TaskService(
 			new TaskProvider(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir)),
 			20,
@@ -143,11 +152,17 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 			service.close();
 		}
 	}
-	const moduleTools = batchL
-		? BATCH_L_MODULE_TOOLS
-		: readonlyModuleTools
-			? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])]
-			: [];
+	const moduleTools = task.swebench
+		? context.taskMode === "v2"
+			? ["enhanced_task_get", "enhanced_task_plan_update"]
+			: context.taskMode === "v1"
+				? ["enhanced_task_get"]
+				: []
+		: batchL
+			? BATCH_L_MODULE_TOOLS
+			: readonlyModuleTools
+				? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])]
+				: [];
 	const prompt = batchL
 		? batchLPrompt(cell!) +
 			(comparisonProfile === TASK_PAIR_PROFILE

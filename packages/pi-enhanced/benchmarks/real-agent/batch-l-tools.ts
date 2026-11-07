@@ -8,6 +8,40 @@ import { BATCH_L_MODULE_TOOLS, digest } from "./batch-l-profile.ts";
 
 /** Evaluation only: keep model-visible schemas identical while leaving disabled services closed. */
 export default function batchLTools(pi: ExtensionAPI): void {
+	pi.on("before_agent_start", (event, ctx) => {
+		const names = pi.getActiveTools();
+		const tools = names.map((name) => {
+			const tool = pi.getAllTools().find((tool) => tool.name === name)!;
+			return {
+				name,
+				description: tool.description,
+				parameters: tool.parameters,
+				promptGuidelines: tool.promptGuidelines,
+			};
+		});
+		const system = event.systemPrompt
+			.replaceAll(ctx.cwd, "[PROJECT_ROOT]")
+			.replaceAll(ctx.cwd.replaceAll("\\", "/"), "[PROJECT_ROOT]");
+		atomicPrivateJson(join(process.env.PI_ENHANCED_SANDBOX_RUN_ROOT!, "batch-l-input-audit.json"), {
+			userPromptSha256: digest("prompt" in event ? event.prompt : "[custom event]"),
+			canonicalSystemPromptSha256: digest(system),
+			toolSchemaSha256: digest(tools),
+			...(process.env.PI_ENHANCED_SWE_INPUT_AUDIT_ONLY === "1"
+				? {
+						baseToolSchemaSha256: digest(
+							tools
+								.filter((tool) => ["read", "grep", "find", "ls", "write", "edit"].includes(tool.name))
+								.sort((left, right) => left.name.localeCompare(right.name)),
+						),
+					}
+				: {}),
+			tools: names,
+			model: ctx.model?.id,
+			provider: ctx.model?.provider,
+			thinking: pi.getThinkingLevel(),
+		});
+	});
+	if (process.env.PI_ENHANCED_SWE_INPUT_AUDIT_ONLY === "1") return;
 	const taskEnabled = process.env.PI_ENHANCED_BATCH_L_TASK === "1";
 	const memoryEnabled = process.env.PI_ENHANCED_BATCH_L_MEMORY === "1";
 	if (taskEnabled) {
@@ -57,29 +91,5 @@ export default function batchLTools(pi: ExtensionAPI): void {
 				}),
 			});
 		pi.setActiveTools(["read", "grep", "find", "ls", "write", "edit", ...BATCH_L_MODULE_TOOLS]);
-	});
-	pi.on("before_agent_start", (event, ctx) => {
-		const names = pi.getActiveTools();
-		const tools = names.map((name) => {
-			const tool = pi.getAllTools().find((tool) => tool.name === name)!;
-			return {
-				name,
-				description: tool.description,
-				parameters: tool.parameters,
-				promptGuidelines: tool.promptGuidelines,
-			};
-		});
-		const system = event.systemPrompt
-			.replaceAll(ctx.cwd, "[PROJECT_ROOT]")
-			.replaceAll(ctx.cwd.replaceAll("\\", "/"), "[PROJECT_ROOT]");
-		atomicPrivateJson(join(process.env.PI_ENHANCED_SANDBOX_RUN_ROOT!, "batch-l-input-audit.json"), {
-			userPromptSha256: digest("prompt" in event ? event.prompt : "[custom event]"),
-			canonicalSystemPromptSha256: digest(system),
-			toolSchemaSha256: digest(tools),
-			tools: names,
-			model: ctx.model?.id,
-			provider: ctx.model?.provider,
-			thinking: pi.getThinkingLevel(),
-		});
 	});
 }
