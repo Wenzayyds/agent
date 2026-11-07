@@ -483,3 +483,9 @@
 - 生产Runner/Gateway/Docker六工具/Verifier/预算拒绝/隔离拒绝/强杀审计/模块生命周期实跑；最终四组Stub和Cleanup基线在Patch、费用/Usage、审计、触达与状态一致。根只读检查、evaluation TS、候选Biome0诊断、离线构建、正式test-manifest均通过。
 - HEAD归档+29项覆盖的独立候选快照打包扫描通过，152项/禁止路径0/密钥形态0；候选tgz安装Sandbox与PythonWorker E2E 6/6，npm强制离线。既有离线回放8/8、Agent dry-run 5项not_run、LSA质量检查仅在候选副本运行，不覆盖用户历史报告，不算真实Agent效果。116个历史保护文件SHA不变。
 - 新交付仅packages/pi-enhanced/docs/version-freeze-verification.md、version-freeze-results.json；详细机器证据.artifacts/version-freeze/。本地具备申请远端CI授权条件，最终状态pending_remote_authorization；当前源码Windows/Linux/Docker远端Job均not_run，不借旧CI背书。未对目标仓库add/commit/push/dispatch，未读真实ProviderKey，未调用任何付费模型。停止，等待用户另行授权精确清单后的暂存/提交/推送。
+
+## 2026-11-07 本地清理
+
+- Batch N、Cleanup、核心结构整理的 6 份本地报告移至 `.artifacts/local-archive-20261107/docs/`。上文中的原路径为归档前位置。
+- 8 份旧测试输出移至 `.artifacts/local-archive-20261107/test-evidence/`。归档前后逐文件 SHA-256 一致。清除了 3 个可再生的 Python 测试缓存目录和 4 个空目录。
+- 正式测试、CI 使用的版本基线、最近两格真实实验报告与现存历史实验目录保留。清理前，最近两格实验报告所引用的 `.artifacts/task-real-paired/` 已不在本仓库原路径。
