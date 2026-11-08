@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel, getModels, streamSimple } from "../src/compat.ts";
+import { getModels, hasApi, streamSimple } from "../src/compat.ts";
 import type { AssistantMessage, Context, Model } from "../src/types.ts";
 
 interface AnthropicPayload {
@@ -111,7 +111,8 @@ describe("Anthropic empty thinking signature compat", () => {
 		"accounts/fireworks/models/qwen3p8-2p4t-a95b",
 		"accounts/fireworks/models/nemotron-3-ultra-nvfp4",
 	] as const)("preserves unsigned thinking for Fireworks %s", async (modelId) => {
-		const model = getModel("fireworks", modelId);
+		const model = getModels("fireworks").find((candidate) => candidate.id === modelId);
+		if (!model || !hasApi(model, "anthropic-messages")) throw new Error(`Missing Fireworks Messages model: ${modelId}`);
 		expect(model.compat?.allowEmptySignature).toBe(true);
 		const context = makeContext("", "internal reasoning", "fireworks", modelId);
 		const assistant = context.messages[1] as AssistantMessage;

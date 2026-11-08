@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, it } from "vitest";
@@ -11,6 +11,29 @@ import { close, dockerImageAvailable, startStubProvider, textSse, toolCallSse } 
 const root = resolve(import.meta.dirname, "../../../..");
 const mirror = process.env.PI_ENHANCED_SWE_LOCAL_MIRROR;
 const available = Boolean(mirror) && dockerImageAvailable();
+
+function linuxPiPid(controlledPid: number | undefined): number {
+	if (!controlledPid) throw new Error("SWE fixture controlled process has no PID");
+	const children = (pid: number): number[] =>
+		readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
+			.trim()
+			.split(/\s+/u)
+			.filter(Boolean)
+			.map(Number);
+	const command = (pid: number): string[] => readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+	const runners = children(controlledPid).filter((pid) =>
+		command(pid).includes(join(root, "packages/pi-enhanced/benchmarks/real-agent/run-real-agent.ts")),
+	);
+	if (runners.length !== 1) throw new Error(`SWE fixture expected one runner child, found ${runners.length}`);
+	const agents = children(runners[0]!).filter(
+		(pid) =>
+			command(pid).includes(join(root, "packages/coding-agent/dist/bundle/cli.js")) &&
+			realpathSync(`/proc/${pid}/exe`) === realpathSync(process.execPath),
+	);
+	if (agents.length !== 1) throw new Error(`SWE fixture expected one Pi child, found ${agents.length}`);
+	process.kill(agents[0]!, 0);
+	return agents[0]!;
+}
 const cases = [
 	...["off", "v1", "v2"].flatMap((mode) => [
 		["edit_test", mode],
@@ -36,6 +59,7 @@ it.skipIf(!available).each(cases)(
 		const id = `swe_task_${scenario}_${mode}`;
 		let calls = 0,
 			runnerPid: number | undefined;
+		let killedPiPid: number | undefined;
 		const provider = await startStubProvider((body, response) => {
 			calls++;
 			if (calls === 1) {
@@ -77,7 +101,7 @@ it.skipIf(!available).each(cases)(
 								],
 								{ encoding: "utf8" },
 							)
-						: execFileSync("ps", ["-o", "pid=,args=", "--ppid", String(runnerPid)], { encoding: "utf8" });
+						: "";
 				let pid: number;
 				if (process.platform === "win32") {
 					const parsed = JSON.parse(listing);
@@ -85,12 +109,9 @@ it.skipIf(!available).each(cases)(
 					const pi = children.filter((c) => /[\\/]dist[\\/]bundle[\\/]cli\.js/u.test(c.CommandLine));
 					expect(pi).toHaveLength(1);
 					pid = pi[0].ProcessId;
-				} else {
-					const pi = listing.split("\n").filter((line) => /[\\/]dist[\\/]bundle[\\/]cli\.js/u.test(line));
-					expect(pi).toHaveLength(1);
-					pid = Number(pi[0]!.trim().split(/\s+/u)[0]);
-				}
-				process.kill(pid, "SIGKILL");
+				} else pid = linuxPiPid(runnerPid);
+				if (!process.kill(pid, "SIGKILL")) throw new Error("SWE fixture failed to interrupt Pi");
+				killedPiPid = pid;
 				sse = textSse("Stub final after forced interruption", 100, 10);
 			} else
 				sse = toolCallSse(
@@ -225,6 +246,7 @@ it.skipIf(!available).each(cases)(
 				expect(JSON.stringify(result.patchDiagnostic)).not.toContain("fixture-secret-not-for-diagnostics");
 			} else if (scenario === "abnormal_session") {
 				expect(calls).toBe(2);
+				expect(killedPiPid).toBeGreaterThan(0);
 				expect(result.agentCompleted).toBe(false);
 				expect(result.auditComplete).toBe(false);
 				expect(result.terminationClassification).toBe("agent_execution_error");
@@ -273,6 +295,7 @@ it
 		writeFileSync(limitsFile, JSON.stringify(overrides));
 		let calls = 0;
 		let controlledPid: number | undefined;
+		let pausedPiPid: number | undefined;
 		const modes: string[] = [];
 		const provider = await startStubProvider((body, response) => {
 			calls++;
@@ -324,8 +347,14 @@ it
 						)
 					: textSse("No patch produced; Stub transport only.", 100, 10);
 			if (scenario === "usage_failure") sse = sse.replace(/"usage":\{[^}]+\}/u, '"usage":{}');
-			if (scenario === "timeout" && !previous)
-				response.once("finish", () => {
+			if (scenario === "timeout" && !previous) {
+				if (process.platform !== "win32") {
+					// Pause the identified Pi child before releasing the final usage chunk. The gateway
+					// can settle this request while Pi remains stopped until the Runner deadline.
+					const pid = linuxPiPid(controlledPid);
+					if (!process.kill(pid, "SIGSTOP")) throw new Error("SWE fixture failed to pause Pi");
+					pausedPiPid = pid;
+				} else response.once("finish", () => {
 					// Suspend the actual Pi process after its provider response has settled. The production
 					// Runner's unchanged deadline must terminate it and prove cleanup, without an active API call.
 					if (process.platform === "win32")
@@ -345,24 +374,8 @@ if ($pi.Count -ne 1) { throw 'Pi fixture child identity mismatch' };
 							],
 							{ stdio: "pipe", timeout: 10000, windowsHide: true },
 						);
-					else {
-						const runners = execFileSync("ps", ["-o", "pid=,args=", "--ppid", String(controlledPid)], {
-							encoding: "utf8",
-						})
-							.split("\n")
-							.filter((line) => line.includes("run-real-agent.ts"));
-						expect(runners).toHaveLength(1);
-						const children = execFileSync(
-							"ps",
-							["-o", "pid=,args=", "--ppid", runners[0]!.trim().split(/\s+/u)[0]!],
-							{ encoding: "utf8" },
-						)
-							.split("\n")
-							.filter((line) => /dist\/bundle\/cli\.js/u.test(line));
-						expect(children).toHaveLength(1);
-						process.kill(Number(children[0]!.trim().split(/\s+/u)[0]), "SIGSTOP");
-					}
 				});
+			}
 			response.writeHead(200, { "Content-Type": "text/event-stream" });
 			response.end(sse);
 		});
@@ -417,6 +430,7 @@ if ($pi.Count -ne 1) { throw 'Pi fixture child identity mismatch' };
 		try {
 			const child = await run();
 			expect(child.code, child.stderr).toBe(0);
+			if (scenario === "timeout" && process.platform !== "win32") expect(pausedPiPid).toBeGreaterThan(0);
 			const batch = JSON.parse(readFileSync(join(directory, id, "batch.json"), "utf8"));
 			if (process.env.PI_ENHANCED_SWE_STUB_EVIDENCE)
 				writeFileSync(
