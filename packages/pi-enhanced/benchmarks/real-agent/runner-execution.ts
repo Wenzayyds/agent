@@ -1,7 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
@@ -18,6 +19,38 @@ import { SWE_TASK_PROFILE } from "./swe-profile.ts";
 import { readTaskPairInput } from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
+export function stubPidHandshakeEnabled(flag: string | undefined, localStubUrl: string | undefined, swe: boolean, stubEval: string | undefined): boolean {
+	if (flag !== "1") return false;
+	if (!localStubUrl || !swe || stubEval !== "1") throw new Error("SWE_STUB_PID_HANDSHAKE_FORBIDDEN");
+	return true;
+}
+
+function inside(parent: string, target: string): boolean {
+	const rel = relative(parent, target);
+	return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function linuxStartTicks(pid: number): string {
+	const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+	const ticks = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19];
+	if (!ticks || !/^\d+$/u.test(ticks)) throw new Error("SWE_STUB_PID_HANDSHAKE_IDENTITY_INVALID");
+	return ticks;
+}
+
+function writePidHandshake(path: string, value: unknown): void {
+	const payload = `${JSON.stringify(value)}\n`;
+	if (process.platform !== "linux") {
+		writeFileSync(path, payload, { flag: "wx", mode: 0o600 });
+		return;
+	}
+	const temporary = `${path}.${randomUUID()}.tmp`;
+	writeFileSync(temporary, payload, { flag: "wx", mode: 0o600 });
+	try {
+		linkSync(temporary, path); // Exclusive and visible only after the full payload is written.
+	} finally {
+		rmSync(temporary, { force: true });
+	}
+}
 /** Owns gateway/container/process lifetimes; no fixture generation or result interpretation. */
 export async function executeAgent(context: RunnerContext, prepared: PreparedAgent) {
 	const {
@@ -38,6 +71,15 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		observedCost,
 	} = context;
 	const { cwd, agentDir, seededTaskId, moduleTools, prompt } = prepared;
+	const pidHandshake = stubPidHandshakeEnabled(
+		process.env.PI_ENHANCED_SWE_STUB_PID_HANDSHAKE,
+		localStubUrl,
+		Boolean(task.swebench),
+		process.env.PI_ENHANCED_LOCAL_STUB_EVAL,
+	);
+	const handshakeNonce = process.env.PI_ENHANCED_SWE_STUB_PID_NONCE;
+	if (pidHandshake && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(handshakeNonce ?? ""))
+		throw new Error("SWE_STUB_PID_HANDSHAKE_NONCE_INVALID");
 	const controlled = Boolean(cell || task.swebench);
 	const { provider, model, apiKeyEnv } = plan;
 	const taskPair = context.comparisonProfile === TASK_PAIR_PROFILE;
@@ -100,6 +142,23 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			cwd,
 			verifierScope.runId,
 		);
+	}
+	let handshakePath: string | undefined;
+	if (pidHandshake) {
+		const output = realpathSync(runOutput);
+		const workspace = realpathSync(cwd);
+		const temporary = realpathSync(tmpdir());
+		const evidenceDir = join(runOutput, task.id);
+		if (
+			!inside(temporary, output) ||
+			inside(workspace, output) ||
+			inside(output, workspace) ||
+			lstatSync(runOutput).isSymbolicLink() ||
+			lstatSync(evidenceDir).isSymbolicLink() ||
+			realpathSync(evidenceDir) !== join(output, task.id)
+		)
+			throw new Error("SWE_STUB_PID_HANDSHAKE_PATH_INVALID");
+		handshakePath = join(evidenceDir, "agent-spawn-pid.json");
 	}
 	let forwarded = 0;
 	let admissionDenied = false;
@@ -215,6 +274,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	const started = performance.now();
 	let gatewayStatus: BudgetGatewayStatus;
 	let child: Awaited<ReturnType<typeof runAgentProcess>>;
+	let handshakeError: Error | undefined;
 	let containersRemoved = false;
 	try {
 		child = await runAgentProcess(
@@ -241,6 +301,22 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			{
 				cwd,
 				timeoutMs: plan!.timeoutMs,
+				...(handshakePath
+					? {
+							onSpawn: (pid: number | undefined) => {
+								try {
+									if (!pid) throw new Error("SWE_STUB_PID_HANDSHAKE_CHILD_MISSING");
+									writePidHandshake(
+										handshakePath,
+										{ runId: plan.runId, runnerPid: process.pid, agentPid: pid, nonce: handshakeNonce, startTicks: process.platform === "linux" ? linuxStartTicks(pid) : null, runnerStartTicks: process.platform === "linux" ? linuxStartTicks(process.pid) : null },
+									);
+								} catch (error) {
+									handshakeError = error instanceof Error ? error : new Error(String(error));
+									throw handshakeError;
+								}
+							},
+						}
+					: {}),
 				...(telemetry
 					? {
 							onEvent: (event: unknown) => telemetry!.event(event),
@@ -258,6 +334,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 					: {}),
 			},
 		);
+		if (handshakeError) throw handshakeError;
 	} finally {
 		gatewayStatus = gateway.status();
 		if (controlled && !admissionDenied) {
@@ -353,6 +430,7 @@ async function runAgentProcess(
 		stopOnBoundaryFailure?: () => boolean;
 		onEvent?: (value: unknown) => void;
 		onEventError?: () => void;
+		onSpawn?: (pid: number | undefined) => void;
 	},
 ): Promise<{
 	status: number | null;
@@ -436,5 +514,12 @@ async function runAgentProcess(
 				timedOut,
 			});
 		});
+		if (options.onSpawn) {
+			try {
+				options.onSpawn(child.pid);
+			} catch {
+				child.kill();
+			}
+		}
 	});
 }

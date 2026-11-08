@@ -1,9 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
+import { stubPidHandshakeEnabled } from "../../benchmarks/real-agent/runner-execution.ts";
 import { SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import { loadSweTask, swePrompt } from "../../benchmarks/real-agent/swebench.ts";
 import { close, dockerImageAvailable, startStubProvider, textSse, toolCallSse } from "../fixtures/runner-support.ts";
@@ -12,10 +14,8 @@ const root = resolve(import.meta.dirname, "../../../..");
 const mirror = process.env.PI_ENHANCED_SWE_LOCAL_MIRROR;
 const available = Boolean(mirror) && dockerImageAvailable();
 
-const controlledScript = join(root, "packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts");
-const runnerScript = join(root, "packages/pi-enhanced/benchmarks/real-agent/run-real-agent.ts");
-const piScript = join(root, "packages/coding-agent/dist/bundle/cli.js");
-type LinuxProcess = { pid: number; parentPid: number; startedAt: string; args: string[]; state: string };
+type PiIdentity = { agentPid: number; runnerPid: number; startTicks: string | null; runnerStartTicks: string | null };
+type LinuxProcess = { parentPid: number; startedAt: string; state: string };
 
 function linuxProcess(pid: number): LinuxProcess | undefined {
 	try {
@@ -24,67 +24,125 @@ function linuxProcess(pid: number): LinuxProcess | undefined {
 		const state = /^State:\s*(\S+)/mu.exec(status)?.[1];
 		const statText = readFileSync(`/proc/${pid}/stat`, "utf8");
 		const stat = statText.slice(statText.lastIndexOf(") ") + 2).split(" ");
-		const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
-		if (!parentPid || !state || !stat[19] || realpathSync(`/proc/${pid}/exe`) !== realpathSync(process.execPath))
-			return undefined;
-		return { pid, parentPid, startedAt: stat[19], args, state };
+		if (!parentPid || !state || !stat[19]) return undefined;
+		return { parentPid, startedAt: stat[19], state };
 	} catch (error) {
 		if (["ENOENT", "ESRCH", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
 		throw error;
 	}
 }
 
-function linuxChild(parentPid: number, script: string): LinuxProcess | undefined {
-	const matches = readdirSync("/proc")
-		.filter((name) => /^\d+$/u.test(name))
-		.map((name) => linuxProcess(Number(name)))
-		.filter((child): child is LinuxProcess => child?.parentPid === parentPid && child.args.includes(script));
-	if (matches.length > 1) throw new Error(`SWE fixture found multiple children for ${script}`);
-	return matches[0];
+function pidHandshakePath(directory: string, runId: string): string {
+	return join(directory, runId, "swebench", "agent-spawn-pid.json");
 }
 
-async function linuxPiProcess(startPid: number | undefined, entryScript: string): Promise<LinuxProcess> {
-	if (!startPid) throw new Error("SWE fixture started process has no PID");
+function readPidHandshake(path: string, runId: string, nonce: string, runnerPid?: number, controlledPid?: number): PiIdentity {
+	const file = lstatSync(path);
+	if (!file.isFile() || file.isSymbolicLink() || file.size < 1 || file.size > 512 || (process.platform === "linux" && (file.mode & 0o077) !== 0))
+		throw new Error("SWE fixture PID handshake file is untrusted");
+	const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+	if (value.runId !== runId || value.nonce !== nonce) throw new Error("SWE fixture PID handshake run identity mismatch");
+	if (
+		!Number.isSafeInteger(value.agentPid) ||
+		Number(value.agentPid) <= 0 ||
+		!Number.isSafeInteger(value.runnerPid) ||
+		Number(value.runnerPid) <= 0 ||
+		(runnerPid !== undefined && value.runnerPid !== runnerPid)
+	)
+		throw new Error("SWE fixture PID handshake process identity mismatch");
+	const pi: PiIdentity = {
+		agentPid: Number(value.agentPid),
+		runnerPid: Number(value.runnerPid),
+		startTicks: typeof value.startTicks === "string" ? value.startTicks : null,
+		runnerStartTicks: typeof value.runnerStartTicks === "string" ? value.runnerStartTicks : null,
+	};
+	try {
+		process.kill(pi.agentPid, 0);
+	} catch {
+		throw new Error("SWE fixture PID handshake process is no longer alive");
+	}
+	if (process.platform === "linux") {
+		if (!sameLinuxPi(pi)) throw new Error("SWE fixture PID handshake Pi identity mismatch");
+		const runner = linuxProcess(pi.runnerPid);
+		if (!runner || runner.startedAt !== pi.runnerStartTicks || runner.state === "Z" || (controlledPid !== undefined && runner.parentPid !== controlledPid))
+			throw new Error("SWE fixture PID handshake Runner identity mismatch");
+	}
+	return pi;
+}
+
+async function waitPidHandshake(path: string, runId: string, nonce: string, runnerPid?: number, controlledPid?: number): Promise<PiIdentity> {
 	const deadline = Date.now() + 1000;
 	while (Date.now() < deadline) {
-		const entry = linuxProcess(startPid);
-		if (!entry?.args.includes(entryScript)) throw new Error("SWE fixture started process identity mismatch");
-		const runner = entryScript === runnerScript ? entry : linuxChild(entry.pid, runnerScript);
-		const pi = runner && linuxChild(runner.pid, piScript);
-		if (pi) return pi;
+		try {
+			return readPidHandshake(path, runId, nonce, runnerPid, controlledPid);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
 		await new Promise((done) => setTimeout(done, 20));
 	}
-	throw new Error(`SWE fixture could not find Pi child through ${entryScript === runnerScript ? "Runner" : "Controlled/Runner"}`);
+	throw new Error("SWE fixture PID handshake did not arrive");
 }
 
-function sameLinuxPi(pi: LinuxProcess, requireParent = true): boolean {
-	const current = linuxProcess(pi.pid);
+function sameLinuxPi(pi: PiIdentity, requireParent = true): boolean {
+	const current = linuxProcess(pi.agentPid);
 	return Boolean(
 		current &&
-			(!requireParent || current.parentPid === pi.parentPid) &&
-			current.startedAt === pi.startedAt &&
-			current.args.includes(piScript),
+			(!requireParent || current.parentPid === pi.runnerPid) &&
+			current.startedAt === pi.startTicks &&
+			current.state !== "Z",
 	);
 }
 
-async function waitLinuxStopped(pi: LinuxProcess): Promise<void> {
+async function waitLinuxStopped(pi: PiIdentity): Promise<void> {
 	const deadline = Date.now() + 1000;
 	while (Date.now() < deadline) {
 		if (!sameLinuxPi(pi)) throw new Error("SWE fixture Pi exited before SIGSTOP completed");
-		if (linuxProcess(pi.pid)?.state === "T") return;
+		if (linuxProcess(pi.agentPid)?.state === "T") return;
 		await new Promise((done) => setTimeout(done, 20));
 	}
 	throw new Error("SWE fixture Pi did not enter stopped state");
 }
 
-function resumeLinuxPi(pi: LinuxProcess | undefined): void {
+function resumeLinuxPi(pi: PiIdentity | undefined): void {
 	if (!pi || !sameLinuxPi(pi, false)) return;
 	try {
-		process.kill(pi.pid, "SIGCONT");
+		process.kill(pi.agentPid, "SIGCONT");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
 	}
 }
+
+it("rejects real-provider, wrong-run and expired Pi PID handshakes", async () => {
+	expect(() => stubPidHandshakeEnabled("1", undefined, true, "1")).toThrow("SWE_STUB_PID_HANDSHAKE_FORBIDDEN");
+	expect(() => stubPidHandshakeEnabled("1", "http://127.0.0.1:1", true, undefined)).toThrow(
+		"SWE_STUB_PID_HANDSHAKE_FORBIDDEN",
+	);
+	const directory = mkdtempSync(join(tmpdir(), "pi-swe-pid-negative-"));
+	const path = join(directory, "agent-spawn-pid.json");
+	const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+	const closed = new Promise((done) => child.once("close", done));
+	try {
+		if (!child.pid) throw new Error("SWE fixture negative-test child did not start");
+		const nonce = randomUUID();
+		const evidence = {
+			runId: "wrong-run",
+			runnerPid: process.pid,
+			agentPid: child.pid,
+			nonce,
+			startTicks: process.platform === "linux" ? linuxProcess(child.pid)?.startedAt : null,
+			runnerStartTicks: process.platform === "linux" ? linuxProcess(process.pid)?.startedAt : null,
+		};
+		writeFileSync(path, JSON.stringify(evidence), { flag: "wx", mode: 0o600 });
+		expect(() => readPidHandshake(path, "expected-run", nonce)).toThrow("run identity mismatch");
+		child.kill();
+		await closed;
+		writeFileSync(path, JSON.stringify({ ...evidence, runId: "expected-run" }));
+		expect(() => readPidHandshake(path, "expected-run", nonce)).toThrow("no longer alive");
+	} finally {
+		child.kill();
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
 const cases = [
 	...["off", "v1", "v2"].flatMap((mode) => [
 		["edit_test", mode],
@@ -108,6 +166,7 @@ it.skipIf(!available).each(cases)(
 		const old = source.split(/\r?\n/u).find((line) => line.trim().length >= 16 && source.split(line).length === 2)!;
 		const batch = scenario === "budget" || scenario === "export_failure";
 		const id = `swe_task_${scenario}_${mode}`;
+		const handshakeNonce = randomUUID();
 		let calls = 0,
 			runnerPid: number | undefined;
 		let killedPiPid: number | undefined;
@@ -164,9 +223,9 @@ it.skipIf(!available).each(cases)(
 						expect(pi).toHaveLength(1);
 						pid = pi[0].ProcessId;
 					} else {
-						const pi = await linuxPiProcess(runnerPid, runnerScript);
+						const pi = await waitPidHandshake(pidHandshakePath(directory, id), id, handshakeNonce, runnerPid);
 						if (!sameLinuxPi(pi)) throw new Error("SWE fixture Pi identity changed before SIGKILL");
-						pid = pi.pid;
+						pid = pi.agentPid;
 					}
 					if (!process.kill(pid, "SIGKILL")) throw new Error("SWE fixture failed to interrupt Pi");
 					killedPiPid = pid;
@@ -247,6 +306,9 @@ it.skipIf(!available).each(cases)(
 					PI_ENHANCED_REAL_MODEL_EVAL: "1",
 					PI_ENHANCED_LOCAL_STUB_EVAL: "1",
 					MOCK_PROVIDER_KEY: "mock-upstream-key",
+					...(scenario === "abnormal_session"
+						? { PI_ENHANCED_SWE_STUB_PID_HANDSHAKE: "1", PI_ENHANCED_SWE_STUB_PID_NONCE: handshakeNonce }
+						: {}),
 				},
 			});
 			runnerPid = child.pid;
@@ -350,6 +412,7 @@ it
 	async (scenario) => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-swe-continue-"));
 		const id = `swe_task_continue_${scenario}`;
+		const handshakeNonce = randomUUID();
 		const limits: { -readonly [K in keyof typeof SWE_TASK_LIMITS]: number } = { ...SWE_TASK_LIMITS };
 		if (scenario === "requests") limits.maxRequests = 1;
 		if (scenario === "cost") limits.maxCostUsd = 0.01;
@@ -361,7 +424,7 @@ it
 		let calls = 0;
 		let controlledPid: number | undefined;
 		let pausedPiPid: number | undefined;
-		let pausedPi: LinuxProcess | undefined;
+		let pausedPi: PiIdentity | undefined;
 		let processError: Error | undefined;
 		const modes: string[] = [];
 		const provider = await startStubProvider(async (body, response) => {
@@ -419,12 +482,13 @@ it
 					try {
 						// The received provider request confirms Pi is ready. Stop only the verified child,
 						// then let the gateway settle this response before the Runner deadline.
-						const pi = await linuxPiProcess(controlledPid, controlledScript);
+						const runId = `${id}_${mode}`;
+						const pi = await waitPidHandshake(pidHandshakePath(join(directory, id), runId), runId, handshakeNonce, undefined, controlledPid);
 						if (!sameLinuxPi(pi)) throw new Error("SWE fixture Pi identity changed before SIGSTOP");
-						if (!process.kill(pi.pid, "SIGSTOP")) throw new Error("SWE fixture failed to pause Pi");
+						if (!process.kill(pi.agentPid, "SIGSTOP")) throw new Error("SWE fixture failed to pause Pi");
 						pausedPi = pi;
 						await waitLinuxStopped(pi);
-						pausedPiPid = pi.pid;
+						pausedPiPid = pi.agentPid;
 					} catch (error) {
 						resumeLinuxPi(pausedPi);
 						processError = error instanceof Error ? error : new Error(String(error));
@@ -494,6 +558,9 @@ if ($pi.Count -ne 1) { throw 'Pi fixture child identity mismatch' };
 							PI_ENHANCED_REAL_MODEL_EVAL: "1",
 							PI_ENHANCED_LOCAL_STUB_EVAL: "1",
 							MOCK_PROVIDER_KEY: "mock-upstream-key",
+							...(scenario === "timeout"
+								? { PI_ENHANCED_SWE_STUB_PID_HANDSHAKE: "1", PI_ENHANCED_SWE_STUB_PID_NONCE: handshakeNonce }
+								: {}),
 						},
 					},
 				);
