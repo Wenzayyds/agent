@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, it } from "vitest";
@@ -12,27 +12,78 @@ const root = resolve(import.meta.dirname, "../../../..");
 const mirror = process.env.PI_ENHANCED_SWE_LOCAL_MIRROR;
 const available = Boolean(mirror) && dockerImageAvailable();
 
-function linuxPiPid(controlledPid: number | undefined): number {
-	if (!controlledPid) throw new Error("SWE fixture controlled process has no PID");
-	const children = (pid: number): number[] =>
-		readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
-			.trim()
-			.split(/\s+/u)
-			.filter(Boolean)
-			.map(Number);
-	const command = (pid: number): string[] => readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
-	const runners = children(controlledPid).filter((pid) =>
-		command(pid).includes(join(root, "packages/pi-enhanced/benchmarks/real-agent/run-real-agent.ts")),
+const controlledScript = join(root, "packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts");
+const runnerScript = join(root, "packages/pi-enhanced/benchmarks/real-agent/run-real-agent.ts");
+const piScript = join(root, "packages/coding-agent/dist/bundle/cli.js");
+type LinuxProcess = { pid: number; parentPid: number; startedAt: string; args: string[]; state: string };
+
+function linuxProcess(pid: number): LinuxProcess | undefined {
+	try {
+		const status = readFileSync(`/proc/${pid}/status`, "utf8");
+		const parentPid = Number(/^PPid:\s*(\d+)/mu.exec(status)?.[1]);
+		const state = /^State:\s*(\S+)/mu.exec(status)?.[1];
+		const statText = readFileSync(`/proc/${pid}/stat`, "utf8");
+		const stat = statText.slice(statText.lastIndexOf(") ") + 2).split(" ");
+		const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+		if (!parentPid || !state || !stat[19] || realpathSync(`/proc/${pid}/exe`) !== realpathSync(process.execPath))
+			return undefined;
+		return { pid, parentPid, startedAt: stat[19], args, state };
+	} catch (error) {
+		if (["ENOENT", "ESRCH", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
+		throw error;
+	}
+}
+
+function linuxChild(parentPid: number, script: string): LinuxProcess | undefined {
+	const matches = readdirSync("/proc")
+		.filter((name) => /^\d+$/u.test(name))
+		.map((name) => linuxProcess(Number(name)))
+		.filter((child): child is LinuxProcess => child?.parentPid === parentPid && child.args.includes(script));
+	if (matches.length > 1) throw new Error(`SWE fixture found multiple children for ${script}`);
+	return matches[0];
+}
+
+async function linuxPiProcess(startPid: number | undefined, entryScript: string): Promise<LinuxProcess> {
+	if (!startPid) throw new Error("SWE fixture started process has no PID");
+	const deadline = Date.now() + 1000;
+	while (Date.now() < deadline) {
+		const entry = linuxProcess(startPid);
+		if (!entry?.args.includes(entryScript)) throw new Error("SWE fixture started process identity mismatch");
+		const runner = entryScript === runnerScript ? entry : linuxChild(entry.pid, runnerScript);
+		const pi = runner && linuxChild(runner.pid, piScript);
+		if (pi) return pi;
+		await new Promise((done) => setTimeout(done, 20));
+	}
+	throw new Error(`SWE fixture could not find Pi child through ${entryScript === runnerScript ? "Runner" : "Controlled/Runner"}`);
+}
+
+function sameLinuxPi(pi: LinuxProcess, requireParent = true): boolean {
+	const current = linuxProcess(pi.pid);
+	return Boolean(
+		current &&
+			(!requireParent || current.parentPid === pi.parentPid) &&
+			current.startedAt === pi.startedAt &&
+			current.args.includes(piScript),
 	);
-	if (runners.length !== 1) throw new Error(`SWE fixture expected one runner child, found ${runners.length}`);
-	const agents = children(runners[0]!).filter(
-		(pid) =>
-			command(pid).includes(join(root, "packages/coding-agent/dist/bundle/cli.js")) &&
-			realpathSync(`/proc/${pid}/exe`) === realpathSync(process.execPath),
-	);
-	if (agents.length !== 1) throw new Error(`SWE fixture expected one Pi child, found ${agents.length}`);
-	process.kill(agents[0]!, 0);
-	return agents[0]!;
+}
+
+async function waitLinuxStopped(pi: LinuxProcess): Promise<void> {
+	const deadline = Date.now() + 1000;
+	while (Date.now() < deadline) {
+		if (!sameLinuxPi(pi)) throw new Error("SWE fixture Pi exited before SIGSTOP completed");
+		if (linuxProcess(pi.pid)?.state === "T") return;
+		await new Promise((done) => setTimeout(done, 20));
+	}
+	throw new Error("SWE fixture Pi did not enter stopped state");
+}
+
+function resumeLinuxPi(pi: LinuxProcess | undefined): void {
+	if (!pi || !sameLinuxPi(pi, false)) return;
+	try {
+		process.kill(pi.pid, "SIGCONT");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+	}
 }
 const cases = [
 	...["off", "v1", "v2"].flatMap((mode) => [
@@ -60,7 +111,8 @@ it.skipIf(!available).each(cases)(
 		let calls = 0,
 			runnerPid: number | undefined;
 		let killedPiPid: number | undefined;
-		const provider = await startStubProvider((body, response) => {
+		let processError: Error | undefined;
+		const provider = await startStubProvider(async (body, response) => {
 			calls++;
 			if (calls === 1) {
 				const message = (body.messages as Array<{ role: string; content: unknown }>).find(
@@ -89,9 +141,11 @@ it.skipIf(!available).each(cases)(
 			else if (calls === 1) sse = toolCallSse("read", { path: testPath, limit: 5 }, 100, 10);
 			else if (scenario === "abnormal_session") {
 				// Kill the actual Pi child, leaving the production Runner alive to collect interrupted evidence.
-				const listing =
-					process.platform === "win32"
-						? execFileSync(
+				try {
+					expect((body.messages as Array<{ role: string }>).some((message) => message.role === "tool")).toBe(true);
+					const listing =
+						process.platform === "win32"
+							? execFileSync(
 								"powershell.exe",
 								[
 									"-NoProfile",
@@ -101,17 +155,27 @@ it.skipIf(!available).each(cases)(
 								],
 								{ encoding: "utf8" },
 							)
-						: "";
-				let pid: number;
-				if (process.platform === "win32") {
-					const parsed = JSON.parse(listing);
-					const children = Array.isArray(parsed) ? parsed : [parsed];
-					const pi = children.filter((c) => /[\\/]dist[\\/]bundle[\\/]cli\.js/u.test(c.CommandLine));
-					expect(pi).toHaveLength(1);
-					pid = pi[0].ProcessId;
-				} else pid = linuxPiPid(runnerPid);
-				if (!process.kill(pid, "SIGKILL")) throw new Error("SWE fixture failed to interrupt Pi");
-				killedPiPid = pid;
+							: "";
+					let pid: number;
+					if (process.platform === "win32") {
+						const parsed = JSON.parse(listing);
+						const children = Array.isArray(parsed) ? parsed : [parsed];
+						const pi = children.filter((c) => /[\\/]dist[\\/]bundle[\\/]cli\.js/u.test(c.CommandLine));
+						expect(pi).toHaveLength(1);
+						pid = pi[0].ProcessId;
+					} else {
+						const pi = await linuxPiProcess(runnerPid, runnerScript);
+						if (!sameLinuxPi(pi)) throw new Error("SWE fixture Pi identity changed before SIGKILL");
+						pid = pi.pid;
+					}
+					if (!process.kill(pid, "SIGKILL")) throw new Error("SWE fixture failed to interrupt Pi");
+					killedPiPid = pid;
+				} catch (error) {
+					processError = error instanceof Error ? error : new Error(String(error));
+					response.writeHead(503);
+					response.end();
+					return;
+				}
 				sse = textSse("Stub final after forced interruption", 100, 10);
 			} else
 				sse = toolCallSse(
@@ -194,6 +258,7 @@ it.skipIf(!available).each(cases)(
 				child.once("error", reject);
 				child.once("close", done);
 			});
+			if (processError) throw processError;
 			expect(code, stderr).toBe(0);
 			const resultDir = join(directory, id, ...(batch ? [`${id}_off`] : []), "swebench");
 			const result = JSON.parse(readFileSync(join(resultDir, "result.json"), "utf8"));
@@ -296,8 +361,10 @@ it
 		let calls = 0;
 		let controlledPid: number | undefined;
 		let pausedPiPid: number | undefined;
+		let pausedPi: LinuxProcess | undefined;
+		let processError: Error | undefined;
 		const modes: string[] = [];
-		const provider = await startStubProvider((body, response) => {
+		const provider = await startStubProvider(async (body, response) => {
 			calls++;
 			const tools = (body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
 			const mode = tools.includes("enhanced_task_plan_update")
@@ -349,11 +416,22 @@ it
 			if (scenario === "usage_failure") sse = sse.replace(/"usage":\{[^}]+\}/u, '"usage":{}');
 			if (scenario === "timeout" && !previous) {
 				if (process.platform !== "win32") {
-					// Pause the identified Pi child before releasing the final usage chunk. The gateway
-					// can settle this request while Pi remains stopped until the Runner deadline.
-					const pid = linuxPiPid(controlledPid);
-					if (!process.kill(pid, "SIGSTOP")) throw new Error("SWE fixture failed to pause Pi");
-					pausedPiPid = pid;
+					try {
+						// The received provider request confirms Pi is ready. Stop only the verified child,
+						// then let the gateway settle this response before the Runner deadline.
+						const pi = await linuxPiProcess(controlledPid, controlledScript);
+						if (!sameLinuxPi(pi)) throw new Error("SWE fixture Pi identity changed before SIGSTOP");
+						if (!process.kill(pi.pid, "SIGSTOP")) throw new Error("SWE fixture failed to pause Pi");
+						pausedPi = pi;
+						await waitLinuxStopped(pi);
+						pausedPiPid = pi.pid;
+					} catch (error) {
+						resumeLinuxPi(pausedPi);
+						processError = error instanceof Error ? error : new Error(String(error));
+						response.writeHead(503);
+						response.end();
+						return;
+					}
 				} else response.once("finish", () => {
 					// Suspend the actual Pi process after its provider response has settled. The production
 					// Runner's unchanged deadline must terminate it and prove cleanup, without an active API call.
@@ -429,6 +507,7 @@ if ($pi.Count -ne 1) { throw 'Pi fixture child identity mismatch' };
 			});
 		try {
 			const child = await run();
+			if (processError) throw processError;
 			expect(child.code, child.stderr).toBe(0);
 			if (scenario === "timeout" && process.platform !== "win32") expect(pausedPiPid).toBeGreaterThan(0);
 			const batch = JSON.parse(readFileSync(join(directory, id, "batch.json"), "utf8"));
@@ -471,13 +550,17 @@ if ($pi.Count -ne 1) { throw 'Pi fixture child identity mismatch' };
 						expect(cell.result.gatewayRejections.at(-1).code).toBe(
 							scenario === "requests" ? "GATEWAY_REQUEST_LIMIT" : "GATEWAY_COST_BUDGET",
 						);
-					if (scenario === "timeout") expect(cell.result.runStatus).toBe("timeout");
+					if (scenario === "timeout") {
+						expect(cell.result.runStatus).toBe("timeout");
+						expect(cell.result.gatewayRejections).toEqual([]);
+					}
 				}
 			}
 			const prior = calls;
 			expect((await run()).code).not.toBe(0);
 			expect(calls).toBe(prior); // Exclusive batch directory prevents retry, including resource-stopped cells.
 		} finally {
+			resumeLinuxPi(pausedPi);
 			await close(provider.server);
 			rmSync(directory, { recursive: true, force: true });
 		}
