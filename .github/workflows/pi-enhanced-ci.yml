@@ -35,13 +35,11 @@ jobs:
       - run: npm run check --workspace=@wz-agent/pi-enhanced
       - run: npm run check:evaluation --workspace=@wz-agent/pi-enhanced
       - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --exclude '**/.artifacts/**' --maxWorkers=1 --testTimeout=30000 --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
-      - run: node --experimental-strip-types packages/pi-enhanced/benchmarks/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/version-freeze-results.json packages/pi-enhanced/.ci-test-manifest.json
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/version-freeze-results.json packages/pi-enhanced/.ci-test-manifest.json
       - run: python -m pytest packages/pi-enhanced/python/memory-intelligence/tests -q
         env:
           PYTHONPATH: packages/pi-enhanced/python/memory-intelligence/src
-      - run: npm run evaluate:p5 --workspace=@wz-agent/pi-enhanced
-      - run: npm run evaluate:real-agent --workspace=@wz-agent/pi-enhanced
-      - run: npm run evaluate:quality --workspace=@wz-agent/pi-enhanced
+      - run: npm run evaluate:real-agent --workspace=@wz-agent/pi-enhanced -- --preflight
       - run: npm run check:pack --workspace=@wz-agent/pi-enhanced
       - if: always()
         uses: actions/upload-artifact@v4
@@ -80,7 +78,7 @@ jobs:
       - run: npm run smoke:docker --workspace=@wz-agent/pi-enhanced
       - run: npm run check:evaluation --workspace=@wz-agent/pi-enhanced
       - run: node -e "require('node:fs').mkdirSync('packages/pi-enhanced/batch-j-stub', {recursive:true})"
-      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/unit/evaluation-telemetry.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts packages/pi-enhanced/tests/unit/controlled-policy.test.ts packages/pi-enhanced/tests/e2e/controlled-batch.test.ts packages/pi-enhanced/tests/unit/batch-j-policy-audit.test.ts packages/pi-enhanced/tests/e2e/batch-j-runner.test.ts packages/pi-enhanced/tests/e2e/docker-verifier.test.ts packages/pi-enhanced/tests/e2e/batch-l-comparison.test.ts packages/pi-enhanced/tests/e2e/batch-n-observability.test.ts packages/pi-enhanced/tests/e2e/swebench-stub.test.ts --exclude '**/.artifacts/**' --maxWorkers=1 --testTimeout=30000 --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/unit/evaluation-telemetry.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts packages/pi-enhanced/tests/unit/controlled-policy.test.ts packages/pi-enhanced/tests/e2e/controlled-batch.test.ts packages/pi-enhanced/tests/unit/batch-j-policy-audit.test.ts packages/pi-enhanced/tests/e2e/batch-j-runner.test.ts packages/pi-enhanced/tests/e2e/docker-verifier.test.ts packages/pi-enhanced/tests/e2e/batch-l-comparison.test.ts packages/pi-enhanced/tests/e2e/batch-n-observability.test.ts packages/pi-enhanced/tests/e2e/swebench-stub.test.ts packages/pi-enhanced/tests/e2e/swebench-policy.test.ts --exclude '**/.artifacts/**' --maxWorkers=1 --testTimeout=30000 --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
         env:
           PI_ENHANCED_SIX_EVIDENCE_PATH: packages/pi-enhanced/controlled-six-stub.json
           PI_ENHANCED_BATCH_J_OUTPUT: packages/pi-enhanced/batch-j-stub

@@ -1,10 +1,26 @@
 # Pi Enhanced
 
-这是 Pi 增强模块的独立 Package。P0 建立可加载、可配置、可独立关闭的扩展骨架；P1 已实现 MCP 调用策略和脱敏内存审计；P2-1～P2-8 已完成项目级 Memory、Core Memory、当前 Session Recall、交互入口、跨 Extension Reader，以及可选的本地语义与混合检索；Memory V3 Batch A 又补充了分类、生命周期、关系、Doctor 和需要用户批准的维护提案。P3 已实现默认关闭的 Context 请求视图；Task Manager 尚未开发。
+Pi Enhanced 为 Pi 提供五个可独立启停的扩展：MCP Policy、Memory、Context、Task Manager 和 Docker Sandbox。运行时实现位于 `src/`，模型实验位于 `benchmarks/real-agent/`；两者通过 Extension 接口连接，不修改 Pi Agent Loop。
+
+当前 Task Manager 支持 `off`、`v1`、`v2`。SWE-bench 使用 OFF/V1/V2 三组受限源码对照，模型执行和官方判分分别启动。实验配置不代表费用授权。
+
+## 代码导航
+
+| 目录 | 职责 |
+|---|---|
+| `extensions/` | 五个 Pi Extension 入口 |
+| `src/mcp-policy/`、`src/sandbox/` | 工具策略、原生工具保护和 Docker 文件工具 |
+| `src/memory/`、`python/memory-intelligence/` | 项目记忆存储、检索和可选 Python 向量计算 |
+| `src/context/`、`src/task-manager/` | 请求上下文选择、任务状态和计划更新 |
+| `benchmarks/real-agent/` | 当前模型 Runner、预算、授权与 SWE-bench；见[调用关系](benchmarks/real-agent/README.md) |
+| `benchmarks/archive/` | 旧 P5、消融和合成基准，已移出日常脚本和 CI；见[归档说明](benchmarks/archive/README.md) |
+| `tests/unit/`、`tests/integration/`、`tests/e2e/` | 策略单测、模块生命周期和生产链路回归 |
+| `scripts/ci/` | CI 元数据、测试身份清单、Docker 证据与打包检查 |
+| `docs/` | 设计和验收资料；旧记录只用于追溯 |
 
 ## 模块入口
 
-Package 暴露四个独立 Extension：
+Package 暴露五个独立 Extension：
 
 | 模块 | 入口 | 状态命令 |
 |---|---|---|
@@ -12,6 +28,7 @@ Package 暴露四个独立 Extension：
 | Memory | `extensions/memory.ts` | `/enhanced-memory-status`；启用且受信任后开放 P2-6 交互命令 |
 | Context | `extensions/context.ts` | `/enhanced-context-status`、`/enhanced-context-inspect` |
 | Task Manager | `extensions/task-manager.ts` | `/enhanced-task-manager-status` |
+| Docker Sandbox | `extensions/sandbox.ts` | 由受控 Runner 设置宿主配置 |
 
 这些命令不会覆盖 Pi 内置的 `/mcp`、`codemode` 或 `tool_search`。
 
@@ -34,7 +51,7 @@ P2-8 默认继续使用 SQLite FTS5。用户显式启用 semantic 或 hybrid 后
 
 ## 配置
 
-默认情况下四个模块全部关闭。用户级配置放在 `~/.pi/agent/pi-enhanced.json`：
+默认情况下普通模块全部关闭，Sandbox 另由宿主环境显式启用。用户级配置放在 `~/.pi/agent/pi-enhanced.json`：
 
 ```json
 {
@@ -113,7 +130,7 @@ Context 配置示例：
 
 `observe` 只计算诊断，不改变消息；`select` 只改变本次模型请求视图，不写 Session。Memory 和当前 Task 摘要分别设开关并默认关闭。Task 摘要只读、低信任，并在注入前重新核对项目、会话、分支和 revision。Context 不使用 `context_with_system`，不会改系统提示或工具定义。详细设计见 [P3 Context 设计](docs/p3-context-design.md)。
 
-Task Manager V3 也默认关闭，只在受信任项目中创建独立任务库：
+Task Manager 也默认关闭，只在受信任项目中创建独立任务库：
 
 ```json
 {
@@ -213,82 +230,16 @@ npm run test:sandbox --workspace=@wz-agent/pi-enhanced
 
 测试会创建并删除临时容器；异常退出后可按名称 `pi-enhanced-tools-*` 检查残留。不要使用宽泛的容器删除命令。
 
-## 验证记录
+## 验证与当前状态
 
-P0 接口和基线见 [P0 验证](docs/verification.md)，依赖升级影响见 [依赖兼容记录](docs/dependency-compatibility.md)。
+工程检查使用 `npm run check --workspace=@wz-agent/pi-enhanced` 和 `npm run check:evaluation --workspace=@wz-agent/pi-enhanced`。普通 CI 使用无密钥预检；Docker Job 必须实际运行沙箱、网关和 SWE 策略用例，跳过不算通过。
 
-P1 已恢复并保留可重复测试。详细记录如下：
+测试中的 Batch 字样是历史测试身份，不表示用例已经废弃。仍覆盖路径隔离、预算结算、授权消费、审计恢复及模块生命周期的用例继续保留，避免把结构清理变成覆盖率删减。
 
-- [P1 接口核对](docs/p1-interface-check.md)
-- [Serena / Context7 兼容记录](docs/p1-mcp-components.md)
-- [P1 测试报告](docs/p1-test-report.md)
-- [P1 已知限制](docs/p1-known-limitations.md)
-- [P1 测试与安全基线](docs/p1-security-baseline.md)
-- [P2-0 Memory 接口核对](docs/p2-interface-check.md)
-- [P2 Memory 数据与隔离设计](docs/p2-memory-design.md)
-- [P2 开发任务与验收测试](docs/p2-development-tasks-and-acceptance.md)
-- [P2-1 验证记录](docs/p2-1-verification.md)
-- [P2-2 验证记录](docs/p2-2-verification.md)
-- [P2-3 验证记录](docs/p2-3-verification.md)
-- [P2-4 Core Memory 验证记录](docs/p2-4-verification.md)
-- [P2-5 Session Recall 验证记录](docs/p2-5-verification.md)
-- [P2-6 Memory 交互与 Reader 验证记录](docs/p2-6-verification.md)
-- [P2-7 Memory 整体验收](docs/p2-7-verification.md)
-- [P2-8 Worker、语义与混合检索验证](docs/p2-8-verification.md)
-- [P2-8 离线实验结果](docs/p2-8-benchmark.json)
-- [P2 已知限制](docs/p2-known-limitations.md)
-- [P2 发布级收尾](docs/p2-final-closure.md)
-- [TypeScript / Python 架构边界](docs/hybrid-architecture.md)
-- [P3 接口核对](docs/p3-interface-check.md)
-- [P3 Context 设计](docs/p3-context-design.md)
-- [P3 验证报告](docs/p3-verification.md)
-- [P3 离线基准](docs/p3-benchmark.json)
-- [Memory Governance 一手资料对标](docs/architecture-reference-matrix.md)
-- [Memory V3 设计增量](docs/p2-memory-v3-design-delta.md)
-- [Memory V3 migration 与回滚](docs/p2-memory-v3-migration.md)
-- [Memory V3 Batch A 验证](docs/p2-memory-v3-verification.md)
-- [Memory Governance 小型基准](docs/memory-governance-benchmark.json)
-- [P3 与 Memory V3 兼容验收](docs/p3-memory-v3-compat-verification.md)
-- [P4 固定接口核对](docs/p4-interface-check.md)
-- [P4 Task Manager 设计](docs/p4-task-design.md)
-- [P4 schema 与迁移](docs/p4-schema-migration.md)
-- [P4 验收报告](docs/p4-verification.md)
-- [P4 合成 Benchmark](docs/p4-benchmark.json)
-- [P4 已知限制](docs/p4-known-limitations.md)
-- [Batch D 基线与测试身份核对](docs/batch-d-baseline-audit.md)
-- [P3 Task 兼容验收](docs/p3-task-compat-verification.md)
-- [P4 加固验收](docs/p4-hardening-verification.md)
-- [P5 评测设计](docs/p5-evaluation-design.md)
-- [P5 评测数据](docs/p5-evaluation-results.json)
-- [Batch D 总体验收](docs/batch-d-verification.md)
-- [Batch E 总体验收](docs/batch-e-verification.md)
-- [原生工具安全接口](docs/native-tool-security-interface-check.md)
-- [真实模型任务核对](docs/p5-real-model-verification.md)
-- [备份恢复](docs/data-backup-restore.md)
-- [发布候选检查表](docs/release-candidate-checklist.md)
-- [Batch F 总体验收](docs/batch-f-verification.md)
-- [Batch F Docker 隔离报告](docs/batch-f-sandbox-report.md)
-- [Batch F 模型评测器审计](docs/batch-f-real-model-harness-audit.md)
-- [Batch F Gate 报告](docs/batch-f-gate-report.json)
-- [Batch G 固定接口核对](docs/batch-g-interface-audit.md)
-- [Batch G Docker 隔离设计](docs/batch-g-sandbox-design.md)
-- [Batch G 真实工具链验证](docs/batch-g-sandbox-integration-verification.md)
-- [Batch G 模型 Preflight](docs/batch-g-model-preflight.md)
-- [Batch G 总体验收](docs/batch-g-verification.md)
-- [Batch G Gate 报告](docs/batch-g-gate-report.json)
-- [Batch H API 调用链核对](docs/batch-h-interface-audit.md)
-- [Batch H 硬预算网关设计](docs/batch-h-budget-gateway-design.md)
-- [Batch H 联合运行验证](docs/batch-h-joint-verification.md)
-- [Batch H 真实模型结果](docs/batch-h-real-model-results.json)
-- [Batch H CI 与发布复核](docs/batch-h-ci-release-review.md)
-- [Batch H Gate 报告](docs/batch-h-gate-report.json)
-- [Batch H 验收报告](docs/batch-h-verification.md)
-- [Batch H 测试身份](docs/batch-h-test-manifest.json)
-- [Batch I 根因审计](docs/batch-i-root-cause-audit.md)
-- [Batch I 工作区身份设计](docs/batch-i-workspace-identity-design.md)
-- [Batch I 生产 Runner 验证](docs/batch-i-runner-integration-verification.md)
-- [Batch I 网关拒绝审计](docs/batch-i-gateway-denial-audit.md)
-- [Batch I 总体验收](docs/batch-i-verification.md)
-- [Batch I 测试身份](docs/batch-i-test-manifest.json)
-- [Batch I 已知限制](docs/batch-i-known-limitations.md)
-- [Batch I 真实模型状态](docs/batch-i-real-model-pilot.md)
+- [当前交接](../../HANDOFF.md)：当前任务、权限范围和未解决问题。
+- [SWE-bench 验收记录](docs/swebench-task-v2-verification.md)与[结果](docs/swebench-task-v2-results.json)：整理前离线验收和真实尝试的原始结论。
+- [SWE-bench 协议与设计](docs/swebench-task-v2-design.md)：受限源码规则、模式差异和官方判分。
+- [数据备份恢复](docs/data-backup-restore.md)：Memory 与 Task 数据管理。
+- [完整历史交接](docs/history/HANDOFF-before-structure-cleanup.md)：旧阶段、授权、实验和 CI 记录，不作为当前执行指令。
+
+历史报告和 `evaluation-output/` 保留原路径；`.artifacts/` 保存本地原始证据。整理前的 26 文件候选清单仅描述当时版本，结构整理后的提交范围须重新核对。

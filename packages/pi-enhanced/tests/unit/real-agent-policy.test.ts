@@ -30,7 +30,13 @@ describe("Batch F real model authorization and budget gate", () => {
 	it("imports all Runner stages without starting tasks or reading a provider key", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "pi-runner-import-"));
 		try {
-			const stages = ["run-real-agent.ts", "runner-preparation.ts", "runner-execution.ts", "runner-results.ts"];
+			const stages = [
+				"run-real-agent.ts",
+				"runner-preparation.ts",
+				"runner-execution.ts",
+				"runner-results.ts",
+				"swe-results.ts",
+			];
 			const imports = stages
 				.map(
 					(name) =>

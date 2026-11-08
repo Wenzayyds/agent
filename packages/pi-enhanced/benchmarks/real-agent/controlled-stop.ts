@@ -126,7 +126,7 @@ export function installControlledStop(pi: ExtensionAPI, policy?: OfflineDenialPo
 					? deniedCount > (policy?.maxDenials ?? Number.POSITIVE_INFINITY)
 						? "readonly-denial-limit"
 						: refusal.record.reasonCode
-					: (text.match(/SANDBOX_[A-Z_]+/u)?.[0] ?? "unauthorized-tool");
+					: (text.match(/(?:SANDBOX|SWE_WRITE)_[A-Z_]+/u)?.[0] ?? "unauthorized-tool");
 		if (events.length < 16)
 			events.push({
 				requestId: createHash("sha256").update(event.toolCallId).digest("hex"),

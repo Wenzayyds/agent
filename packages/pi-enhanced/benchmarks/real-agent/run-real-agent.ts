@@ -4,17 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
-import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
-import { assertSandboxWorkspaceIdentity } from "../../src/sandbox/config.ts";
+import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
 import { claimBatchLCell, loadBatchLAuthorization } from "./batch-l-authorization.ts";
-import {
-	BATCH_L_LIMITS,
-	BATCH_L_PROFILE,
-	SWE_TASK_CONFIGURATION,
-	SWE_TASK_PROFILE,
-	TASK_PAIR_LIMITS,
-	TASK_PAIR_PROFILE,
-} from "./batch-l-profile.ts";
+import { BATCH_L_LIMITS, BATCH_L_PROFILE, TASK_PAIR_LIMITS, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import {
 	CONTROLLED_IMAGE,
 	CONTROLLED_LIMITS,
@@ -22,22 +14,16 @@ import {
 	LONG_REPORT_TASK,
 	MEMORY_TASK_PROMPT,
 } from "./controlled-cases.ts";
-import type { SafetyEvent } from "./controlled-stop.ts";
-import {
-	buildEvaluationPlan,
-	executionOutcome,
-	parseAgentEvents,
-	preflightView,
-	redactEvaluationText,
-} from "./evaluation-policy.ts";
+import { digest } from "./evaluation-identity.ts";
+import { buildEvaluationPlan, preflightView } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
-import { gatewayEvidence } from "./gateway-integration.ts";
 import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
-import { classifyTermination } from "./result-classification.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
-import { exportSwePrediction, loadSweTask, SWE_EVALUATION_PROTOCOL } from "./swebench.ts";
+import { SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import { collectSweResult } from "./swe-results.ts";
+import { loadSweTask } from "./swebench.ts";
 import {
 	claimTaskPairCell,
 	loadTaskPairAuthorization,
@@ -139,6 +125,7 @@ async function main(): Promise<void> {
 				(task) => (cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task),
 			);
 	if (selectedTasks.length === 0) throw new Error("EVAL_UNKNOWN_TASK");
+	const requiredLimits = swe ? SWE_TASK_LIMITS : TASK_PAIR_LIMITS;
 	const input = {
 		runId: argument("--run-id"),
 		provider: argument("--provider"),
@@ -164,10 +151,18 @@ async function main(): Promise<void> {
 			input.budgetEnforcement !== "local_hard_gateway" ||
 			input.maxTasks !== "1" ||
 			input.concurrency !== "1" ||
-			input.maxTotalCostUsd !== String(TASK_PAIR_LIMITS.maxCostUsd) ||
-			input.maxTokensPerTask !== String(TASK_PAIR_LIMITS.maxTokens) ||
-			input.maxCallsPerTask !== String(TASK_PAIR_LIMITS.maxRequests) ||
-			input.timeoutMs !== String(TASK_PAIR_LIMITS.timeoutMs))
+			(localStubUrl
+				? Number(input.maxTotalCostUsd) > requiredLimits.maxCostUsd
+				: input.maxTotalCostUsd !== String(requiredLimits.maxCostUsd)) ||
+			(localStubUrl
+				? Number(input.maxTokensPerTask) > requiredLimits.maxTokens
+				: input.maxTokensPerTask !== String(requiredLimits.maxTokens)) ||
+			(localStubUrl
+				? Number(input.maxCallsPerTask) > requiredLimits.maxRequests
+				: input.maxCallsPerTask !== String(requiredLimits.maxRequests)) ||
+			(localStubUrl
+				? Number(input.timeoutMs) > requiredLimits.timeoutMs
+				: input.timeoutMs !== String(requiredLimits.timeoutMs)))
 	)
 		throw new Error("TASK_PAIR_CONFIGURATION_MISMATCH");
 	if (process.argv.includes("--preflight")) {
@@ -209,10 +204,10 @@ async function main(): Promise<void> {
 			plan.maxTasks !== 1 ||
 			plan.sandboxImage !== CONTROLLED_IMAGE ||
 			plan.budgetEnforcement !== "local_hard_gateway" ||
-			plan.maxCallsPerTask > 12 ||
-			plan.maxTokensPerTask > 80_000 ||
-			plan.maxTotalCostUsd > 0.03 ||
-			plan.timeoutMs > 180_000)
+			plan.maxCallsPerTask > SWE_TASK_LIMITS.maxRequests ||
+			plan.maxTokensPerTask > SWE_TASK_LIMITS.maxTokens ||
+			plan.maxTotalCostUsd > SWE_TASK_LIMITS.maxCostUsd ||
+			plan.timeoutMs > SWE_TASK_LIMITS.timeoutMs)
 	)
 		throw new Error("SWE_BUDGET_OR_SANDBOX_INVALID");
 	if (
@@ -268,6 +263,7 @@ async function main(): Promise<void> {
 		});
 	mkdirSync(join(root, "temp"));
 	const results: Array<Record<string, unknown>> = [];
+	let sweCleanup: Record<string, unknown> | undefined;
 	try {
 		let observedCost = 0;
 		for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
@@ -323,140 +319,10 @@ async function main(): Promise<void> {
 			const prepared = await prepareAgent(context, workspace);
 			const execution = await executeAgent(context, prepared);
 			if (task.swebench) {
-				const dir = join(runOutput!, task.id);
-				let audit: Record<string, unknown> | null = null;
-				try {
-					audit = readSandboxAuditSnapshot(execution.sandboxAuditPath);
-				} catch {}
-				writeFileSync(
-					join(dir, "sandbox-audit.json"),
-					JSON.stringify(
-						audit ?? {
-							complete: false,
-							integrity: "invalid_or_missing",
-						},
-						null,
-						2,
-					),
-				);
-				const inputAuditPath = join(root, "batch-l-input-audit.json");
-				const inputAudit = existsSync(inputAuditPath) ? JSON.parse(readFileSync(inputAuditPath, "utf8")) : null;
-				const trace = execution.telemetry?.finish(execution.gatewayStatus, audit);
-				const agentCompleted =
-					execution.child.status === 0 &&
-					!execution.child.timedOut &&
-					execution.gatewayStatus.state === "ready" &&
-					execution.gatewayStatus.requestsRejected === 0;
-				const secrets = [process.env[plan!.apiKeyEnv!]!];
-				writeFileSync(join(dir, "agent.stdout.jsonl"), redactEvaluationText(execution.child.stdout, secrets), {
-					flag: "wx",
-					mode: 0o600,
-				});
-				writeFileSync(join(dir, "agent.stderr.log"), redactEvaluationText(execution.child.stderr, secrets), {
-					flag: "wx",
-					mode: 0o600,
-				});
-				let prediction: ReturnType<typeof exportSwePrediction> | { status: "agent_failed"; reason: string };
-				try {
-					// Preserve a safe partial patch too. Runtime completion never substitutes for official grading.
-					assertSandboxWorkspaceIdentity(execution.workspaceScope);
-					prediction = exportSwePrediction(
-						task.swebench,
-						prepared.cwd,
-						join(dir, "predictions.jsonl"),
-						`pi-enhanced-${localStubUrl ? "stub" : "real"}-${context.taskMode}-${plan!.model}`,
-					);
-					if (prediction.status === "not_run") {
-						const exported = JSON.parse(readFileSync(join(dir, "predictions.jsonl"), "utf8"));
-						writeFileSync(join(dir, "patch.diff"), exported.model_patch, { flag: "wx", mode: 0o600 });
-					}
-				} catch (error) {
-					prediction = {
-						status: "agent_failed",
-						reason:
-							error instanceof Error && /^(?:SWE|SANDBOX)_[A-Z_]+$/u.test(error.message)
-								? error.message
-								: "SWE_PATCH_EXPORT_FAILED",
-					};
-				}
-				const events = parseAgentEvents(execution.child.stdout);
-				const safetyPath = join(root, "tool-safety.json");
-				const safety = existsSync(safetyPath)
-					? (JSON.parse(readFileSync(safetyPath, "utf8")) as { events: SafetyEvent[] })
-					: { events: [] };
-				const { runStatus } = executionOutcome({
-					overBudget: false,
-					budgetRejected: execution.gatewayStatus.requestsRejected > 0,
-					gatewayFailed: execution.gatewayStatus.state !== "ready",
-					timedOut: execution.child.timedOut,
-					exitCode: execution.child.status,
-					verifierPassed: false,
-				});
-				const result = {
-					...prediction,
-					// These fields let the existing batch safety checks apply unchanged. No local test claims resolution.
-					controlledCell: context.taskMode,
-					runStatus,
-					patchStatus: "not_run",
-					terminationClassification:
-						prediction.status === "agent_failed" && prediction.reason !== "empty_patch"
-							? "isolation_boundary_stop"
-							: classifyTermination({
-									events: safety.events,
-									lastError: execution.gatewayStatus.lastError,
-									gatewayState: execution.gatewayStatus.state,
-									rejected: execution.gatewayStatus.requestsRejected,
-									runStatus,
-									verifierPassed: null,
-									auditComplete: audit?.complete === true,
-								}),
-					sandboxAudit: audit,
-					toolFailures: events
-						.filter((event) => event.type === "tool_execution_end" && event.isError)
-						.map((event) => ({ toolName: event.toolName, result: event.result })),
-					fairness: {
-						userPromptSha256: inputAudit?.userPromptSha256,
-						inputFixtureSha256: prepared.inputFixtureHash,
-						inputAudit,
-					},
-					agentCommit: execFileSync("git", ["rev-parse", "HEAD"], {
-						cwd: repositoryRoot,
-						encoding: "utf8",
-					}).trim(),
-					runId: plan!.runId,
-					evaluationClass: localStubUrl ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task",
-					agentAttempted: true,
-					patchExportStatus: prediction.status === "not_run" ? "exported" : "not_exported",
-					officialHarnessStatus: "not_run",
-					evaluationProtocol: SWE_EVALUATION_PROTOCOL,
-					instanceId: task.swebench.issue.instance_id,
-					repositoryCommit,
-					taskMode: context.taskMode,
-					inputFixtureSha256: prepared.inputFixtureHash,
-					inputAudit,
-					exposedModuleTools: prepared.moduleTools,
-					taskSeeded: prepared.seededTaskId !== undefined,
-					configuration: {
-						provider: plan!.provider,
-						model: plan!.model,
-						maxRequests: plan!.maxCallsPerTask,
-						maxTokens: plan!.maxTokensPerTask,
-						maxCostUsd: plan!.maxTotalCostUsd,
-						timeoutMs: plan!.timeoutMs,
-						memory: false,
-						context: false,
-						thinking: "off",
-					},
-					agentCompleted,
-					auditComplete: audit?.complete === true,
-					durationMs: performance.now() - execution.started,
-					gateway: gatewayEvidence(execution.gatewayStatus),
-					telemetry: trace,
-					resolved: null,
-				};
-				writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 2));
-				results.push(result);
-				observedCost = execution.gatewayStatus.actualCostUsd;
+				const result = collectSweResult(context, prepared, execution);
+				sweCleanup = result.cleanup;
+				results.push(result.record);
+				observedCost = result.observedCost;
 				continue;
 			}
 			const result = collectTaskResult(context, prepared, execution);
@@ -483,6 +349,12 @@ async function main(): Promise<void> {
 		process.stdout.write(`${JSON.stringify(summary)}\n`);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+		if (sweCleanup && runOutput)
+			atomicPrivateJson(join(runOutput, "host-cleanup.json"), {
+				...sweCleanup,
+				privateRootRemoved: !existsSync(root),
+				runReportSha256: digest(readFileSync(join(runOutput, "run.json"), "utf8")),
+			});
 	}
 }
 function argument(name: string): string | undefined {

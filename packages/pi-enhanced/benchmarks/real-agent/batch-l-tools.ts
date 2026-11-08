@@ -4,7 +4,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { setMemorySearchToolAvailability } from "../../src/memory/interaction.ts";
 import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
 import { createTaskManagerExtension } from "../../src/task-manager/extension.ts";
-import { BATCH_L_MODULE_TOOLS, digest } from "./batch-l-profile.ts";
+import { BATCH_L_MODULE_TOOLS } from "./batch-l-profile.ts";
+import { digest } from "./evaluation-identity.ts";
+import { sweWritePathAllowed } from "./swebench.ts";
 
 /** Evaluation only: keep model-visible schemas identical while leaving disabled services closed. */
 export default function batchLTools(pi: ExtensionAPI): void {
@@ -41,7 +43,20 @@ export default function batchLTools(pi: ExtensionAPI): void {
 			thinking: pi.getThinkingLevel(),
 		});
 	});
-	if (process.env.PI_ENHANCED_SWE_INPUT_AUDIT_ONLY === "1") return;
+	if (process.env.PI_ENHANCED_SWE_INPUT_AUDIT_ONLY === "1") {
+		pi.on("tool_call", (event, ctx) => {
+			if (
+				["write", "edit"].includes(event.toolName) &&
+				!sweWritePathAllowed(ctx.cwd, (event.input as { path?: unknown }).path)
+			)
+				return {
+					block: true,
+					reason:
+						"Sandbox pilot only permits source-only writes: SWE_WRITE_PATH_DENIED. Test files may be read but must not be modified.",
+				};
+		});
+		return;
+	}
 	const taskEnabled = process.env.PI_ENHANCED_BATCH_L_TASK === "1";
 	const memoryEnabled = process.env.PI_ENHANCED_BATCH_L_MEMORY === "1";
 	if (taskEnabled) {

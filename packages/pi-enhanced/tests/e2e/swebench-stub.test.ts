@@ -3,9 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { digest } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
-import { loadSweTask } from "../../benchmarks/real-agent/swebench.ts";
+import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
+import { loadSweTask, swePrompt } from "../../benchmarks/real-agent/swebench.ts";
 import { close, dockerImageAvailable, startStubProvider, textSse, toolCallSse } from "../fixtures/runner-support.ts";
 
 const mirror = process.env.PI_ENHANCED_SWE_LOCAL_MIRROR;
@@ -50,7 +50,9 @@ it.skipIf(!available).each(cases)(
 			if (calls === 1) {
 				const user = messages.find((m) => m.role === "user")?.content;
 				const text = Array.isArray(user) ? user.map((part) => part.text).join("") : user;
-				expect(text).toBe(task.issue.problem_statement);
+				expect(text).toBe(swePrompt(task.issue.problem_statement));
+				expect(text).toContain("允许读取工作区中的测试文件");
+				expect(text).toContain("禁止修改、创建或删除测试文件");
 				const baseTools = (body.tools as Array<{ function: { name: string } }>)
 					.filter((tool) => ["read", "grep", "find", "ls", "write", "edit"].includes(tool.function.name))
 					.sort((left, right) => left.function.name.localeCompare(right.function.name));

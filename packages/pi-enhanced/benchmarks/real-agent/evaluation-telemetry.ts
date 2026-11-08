@@ -29,6 +29,19 @@ const object = (value: unknown): Record<string, unknown> =>
 const id = (value: unknown): string | null =>
 	typeof value === "string" && value.length > 0 && value.length <= 512 ? value : null;
 
+export interface ReservationDiagnostics {
+	formulaVersion: "utf8_bytes_plus4096_v1";
+	requestBodyBytes: number;
+	requestedOutputTokens: number;
+	outputTokenLimit: number;
+	inputTokenUpperBound: number;
+	candidateReservedTokens: number;
+	candidateReservedCostUsd: number;
+	maxTotalTokens: number;
+	remainingTokenHeadroom: number;
+	maxTotalCostUsd: number;
+	remainingCostHeadroomUsd: number;
+}
 export interface ProviderObservation {
 	runId: string;
 	requestSequence: number;
@@ -46,6 +59,7 @@ export interface ProviderObservation {
 	reservedCostUpperBoundUsd: number | null;
 	responseIds: string[];
 	pricing?: { inputUsdPerMillion: number; outputUsdPerMillion: number };
+	reservationDiagnostics?: ReservationDiagnostics | null;
 	budgetSnapshot?: {
 		requestsStarted: number;
 		actualTotalTokens: number;

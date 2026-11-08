@@ -6,13 +6,15 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
-import { loadSandboxConfig } from "../../src/sandbox/config.ts";
-import { digest, SWE_TASK_PROFILE, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
+import { assertSandboxWorkspaceIdentity, loadSandboxConfig } from "../../src/sandbox/config.ts";
+import { TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { type BudgetGatewayStatus, startBudgetGateway } from "./budget-gateway.ts";
 import { verifyPatchInDocker } from "./docker-verifier.ts";
+import { digest } from "./evaluation-identity.ts";
 import { EvaluationTelemetry } from "./evaluation-telemetry.ts";
 import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
+import { SWE_TASK_PROFILE } from "./swe-profile.ts";
 import { readTaskPairInput } from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -213,6 +215,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	const started = performance.now();
 	let gatewayStatus: BudgetGatewayStatus;
 	let child: Awaited<ReturnType<typeof runAgentProcess>>;
+	let containersRemoved = false;
 	try {
 		child = await runAgentProcess(
 			process.execPath,
@@ -283,13 +286,43 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 				}
 				execFileSync("docker", ["rm", "-f", id], { timeout: 10_000, windowsHide: true, stdio: "ignore" });
 			}
+			containersRemoved =
+				execFileSync("docker", ["ps", "-a", "--filter", `name=^/${prefix}`, "--format", "{{.ID}}"], {
+					encoding: "utf8",
+					timeout: 10_000,
+					windowsHide: true,
+				}).trim() === "";
 		}
 	}
 	if (admissionDenied) throw new Error("TASK_PAIR_INPUT_ADMISSION_FAILED");
 	if ((taskPair || task.swebench) && forwarded === 0) throw new Error("TASK_PAIR_INPUT_NO_REQUEST");
+	let childAbsent = false;
+	if (child.pid) {
+		try {
+			process.kill(child.pid, 0);
+		} catch (error) {
+			childAbsent = (error as NodeJS.ErrnoException).code === "ESRCH";
+		}
+	}
+	let workspaceIdentityValid = false;
+	try {
+		assertSandboxWorkspaceIdentity(verifierScope);
+		workspaceIdentityValid = true;
+	} catch {}
+	const hostLifecycle = {
+		childClosed: child.closed,
+		childAbsent,
+		containersRemoved,
+		workspaceIdentityValid,
+		gatewayClosed: true,
+		gatewayActiveRequests: gatewayStatus.activeRequests,
+		reservedTokens: gatewayStatus.reservedTokens,
+		reservedCostUsd: gatewayStatus.reservedCostUsd,
+	};
 	const verification = task.swebench ? null : await verifyPatchInDocker(task.id, verifierScope);
 	return {
 		child,
+		hostLifecycle,
 		gatewayStatus,
 		verification,
 		telemetry,
@@ -321,7 +354,14 @@ async function runAgentProcess(
 		onEvent?: (value: unknown) => void;
 		onEventError?: () => void;
 	},
-): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+): Promise<{
+	status: number | null;
+	stdout: string;
+	stderr: string;
+	timedOut: boolean;
+	pid?: number;
+	closed: boolean;
+}> {
 	return new Promise((resolveProcess) => {
 		const child = spawn(file, args, {
 			cwd: options.cwd,
@@ -367,6 +407,8 @@ async function runAgentProcess(
 			: undefined;
 		const timer = setTimeout(() => {
 			timedOut = true;
+			// A SIGSTOPped Linux child cannot handle SIGTERM until it resumes.
+			if (process.platform === "linux") child.kill("SIGCONT");
 			child.kill();
 		}, options.timeoutMs);
 		child.once("close", (status) => {
@@ -374,6 +416,8 @@ async function runAgentProcess(
 			clearInterval(boundaryTimer);
 			resolveProcess({
 				status,
+				pid: child.pid,
+				closed: true,
 				stdout: Buffer.concat(stdout).toString("utf8"),
 				stderr: Buffer.concat(stderr).toString("utf8"),
 				timedOut,
@@ -385,6 +429,8 @@ async function runAgentProcess(
 			stderr.push(Buffer.from(error.message));
 			resolveProcess({
 				status: null,
+				pid: child.pid,
+				closed: false,
 				stdout: Buffer.concat(stdout).toString("utf8"),
 				stderr: Buffer.concat(stderr).toString("utf8"),
 				timedOut,

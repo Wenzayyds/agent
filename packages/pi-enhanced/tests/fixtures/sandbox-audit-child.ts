@@ -11,8 +11,8 @@ const broker = new DockerSandboxBroker(
 	}),
 );
 await broker.request("read", "read_file", { path: "fixture.txt" });
-process.send?.({ ready: true, containerId: broker.getEvidence()!.containerId });
 process.on("message", () => {
 	void broker.request("write", "write_file", { path: "uncertain.txt", content: "x".repeat(512 * 1024) });
 });
+process.send?.({ ready: true, containerId: broker.getEvidence()!.containerId });
 setInterval(() => {}, 1000);

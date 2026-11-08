@@ -1,6 +1,10 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { startBudgetGateway, type BudgetGatewayLimits, type RunningBudgetGateway } from "../../benchmarks/real-agent/budget-gateway.ts";
+import {
+	type BudgetGatewayLimits,
+	type RunningBudgetGateway,
+	startBudgetGateway,
+} from "../../benchmarks/real-agent/budget-gateway.ts";
 
 const running: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
@@ -19,12 +23,32 @@ const baseLimits: BudgetGatewayLimits = {
 
 describe("Batch H hard budget gateway", () => {
 	it("accepts only authenticated isolation-stop signals and never forwards them upstream", async () => {
-		const upstream = await mockUpstream(async (_request, response) => { response.writeHead(500).end(); });
+		const upstream = await mockUpstream(async (_request, response) => {
+			response.writeHead(500).end();
+		});
 		const gateway = await gatewayFor(upstream.url, baseLimits);
-		expect((await fetch(`${gateway.url}/__budget/stop-isolation`, { method: "POST", headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+		expect(
+			(
+				await fetch(`${gateway.url}/__budget/stop-isolation`, {
+					method: "POST",
+					headers: { Authorization: "Bearer wrong" },
+				})
+			).status,
+		).toBe(401);
 		expect(gateway.status().state).toBe("ready");
-		expect((await fetch(`${gateway.url}/__budget/stop-isolation`, { method: "POST", headers: { Authorization: "Bearer client-token" } })).status).toBe(200);
-		expect(gateway.status()).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_ISOLATION_STOP", requestsStarted: 0 });
+		expect(
+			(
+				await fetch(`${gateway.url}/__budget/stop-isolation`, {
+					method: "POST",
+					headers: { Authorization: "Bearer client-token" },
+				})
+			).status,
+		).toBe(200);
+		expect(gateway.status()).toMatchObject({
+			state: "failed_closed",
+			lastError: "GATEWAY_ISOLATION_STOP",
+			requestsStarted: 0,
+		});
 		expect((await callGateway(gateway.url, "client-token")).status).toBe(429);
 	});
 	it("forces the provider request through loopback, clamps output, and accounts usage", async () => {
@@ -34,7 +58,9 @@ describe("Batch H hard budget gateway", () => {
 			seenAuthorization = request.headers.authorization ?? "";
 			seenBody = body;
 			response.writeHead(200, { "Content-Type": "text/event-stream" });
-			response.end('data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}\n\ndata: [DONE]\n\n');
+			response.end(
+				'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}\n\ndata: [DONE]\n\n',
+			);
 		});
 		const gateway = await gatewayFor(upstream.url, { ...baseLimits, maxOutputTokensPerRequest: 64 });
 		const result = await callGateway(gateway.url, "client-token", { max_tokens: 999 });
@@ -77,10 +103,30 @@ describe("Batch H hard budget gateway", () => {
 			requestSequence: 1,
 			code: "GATEWAY_TOKEN_BUDGET",
 			upstreamForwarded: false,
+			reservationDiagnostics: {
+				formulaVersion: "utf8_bytes_plus4096_v1",
+				requestBodyBytes: Buffer.byteLength(
+					JSON.stringify({ model: "deepseek-flash", messages: [{ role: "user", content: "test" }], stream: true }),
+				),
+				inputTokenUpperBound:
+					Buffer.byteLength(
+						JSON.stringify({
+							model: "deepseek-flash",
+							messages: [{ role: "user", content: "test" }],
+							stream: true,
+						}),
+					) + 4096,
+				requestedOutputTokens: 256,
+				outputTokenLimit: 256,
+				maxTotalTokens: 100,
+				remainingTokenHeadroom: 100,
+			},
 		});
 		const costLimited = await gatewayFor(upstream.url, { ...baseLimits, maxTotalCostUsd: 0.000001 });
 		expect((await callGateway(costLimited.url, "client-token")).status).toBe(429);
 		expect(costLimited.status().denials[0]?.code).toBe("GATEWAY_COST_BUDGET");
+		expect(costLimited.status().denials[0]?.reservationDiagnostics?.remainingCostHeadroomUsd).toBe(0.000001);
+		expect(JSON.stringify(small.status().denials)).not.toContain('"content"');
 	});
 
 	it("allows only one concurrent request and fails closed when usage is missing", async () => {
@@ -127,18 +173,33 @@ describe("Batch H hard budget gateway", () => {
 	it("settles usage at SSE DONE before a client closes a still-open upstream stream", async () => {
 		const upstream = await mockUpstream(async (_request, response) => {
 			response.writeHead(200, { "Content-Type": "text/event-stream" });
-			response.write('data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}\n\ndata: [DONE]\n\n');
+			response.write(
+				'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}\n\ndata: [DONE]\n\n',
+			);
 			setTimeout(() => response.end(), 200);
 		});
 		const gateway = await gatewayFor(upstream.url, baseLimits);
 		const response = await callGateway(gateway.url, "client-token");
 		const reader = response.body!.getReader();
 		let text = "";
-		while (!text.includes("[DONE]")) { const part = await reader.read(); if (part.done) break; text += new TextDecoder().decode(part.value); }
+		while (!text.includes("[DONE]")) {
+			const part = await reader.read();
+			if (part.done) break;
+			text += new TextDecoder().decode(part.value);
+		}
 		await reader.cancel();
 		await new Promise((resolve) => setTimeout(resolve, 30));
-		expect(gateway.status()).toMatchObject({ state: "ready", requestsCompleted: 1, actualTotalTokens: 120, activeRequests: 0 });
-		expect(gateway.status().requestOutcomes[0]).toMatchObject({ outcome: "completed_done", usageSeen: true, doneSeen: true });
+		expect(gateway.status()).toMatchObject({
+			state: "ready",
+			requestsCompleted: 1,
+			actualTotalTokens: 120,
+			activeRequests: 0,
+		});
+		expect(gateway.status().requestOutcomes[0]).toMatchObject({
+			outcome: "completed_done",
+			usageSeen: true,
+			doneSeen: true,
+		});
 	});
 
 	it("keeps incomplete client disconnects failed closed with a distinct cause and full reservation", async () => {
@@ -154,9 +215,19 @@ describe("Batch H hard budget gateway", () => {
 		await reader.cancel();
 		await new Promise((resolve) => setTimeout(resolve, 30));
 		const status = gateway.status();
-		expect(status).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_CLIENT_DISCONNECTED", requestsCompleted: 0, actualTotalTokens: 0, activeRequests: 0 });
+		expect(status).toMatchObject({
+			state: "failed_closed",
+			lastError: "GATEWAY_CLIENT_DISCONNECTED",
+			requestsCompleted: 0,
+			actualTotalTokens: 0,
+			activeRequests: 0,
+		});
 		expect(status.committedTokenUpperBound).toBeGreaterThan(0);
-		expect(status.requestOutcomes[0]).toMatchObject({ outcome: "GATEWAY_CLIENT_DISCONNECTED", usageSeen: false, doneSeen: false });
+		expect(status.requestOutcomes[0]).toMatchObject({
+			outcome: "GATEWAY_CLIENT_DISCONNECTED",
+			usageSeen: false,
+			doneSeen: false,
+		});
 		expect((await callGateway(gateway.url, "client-token")).status).toBe(429);
 	});
 	it("does not treat malformed provider usage as a free completed request", async () => {
@@ -166,11 +237,19 @@ describe("Batch H hard budget gateway", () => {
 		});
 		const gateway = await gatewayFor(upstream.url, baseLimits);
 		await (await callGateway(gateway.url, "client-token")).text();
-		expect(gateway.status()).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_USAGE_MISSING", actualTotalTokens: 0 });
+		expect(gateway.status()).toMatchObject({
+			state: "failed_closed",
+			lastError: "GATEWAY_USAGE_MISSING",
+			actualTotalTokens: 0,
+		});
 		expect(gateway.status().committedCostUpperBoundUsd).toBeGreaterThan(0);
 	});
 	it("rejects invalid final usage instead of retaining an earlier valid sample", async () => {
-		for (const finalUsage of [{}, { prompt_tokens: 1, completion_tokens: 1, total_tokens: -1 }, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 99 }]) {
+		for (const finalUsage of [
+			{},
+			{ prompt_tokens: 1, completion_tokens: 1, total_tokens: -1 },
+			{ prompt_tokens: 1, completion_tokens: 1, total_tokens: 99 },
+		]) {
 			const upstream = await mockUpstream(async (_request, response) => {
 				response.writeHead(200, { "Content-Type": "text/event-stream" });
 				response.write('data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n');
@@ -178,7 +257,11 @@ describe("Batch H hard budget gateway", () => {
 			});
 			const gateway = await gatewayFor(upstream.url, baseLimits);
 			await (await callGateway(gateway.url, "client-token")).text();
-			expect(gateway.status()).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_USAGE_MISSING", actualTotalTokens: 0 });
+			expect(gateway.status()).toMatchObject({
+				state: "failed_closed",
+				lastError: "GATEWAY_USAGE_MISSING",
+				actualTotalTokens: 0,
+			});
 			expect(gateway.status().requestOutcomes[0]?.outcome).toBe("GATEWAY_USAGE_MISSING");
 			expect(gateway.status().committedCostUpperBoundUsd).toBeGreaterThan(0);
 		}
@@ -214,17 +297,15 @@ async function callGateway(
 }
 
 async function mockUpstream(
-	handler: (
-		request: import("node:http").IncomingMessage,
-		response: import("node:http").ServerResponse,
-		body: Record<string, unknown>,
-	) => Promise<void>,
+	handler: (request: IncomingMessage, response: ServerResponse, body: Record<string, unknown>) => Promise<void>,
 ): Promise<{ url: string; close(): Promise<void> }> {
 	const server = createServer((request, response) => {
 		void (async () => {
 			const chunks: Buffer[] = [];
 			for await (const chunk of request) chunks.push(Buffer.from(chunk));
-			const body = chunks.length ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>) : {};
+			const body = chunks.length
+				? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
+				: {};
 			await handler(request, response, body);
 		})();
 	});

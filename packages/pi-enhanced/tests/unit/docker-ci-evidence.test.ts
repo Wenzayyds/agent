@@ -3,7 +3,7 @@ import { type DockerTestReport, requireDockerEvidence } from "../../scripts/ci/r
 
 function report(): DockerTestReport {
 	return {
-		numTotalTests: 15,
+		numTotalTests: 24,
 		numFailedTests: 0,
 		numPendingTests: 0,
 		testResults: [
@@ -28,6 +28,28 @@ function report(): DockerTestReport {
 				].map((fullName) => ({ fullName, status: "passed" })),
 			}))
 			.concat([
+				{
+					name: "/repo/tests/e2e/swebench-policy.test.ts",
+					assertionResults: [
+						...["off", "v1", "v2"].flatMap((mode) => [`edit_test in ${mode}`, `write_test in ${mode}`]),
+						"budget in off",
+						"export_failure in off",
+						"abnormal_session in off",
+					]
+						.map((name) => ({ fullName: `SWE production policy ${name}`, status: "passed" }))
+						.concat(
+							[
+								"no_patch",
+								"requests",
+								"cost",
+								"timeout",
+								"usage_failure",
+								"container_failure",
+								"audit_corrupt",
+								"batch_cap",
+							].map((name) => ({ fullName: `SWE independent continuation ${name}`, status: "passed" })),
+						),
+				},
 				{
 					name: "/repo/tests/e2e/swebench-stub.test.ts",
 					assertionResults: [
@@ -77,5 +99,8 @@ describe("Linux Docker CI evidence requirements", () => {
 		const skipped = report();
 		skipped.testResults.at(-1)!.assertionResults[0]!.status = "pending";
 		expect(() => requireDockerEvidence(skipped)).toThrow("SUITE_MISSING_OR_SKIPPED");
+		const missingPolicy = report();
+		missingPolicy.testResults.at(-2)!.assertionResults.pop();
+		expect(() => requireDockerEvidence(missingPolicy)).toThrow("SWE_POLICY_CASE_COUNT");
 	});
 });

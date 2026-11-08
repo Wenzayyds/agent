@@ -3,12 +3,9 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-	digest,
-	SWE_TASK_CONFIGURATION,
-	SWE_TASK_PROFILE,
-	TASK_PAIR_CONFIGURATION,
-} from "../../benchmarks/real-agent/batch-l-profile.ts";
+import { TASK_PAIR_CONFIGURATION } from "../../benchmarks/real-agent/batch-l-profile.ts";
+import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
+import { SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	claimTaskPairCell,
@@ -40,7 +37,7 @@ describe("Task pair offline entry", () => {
 			const input = {
 				fixtureSha256: "a".repeat(64),
 				fixtureCommit: SWE_TASK_CONFIGURATION.baseCommit,
-				userPromptSha256: SWE_TASK_CONFIGURATION.problemSha256,
+				userPromptSha256: SWE_TASK_CONFIGURATION.userPromptSha256,
 				systemPromptSha256: "b".repeat(64),
 				toolSchemaSha256: "c".repeat(64),
 				firstRequestSha256: "d".repeat(64),
@@ -99,7 +96,7 @@ describe("Task pair offline entry", () => {
 			expect(() => claimTaskPairAuthorization(path, parsed)).toThrow();
 			const batchDir = join(dir, grant.batchId);
 			mkdirSync(batchDir);
-			const batch = (states: string[], stoppedReason: string | null = null) =>
+			const batch = (states: string[], stoppedReason: string | null = null, continuationReady = true) =>
 				writeFileSync(
 					join(batchDir, "batch.json"),
 					JSON.stringify({
@@ -108,7 +105,11 @@ describe("Task pair offline entry", () => {
 						comparisonProfile: grant.profile,
 						authorization: { id: grant.authorizationId },
 						stoppedReason,
-						cells: ["off", "v1", "v2"].map((id, i) => ({ id, resultStatus: states[i] })),
+						cells: ["off", "v1", "v2"].map((id, i) => ({
+							id,
+							resultStatus: states[i],
+							continuationReady: continuationReady && states[i] !== "not_run",
+						})),
 					}),
 				);
 			batch(["run", "not_run", "not_run"]);
@@ -118,9 +119,11 @@ describe("Task pair offline entry", () => {
 			expect(() => claimTaskPairCell(path, parsed, "v2", batchDir)).toThrow();
 			batch(["run", "run", "not_run"], "isolation_boundary_stop");
 			expect(() => claimTaskPairCell(path, parsed, "v1", batchDir)).toThrow();
-			batch(["run", "run", "not_run"]);
+			batch(["stopped", "run", "not_run"], null, false);
+			expect(() => claimTaskPairCell(path, parsed, "v1", batchDir)).toThrow();
+			batch(["stopped", "run", "not_run"]);
 			claimTaskPairCell(path, parsed, "v1", batchDir);
-			batch(["run", "run", "run"]);
+			batch(["stopped", "failed", "run"]);
 			claimTaskPairCell(path, parsed, "v2", batchDir);
 			expect(() => claimTaskPairCell(path, parsed, "v2", batchDir)).toThrow();
 		} finally {
@@ -140,7 +143,7 @@ describe("Task pair offline entry", () => {
 		expect(dry.status, dry.stderr).toBe(0);
 		expect(JSON.parse(dry.stdout)).toMatchObject({
 			status: "not_run",
-			limits: { maxRuns: 3, maxBatchCostUsd: 0.09 },
+			limits: { maxRuns: 3, maxBatchCostUsd: 0.24 },
 			cells: [{ id: "off" }, { id: "v1" }, { id: "v2" }],
 		});
 		for (const entry of ["run-controlled.ts", "run-real-agent.ts"]) {

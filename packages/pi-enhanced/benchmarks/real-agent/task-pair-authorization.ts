@@ -1,16 +1,10 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-	digest,
-	SWE_TASK_CELLS,
-	SWE_TASK_CONFIGURATION,
-	SWE_TASK_PROFILE,
-	TASK_PAIR_CELLS,
-	TASK_PAIR_CONFIGURATION,
-	TASK_PAIR_PROFILE,
-} from "./batch-l-profile.ts";
+import { TASK_PAIR_CELLS, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { verifyControlledCi } from "./controlled-policy.ts";
+import { digest } from "./evaluation-identity.ts";
+import { SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "./swe-profile.ts";
 
 export interface TaskPairInput {
 	fixtureSha256: string;
@@ -127,6 +121,7 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 	const index = cells.findIndex((cell) => cell.id === cellId);
 	if (
 		index < 0 ||
+		Date.parse(grant.expiresAt) <= Date.now() ||
 		batch.commit !== grant.commit ||
 		batch.batchId !== grant.batchId ||
 		batch.comparisonProfile !== grant.profile ||
@@ -141,9 +136,10 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 			position > index
 				? batch.cells[position]?.resultStatus !== "not_run"
 				: position < index &&
-					(!(grant.profile === SWE_TASK_PROFILE ? ["run"] : ["passed", "failed"]).includes(
+					(!(grant.profile === SWE_TASK_PROFILE ? ["run", "failed", "stopped"] : ["passed", "failed"]).includes(
 						batch.cells[position]?.resultStatus,
 					) ||
+						(grant.profile === SWE_TASK_PROFILE && batch.cells[position]?.continuationReady !== true) ||
 						readFileSync(`${path}.used.${cell.id}`, "utf8") !== digest(grant)),
 		)
 	)
@@ -160,7 +156,7 @@ export function readSweModeInputs(value: unknown): Record<"off" | "v1" | "v2", T
 		const input = readTaskPairInput(inputs[mode]);
 		if (
 			input.fixtureCommit !== SWE_TASK_CONFIGURATION.baseCommit ||
-			input.userPromptSha256 !== SWE_TASK_CONFIGURATION.problemSha256 ||
+			input.userPromptSha256 !== SWE_TASK_CONFIGURATION.userPromptSha256 ||
 			input.fixtureSha256 !== inputs.off.fixtureSha256 ||
 			input.systemPromptSha256 !== inputs.off.systemPromptSha256
 		)

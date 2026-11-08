@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { CoreMemoryName, MemoryCategory, MemoryKind, MemoryRecord } from "../src/memory/contracts.ts";
-import { planMemoryGovernance } from "../src/memory/governance.ts";
+import type { CoreMemoryName, MemoryCategory, MemoryKind, MemoryRecord } from "../../src/memory/contracts.ts";
+import { planMemoryGovernance } from "../../src/memory/governance.ts";
 
 const now = Date.UTC(2026, 10, 1);
 const projectId = "governance-benchmark";
@@ -41,8 +41,14 @@ function record(
 const records: MemoryRecord[] = [
 	record("node20", "Production Node runtime is version 20", { category: "environment", subjectKey: "runtime.node" }),
 	record("node22", "Production Node runtime is version 22", { category: "environment", subjectKey: "runtime.node" }),
-	record("near-a", "Release procedure requires approval gate before deployment", { kind: "experience", category: "procedure" }),
-	record("near-b", "Release procedure requires approval gate prior to deployment", { kind: "experience", category: "procedure" }),
+	record("near-a", "Release procedure requires approval gate before deployment", {
+		kind: "experience",
+		category: "procedure",
+	}),
+	record("near-b", "Release procedure requires approval gate prior to deployment", {
+		kind: "experience",
+		category: "procedure",
+	}),
 	record("class-architecture", "Architecture module owns the database schema"),
 	record("class-dependency", "Dependency package npm version is pinned"),
 	record("class-test", "Vitest regression test must pass"),
@@ -82,12 +88,17 @@ console.log(
 				expectedGroups: 1,
 				detectedGroups: plan.report.conflictGroups.length,
 				precision: plan.report.conflictGroups.length === 1 ? 1 : 0,
-				recall: plan.report.conflictGroups.some((group) => group.includes("node20") && group.includes("node22")) ? 1 : 0,
+				recall: plan.report.conflictGroups.some((group) => group.includes("node20") && group.includes("node22"))
+					? 1
+					: 0,
 			},
 			nearDuplicateGroups: plan.report.nearDuplicateGroups.length,
 			proposalCount: plan.proposals.length,
 			proposalActions: Object.fromEntries(
-				[...new Set(plan.proposals.map(({ action }) => action))].map((action) => [action, plan.proposals.filter((proposal) => proposal.action === action).length]),
+				[...new Set(plan.proposals.map(({ action }) => action))].map((action) => [
+					action,
+					plan.proposals.filter((proposal) => proposal.action === action).length,
+				]),
 			),
 			automaticallyVerifiedTargets: 0,
 			limitations: [

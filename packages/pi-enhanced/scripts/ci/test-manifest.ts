@@ -26,16 +26,20 @@ const identities = report.testResults
 		}),
 	)
 	.sort((left, right) => left.localeCompare(right, "en-US"));
-const baselinePath = process.argv[3] ?? new URL("../docs/batch-d-test-manifest-final.json", import.meta.url);
-const outputPath = process.argv[4] ?? new URL("../docs/batch-e-test-manifest.json", import.meta.url);
-const baselineDocument = JSON.parse(readFileSync(baselinePath, "utf8")) as { identities?: string[]; typescript?: { identities: string[] } };
+const baselinePath = process.argv[3];
+const outputPath = process.argv[4];
+if (!baselinePath || !outputPath) throw new Error("Explicit baseline and output paths are required");
+const baselineDocument = JSON.parse(readFileSync(baselinePath, "utf8")) as {
+	identities?: string[];
+	typescript?: { identities: string[] };
+};
 const baseline = { identities: baselineDocument.identities ?? baselineDocument.typescript?.identities ?? [] };
 if (!baseline.identities.length) throw new Error("Test baseline identities are missing");
 const missingBaselineIdentities = baseline.identities.filter((identity) => !identities.includes(identity));
 const sha256 = createHash("sha256").update(identities.join("\n")).digest("hex");
 const manifest = {
 	schemaVersion: 1,
-	generatedAt: "2026-11-03",
+	generatedAt: new Date().toISOString(),
 	scope: "tests/unit + tests/integration + tests/e2e",
 	count: identities.length,
 	passed: report.numPassedTests,

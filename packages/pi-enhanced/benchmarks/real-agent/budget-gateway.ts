@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { EvaluationTelemetry } from "./evaluation-telemetry.ts";
+import type { EvaluationTelemetry, ReservationDiagnostics } from "./evaluation-telemetry.ts";
 
 export interface BudgetGatewayLimits {
 	maxRequests: number;
@@ -30,6 +30,7 @@ export interface BudgetGatewayOptions {
 }
 
 export interface GatewayDenialRecord {
+	reservationDiagnostics: ReservationDiagnostics | null;
 	runId: string;
 	requestSequence: number;
 	code: string;
@@ -148,17 +149,32 @@ class BudgetLedger {
 			(inputTokenUpperBound * this.pricing.inputUsdPerMillion +
 				outputTokenLimit * this.pricing.outputUsdPerMillion) /
 			1_000_000;
+		const diagnostics: ReservationDiagnostics = {
+			formulaVersion: "utf8_bytes_plus4096_v1",
+			requestBodyBytes: bodyBytes,
+			requestedOutputTokens,
+			outputTokenLimit,
+			inputTokenUpperBound,
+			candidateReservedTokens: reservedTokens,
+			candidateReservedCostUsd: reservedCostUsd,
+			maxTotalTokens: this.limits.maxTotalTokens,
+			remainingTokenHeadroom:
+				this.limits.maxTotalTokens - this.state.committedTokenUpperBound - this.state.reservedTokens,
+			maxTotalCostUsd: this.limits.maxTotalCostUsd,
+			remainingCostHeadroomUsd:
+				this.limits.maxTotalCostUsd - this.state.committedCostUpperBoundUsd - this.state.reservedCostUsd,
+		};
 		if (
 			this.state.committedTokenUpperBound + this.state.reservedTokens + reservedTokens >
 			this.limits.maxTotalTokens
 		) {
-			return this.reject("GATEWAY_TOKEN_BUDGET", requestSequence);
+			return this.reject("GATEWAY_TOKEN_BUDGET", requestSequence, diagnostics);
 		}
 		if (
 			this.state.committedCostUpperBoundUsd + this.state.reservedCostUsd + reservedCostUsd >
 			this.limits.maxTotalCostUsd + Number.EPSILON
 		) {
-			return this.reject("GATEWAY_COST_BUDGET", requestSequence);
+			return this.reject("GATEWAY_COST_BUDGET", requestSequence, diagnostics);
 		}
 		this.state.requestsStarted += 1;
 		this.state.activeRequests += 1;
@@ -205,7 +221,7 @@ class BudgetLedger {
 		this.commitReservation(reservation, reason);
 	}
 
-	deny(reason: string, requestSequence: number): void {
+	deny(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null): void {
 		this.telemetry?.provider({
 			runId: this.runId,
 			requestSequence,
@@ -223,6 +239,7 @@ class BudgetLedger {
 			reservedCostUpperBoundUsd: null,
 			responseIds: [],
 			pricing: { ...this.pricing },
+			reservationDiagnostics: diagnostics,
 			budgetSnapshot: {
 				requestsStarted: this.state.requestsStarted,
 				actualTotalTokens: this.state.actualTotalTokens,
@@ -232,6 +249,7 @@ class BudgetLedger {
 		});
 		this.state.requestsRejected += 1;
 		this.state.denials.push({
+			reservationDiagnostics: diagnostics,
 			runId: this.runId,
 			requestSequence,
 			code: reason,
@@ -247,8 +265,8 @@ class BudgetLedger {
 		if (this.state.denials.length > 64) this.state.denials.splice(0, this.state.denials.length - 64);
 	}
 
-	reject(reason: string, requestSequence: number): never {
-		this.deny(reason, requestSequence);
+	reject(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null): never {
+		this.deny(reason, requestSequence, diagnostics);
 		throw new GatewayRejection(reason);
 	}
 

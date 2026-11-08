@@ -5,6 +5,7 @@ export default mergeConfig(
 	baseConfig,
 	defineConfig({
 		test: {
+			include: ["tests/**/*.test.ts"],
 			environment: "node",
 			reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
 			testTimeout: 30_000,

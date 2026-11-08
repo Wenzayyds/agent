@@ -21,6 +21,7 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 		"batch-n-observability.test.ts",
 		"docker-verifier.test.ts",
 		"swebench-stub.test.ts",
+		"swebench-policy.test.ts",
 	]) {
 		const suites = report.testResults.filter((suite) => suite.name.replaceAll("\\", "/").endsWith(`/e2e/${file}`));
 		if (
@@ -51,6 +52,35 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 		)
 	)
 		throw new Error("CI_DOCKER_SWE_CASE_COUNT_OR_IDENTITY_MISMATCH");
+	const policy = report.testResults
+		.filter((suite) => suite.name.replaceAll("\\", "/").endsWith("/e2e/swebench-policy.test.ts"))
+		.flatMap((suite) => suite.assertionResults);
+	const policyNames = [
+		...["off", "v1", "v2"].flatMap((mode) => [`edit_test in ${mode}`, `write_test in ${mode}`]),
+		"budget in off",
+		"export_failure in off",
+		"abnormal_session in off",
+	]
+		.map((name) => `SWE production policy ${name}`)
+		.concat(
+			[
+				"no_patch",
+				"requests",
+				"cost",
+				"timeout",
+				"usage_failure",
+				"container_failure",
+				"audit_corrupt",
+				"batch_cap",
+			].map((name) => `SWE independent continuation ${name}`),
+		);
+	if (
+		policy.length !== policyNames.length ||
+		policyNames.some(
+			(name) => policy.filter((test) => test.fullName === name && test.status === "passed").length !== 1,
+		)
+	)
+		throw new Error("CI_DOCKER_SWE_POLICY_CASE_COUNT_OR_IDENTITY_MISMATCH");
 	const assertions = report.testResults.flatMap((suite) => suite.assertionResults);
 	for (const name of [
 		"enforces identity through real Pi",

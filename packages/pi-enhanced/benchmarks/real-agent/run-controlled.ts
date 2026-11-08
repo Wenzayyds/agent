@@ -7,11 +7,6 @@ import { claimBatchLAuthorization, loadBatchLAuthorization } from "./batch-l-aut
 import {
 	BATCH_L_LIMITS,
 	BATCH_L_PROFILE,
-	digest,
-	SWE_TASK_CELLS,
-	SWE_TASK_CONFIGURATION,
-	SWE_TASK_LIMITS,
-	SWE_TASK_PROFILE,
 	TASK_PAIR_CELLS,
 	TASK_PAIR_CONFIGURATION,
 	TASK_PAIR_LIMITS,
@@ -22,8 +17,15 @@ import {
 	CONTROLLED_IMAGE,
 	CONTROLLED_LIMITS as LEGACY_CONTROLLED_LIMITS,
 } from "./controlled-cases.ts";
-import { type ControlledResult, controlledStopReason, verifyControlledCi } from "./controlled-policy.ts";
+import {
+	type ControlledResult,
+	controlledStopReason,
+	sweContinuationStopReason,
+	verifyControlledCi,
+} from "./controlled-policy.ts";
+import { digest } from "./evaluation-identity.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
+import { SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	loadTaskPairAuthorization,
@@ -46,13 +48,31 @@ const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
 if (swe && (sweId !== SWE_TASK_CONFIGURATION.instanceId || !sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 if (!swe && (sweId || sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
-const CONTROLLED_LIMITS = swe
+let CONTROLLED_LIMITS = swe
 	? SWE_TASK_LIMITS
 	: taskPair
 		? TASK_PAIR_LIMITS
 		: comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE
 			? BATCH_L_LIMITS
 			: LEGACY_CONTROLLED_LIMITS;
+// Trusted host CLI input, loopback Stub only; never forwarded to the model or accepted by real execution.
+const stubLimitsPath = argument("--swe-stub-limits");
+if (stubLimitsPath) {
+	if (!swe || !stub || process.env.PI_ENHANCED_LOCAL_STUB_EVAL !== "1") throw new Error("SWE_STUB_LIMITS_FORBIDDEN");
+	const limits = JSON.parse(readFileSync(stubLimitsPath, "utf8"));
+	if (
+		Object.keys(limits).sort().join(",") !== "maxBatchCostUsd,maxCostUsd,maxRequests,maxTokens,timeoutMs" ||
+		!["maxRequests", "maxTokens", "maxCostUsd", "timeoutMs", "maxBatchCostUsd"].every(
+			(key) =>
+				Number.isFinite(limits[key]) &&
+				limits[key] > 0 &&
+				limits[key] <= SWE_TASK_LIMITS[key as keyof typeof SWE_TASK_LIMITS],
+		)
+	)
+		throw new Error("SWE_STUB_LIMITS_INVALID");
+	// Do not mutate frozen production constants or any other profile.
+	CONTROLLED_LIMITS = { ...limits, maxRuns: 3 };
+}
 if (
 	comparisonProfile &&
 	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE].includes(comparisonProfile)
@@ -152,13 +172,20 @@ const cells: Array<{
 	resultStatus: string;
 	endToEndMs?: number;
 	terminationClassification?: string;
+	continuationReady?: boolean;
+	cellStopReason?: string | null;
+	notRunReason?: string;
 	result?: ControlledResult;
 }> = specs.map(({ id }) => ({ id, status: "not_run", resultStatus: "not_run" }));
 let stoppedReason: string | null = null;
 let reservedMaximumUsd = 0;
 let firstPairInput: TaskPairInput | undefined;
-const save = () =>
-	writeFileSync(
+const save = () => {
+	for (const cell of cells) {
+		if (cell.status === "not_run") cell.notRunReason = stoppedReason ?? "awaiting_prior_cell";
+		else delete cell.notRunReason;
+	}
+	return writeFileSync(
 		join(batchDir, "batch.json"),
 		JSON.stringify(
 			{
@@ -173,6 +200,15 @@ const save = () =>
 						: undefined,
 				evaluationClass: stub ? "simulated_provider_real_runner_task" : "real_model_coding_agent_task",
 				limits: CONTROLLED_LIMITS,
+				...(swe
+					? {
+							batchLimits: {
+								maxRequests: CONTROLLED_LIMITS.maxRequests * 3,
+								maxTokens: CONTROLLED_LIMITS.maxTokens * 3,
+								maxCostUsd: CONTROLLED_LIMITS.maxBatchCostUsd,
+							},
+						}
+					: {}),
 				reservedMaximumUsd,
 				stoppedReason,
 				cells,
@@ -181,6 +217,7 @@ const save = () =>
 			2,
 		),
 	);
+};
 save();
 for (let index = 0; index < specs.length; index++) {
 	const spec = specs[index]!;
@@ -250,7 +287,7 @@ for (let index = 0; index < specs.length; index++) {
 		env: process.env,
 		windowsHide: true,
 		stdio: ["ignore", "pipe", "pipe"],
-		timeout: 210_000,
+		timeout: CONTROLLED_LIMITS.timeoutMs + 60_000,
 		maxBuffer: 8 * 1024 * 1024,
 	});
 	state.endToEndMs = Number((performance.now() - cellStarted).toFixed(3));
@@ -271,14 +308,28 @@ for (let index = 0; index < specs.length; index++) {
 			results: ControlledResult[];
 		};
 		const result = report.results[0];
-		if (!result || result.controlledCell !== spec.id) throw new Error("CONTROLLED_RESULT_MISMATCH");
+		if (!result || result.controlledCell !== spec.id || (swe && result.runId !== runId))
+			throw new Error("CONTROLLED_RESULT_MISMATCH");
 		state.result = result;
+		if (swe)
+			state.cellStopReason =
+				controlledStopReason(result, CONTROLLED_LIMITS) ??
+				(result.patchExportError === "empty_patch" ? "empty_patch" : null);
 		state.terminationClassification = String(result.terminationClassification ?? "legacy_result");
 		state.status = "run";
-		stoppedReason = controlledStopReason(result, CONTROLLED_LIMITS);
+		if (swe) {
+			const host = JSON.parse(readFileSync(join(batchDir, runId, "host-cleanup.json"), "utf8"));
+			if (
+				host.resultSha256 !== digest(readFileSync(join(batchDir, runId, "swebench", "result.json"), "utf8")) ||
+				host.runReportSha256 !== digest(readFileSync(join(batchDir, runId, "run.json"), "utf8"))
+			)
+				throw new Error("SWE_HOST_RESULT_BINDING_INVALID");
+			stoppedReason = sweContinuationStopReason(result, host, CONTROLLED_LIMITS);
+			state.continuationReady = stoppedReason === null;
+		} else stoppedReason = controlledStopReason(result, CONTROLLED_LIMITS);
 		if (telemetryEnabled) {
 			const trace = result.telemetry as { complete?: boolean; contextTelemetryComplete?: boolean } | undefined;
-			if (!stoppedReason && (!trace?.complete || trace.contextTelemetryComplete === false))
+			if (!stoppedReason && (!trace?.complete || trace.contextTelemetryComplete === false) && !swe)
 				stoppedReason = "evaluation_telemetry_incomplete";
 		}
 		if (hostGrantProfile) {
@@ -336,7 +387,11 @@ for (let index = 0; index < specs.length; index++) {
 		state.resultStatus = stoppedReason
 			? "stopped"
 			: swe
-				? "run"
+				? result.runStatus !== "completed"
+					? "stopped"
+					: result.patchExportStatus === "exported"
+						? "run"
+						: "failed"
 				: result.patchStatus === "passed"
 					? "passed"
 					: "failed";

@@ -4,17 +4,17 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-coding-agent";
-import type { MemoryIntelligenceConfig } from "../src/memory/config.ts";
-import type { MemoryKind } from "../src/memory/contracts.ts";
-import { createProjectScope } from "../src/memory/project-scope.ts";
-import { LocalMemoryProvider } from "../src/memory/provider.ts";
-import { PythonMemoryWorkerClient } from "../src/memory/python-worker-client.ts";
-import { SemanticSearchAdapter } from "../src/memory/semantic-search-adapter.ts";
-import { MemoryService } from "../src/memory/service.ts";
-import { ensureProjectStorage } from "../src/memory/storage.ts";
-import { estimateContextMessages } from "../src/context/budget.ts";
-import type { ContextModuleConfig } from "../src/context/contracts.ts";
-import { selectContextMessages } from "../src/context/selector.ts";
+import { estimateContextMessages } from "../../src/context/budget.ts";
+import type { ContextModuleConfig } from "../../src/context/contracts.ts";
+import { selectContextMessages } from "../../src/context/selector.ts";
+import type { MemoryIntelligenceConfig } from "../../src/memory/config.ts";
+import type { MemoryKind } from "../../src/memory/contracts.ts";
+import { createProjectScope } from "../../src/memory/project-scope.ts";
+import { LocalMemoryProvider } from "../../src/memory/provider.ts";
+import { PythonMemoryWorkerClient } from "../../src/memory/python-worker-client.ts";
+import { SemanticSearchAdapter } from "../../src/memory/semantic-search-adapter.ts";
+import { MemoryService } from "../../src/memory/service.ts";
+import { ensureProjectStorage } from "../../src/memory/storage.ts";
 
 const root = mkdtempSync(join(tmpdir(), "pi-enhanced-release-benchmark-"));
 const project = join(root, "project");
@@ -185,14 +185,19 @@ try {
 					workerRssBytes: rss,
 					recallAt5: hits / warm.length,
 					coldMode: coldResult.mode,
-					fallback: { mode: fallback.mode, reason: fallback.fallbackReason, durationMs: Number(fallbackMs.toFixed(3)) },
+					fallback: {
+						mode: fallback.mode,
+						reason: fallback.fallbackReason,
+						durationMs: Number(fallbackMs.toFixed(3)),
+					},
 				},
 				p3: {
 					fixtureMessages: messages.length,
 					selectedMessages: selected.length,
 					inputTokensBefore,
 					inputTokensAfter,
-					latestUserRetained: selected.at(-1)?.role === "user" && selected.at(-1)?.content === "latest request must remain",
+					latestUserRetained:
+						selected.at(-1)?.role === "user" && selected.at(-1)?.content === "latest request must remain",
 					selectionP50Ms: Number(percentile(samples, 0.5).toFixed(3)),
 					selectionP95Ms: Number(percentile(samples, 0.95).toFixed(3)),
 				},

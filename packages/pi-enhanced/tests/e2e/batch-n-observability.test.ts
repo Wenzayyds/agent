@@ -4,12 +4,9 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-	SWE_TASK_CONFIGURATION,
-	SWE_TASK_PROFILE,
-	TASK_PAIR_INSTRUCTIONS,
-} from "../../benchmarks/real-agent/batch-l-profile.ts";
+import { TASK_PAIR_INSTRUCTIONS } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
+import { SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import { loadSweTask } from "../../benchmarks/real-agent/swebench.ts";
 import { readSweModeInputs, type TaskPairInput } from "../../benchmarks/real-agent/task-pair-authorization.ts";
 import { assertIsolatedMount, close, startStubProvider, textSse, toolCallSse } from "../fixtures/runner-support.ts";

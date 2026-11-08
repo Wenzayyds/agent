@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { digest } from "../../benchmarks/real-agent/batch-l-profile.ts";
+import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
 import { saveRunReport } from "../../benchmarks/real-agent/runner-results.ts";
 import {
 	assessSwePrediction,
@@ -13,6 +13,7 @@ import {
 	publicInstance,
 	safeBasePath,
 	safePatchPath,
+	sweWritePathAllowed,
 	windowsDockerStorage,
 } from "../../benchmarks/real-agent/swebench.ts";
 
@@ -132,7 +133,14 @@ describe("SWE-bench Verified adapter", () => {
 				reason: "empty_patch",
 			});
 			writeFileSync(join(cwd, "module.py"), 'secret = "never-upload-this-credential"\n');
-			expect(() => exportSwePrediction(task, cwd, target, "fixture")).toThrow("SWE_PATCH_UNSAFE");
+			const secretDiagnostic = join(root, "secret-diagnostic.json");
+			expect(() => exportSwePrediction(task, cwd, target, "fixture", secretDiagnostic)).toThrow("SWE_PATCH_UNSAFE");
+			expect(readFileSync(secretDiagnostic, "utf8")).not.toContain("never-upload-this-credential");
+			expect(JSON.parse(readFileSync(secretDiagnostic, "utf8"))).toMatchObject({
+				error: "SWE_PATCH_UNSAFE",
+				candidatePatchSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+				contentSaved: false,
+			});
 			writeFileSync(join(cwd, "module.py"), "value = 2\n");
 			writeFileSync(join(cwd, "untracked.txt"), "untracked");
 			expect(() => exportSwePrediction(task, cwd, target, "fixture")).toThrow(
@@ -147,9 +155,22 @@ describe("SWE-bench Verified adapter", () => {
 				changedFiles: ["independent.py", "module.py"],
 			});
 			writeFileSync(join(cwd, "test_private.py"), "value = 6\n");
-			expect(() => exportSwePrediction(task, cwd, join(root, "denied.jsonl"), "fixture")).toThrow(
+			expect(sweWritePathAllowed(cwd, "module.py")).toBe(true);
+			expect(sweWritePathAllowed(cwd, "test_private.py")).toBe(false);
+			expect(sweWritePathAllowed(cwd, "new.py")).toBe(false);
+			expect(sweWritePathAllowed(cwd, "../module.py")).toBe(false);
+			const diagnostic = join(root, "denied-diagnostic.json");
+			expect(() => exportSwePrediction(task, cwd, join(root, "denied.jsonl"), "fixture", diagnostic)).toThrow(
 				"SWE_PATCH_PATH_DENIED",
 			);
+			expect(existsSync(join(root, "denied.jsonl"))).toBe(false);
+			expect(JSON.parse(readFileSync(diagnostic, "utf8"))).toMatchObject({
+				status: "rejected",
+				error: "SWE_PATCH_PATH_DENIED",
+				candidatePatchSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+				paths: expect.arrayContaining([{ path: "test_private.py", pathSha256: digest("test_private.py") }]),
+				contentSaved: false,
+			});
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -190,7 +211,22 @@ describe("SWE-bench Verified adapter", () => {
 	});
 	it("allows only normalized source paths outside repository metadata", () => {
 		expect(safePatchPath("src/package/module.py")).toBe(true);
-		for (const name of ["../file", "/file", "C:/file", "src\\file", "src/.git/config", ".env", "test/hidden.py"])
+		for (const name of [
+			"../file",
+			"/file",
+			"C:/file",
+			"src\\file",
+			"src/.git/config",
+			".env",
+			"test/hidden.py",
+			"test.py",
+			"tests.py",
+			"src/math.test.ts",
+			"src/math.spec.ts",
+			"conftest.py",
+			"src/__tests__/module.py",
+			"src/__specs__/module.ts",
+		])
 			expect(safePatchPath(name)).toBe(false);
 	});
 	it("distinguishes actual Harness resolution from errors, timeouts and missing evidence", () => {

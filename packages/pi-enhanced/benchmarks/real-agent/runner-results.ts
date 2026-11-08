@@ -6,9 +6,10 @@ import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
 import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
-import { batchLGroup, batchLReferences, digest } from "./batch-l-profile.ts";
+import { batchLGroup, batchLReferences } from "./batch-l-profile.ts";
 import { longReport, MEMORY_RULE, TASK_STEPS } from "./controlled-cases.ts";
 import type { SafetyEvent } from "./controlled-stop.ts";
+import { digest } from "./evaluation-identity.ts";
 import {
 	budgetExceeded,
 	classifyExecution,

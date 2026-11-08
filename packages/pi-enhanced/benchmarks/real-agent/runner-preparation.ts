@@ -12,15 +12,15 @@ import {
 	BATCH_L_MODULE_TOOLS,
 	batchLPrompt,
 	batchLReferences,
-	digest,
 	TASK_PAIR_INSTRUCTIONS,
 	TASK_PAIR_PROFILE,
 } from "./batch-l-profile.ts";
 import { type ControlledCell, LONG_REPORT_TASK, longReport, MEMORY_RULE, TASK_STEPS } from "./controlled-cases.ts";
+import { digest } from "./evaluation-identity.ts";
 import type { EvaluationPlan } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_INSTRUCTIONS, NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import type { OfflineDenialPolicy } from "./offline-denial-policy.ts";
-import { prepareSweWorkspace, type SweTask } from "./swebench.ts";
+import { prepareSweWorkspace, type SweTask, swePrompt } from "./swebench.ts";
 import type { TaskPairAuthorization, TaskPairInput } from "./task-pair-authorization.ts";
 export interface ExperimentTask {
 	id: string;
@@ -163,18 +163,22 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 			: readonlyModuleTools
 				? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])]
 				: [];
-	const prompt = batchL
-		? batchLPrompt(cell!) +
-			(comparisonProfile === TASK_PAIR_PROFILE
-				? `\n${TASK_PAIR_INSTRUCTIONS}`
-				: comparisonProfile === NEXT_EVALUATION_PROFILE
-					? `\n${NEXT_EVALUATION_INSTRUCTIONS}`
-					: "")
-		: task.prompt +
-			(cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") +
-			(cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") +
-			(moduleTools.includes("enhanced_memory_search") ? " 可使用只读项目记忆搜索查阅 normalizeKey 项目约定。" : "") +
-			(seededTaskId ? ` 任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : "");
+	const prompt = task.swebench
+		? swePrompt(task.prompt)
+		: batchL
+			? batchLPrompt(cell!) +
+				(comparisonProfile === TASK_PAIR_PROFILE
+					? `\n${TASK_PAIR_INSTRUCTIONS}`
+					: comparisonProfile === NEXT_EVALUATION_PROFILE
+						? `\n${NEXT_EVALUATION_INSTRUCTIONS}`
+						: "")
+			: task.prompt +
+				(cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") +
+				(cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") +
+				(moduleTools.includes("enhanced_memory_search")
+					? " 可使用只读项目记忆搜索查阅 normalizeKey 项目约定。"
+					: "") +
+				(seededTaskId ? ` 任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : "");
 	return { ...workspace, agentDir, memorySeed, seededTaskId, taskStateBefore, moduleTools, prompt };
 }
 export type PreparedAgent = Awaited<ReturnType<typeof prepareAgent>>;

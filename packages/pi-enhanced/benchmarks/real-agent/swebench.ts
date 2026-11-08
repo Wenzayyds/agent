@@ -8,6 +8,18 @@ const manifestPath = fileURLToPath(new URL("./swebench-verified.json", import.me
 export const SWE_HARNESS_COMMIT = "726c5461e2ef52d83cf1ea2107870a8bb3328d57";
 export const SWE_DATA_REVISION = "c104f840cc67f8b6eec6f759ebc8b2693d585d4a";
 export const SWE_EVALUATION_PROTOCOL = "swebench_verified_source_restricted_v1";
+export const SWE_SOURCE_INSTRUCTIONS =
+	"本次采用受限源码评测协议：允许读取工作区中的测试文件，但禁止修改、创建或删除测试文件。只能修改已有且被 Git 跟踪的 .py/.js/.ts/.rst/.md 源码文件；禁止新增文件、删除、重命名、权限变更及修改凭据或仓库元数据。不提供 Shell 或 Agent 内测试执行能力；完成最小源码修复后结束，由独立官方 Harness 判分。所有模式使用相同限制，没有按答案位置设置文件白名单。";
+export function swePrompt(issue: string): string {
+	return `${issue}\n\n${SWE_SOURCE_INSTRUCTIONS}`;
+}
+
+export function sweWritePathAllowed(cwd: string, input: unknown): boolean {
+	if (typeof input !== "string") return false;
+	const path = relative(resolve(cwd), resolve(cwd, input)).replaceAll("\\", "/");
+	if (!safePatchPath(path)) return false;
+	return git(cwd, ["ls-files", "-z", "--", path]).split("\0").filter(Boolean).includes(path);
+}
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
 interface Identity {
@@ -49,7 +61,13 @@ export function publicInstance(value: unknown, expected: Identity): PublicIssue 
 export function safePatchPath(path: string): boolean {
 	return (
 		/^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.(?:py|js|ts|rst|md)$/u.test(path) &&
-		!path.split("/").some((part) => /^(?:tests?|test_.*|.*_test\.[^.]+|secrets?|credentials?)$/iu.test(part))
+		!path
+			.split("/")
+			.some((part) =>
+				/^(?:tests?(?:\.[^.]+)?|__tests?__|specs?|__specs?__|tests?_.*|spec_.*|conftest\.py|.*(?:_test|\.test|\.spec)\.[^.]+|secrets?|credentials?)$/iu.test(
+					part,
+				),
+			)
 	);
 }
 
@@ -131,51 +149,101 @@ export function prepareSweWorkspace(task: SweTask, cwd: string): string {
 	return git(cwd, ["rev-parse", "HEAD^{tree}"]).trim();
 }
 
-export function exportSwePrediction(task: SweTask, cwd: string, output: string, model: string) {
+export function exportSwePrediction(
+	task: SweTask,
+	cwd: string,
+	output: string,
+	model: string,
+	diagnosticOutput?: string,
+) {
 	const parent = realpathSync(dirname(output));
 	const rel = relative(realpathSync(cwd), parent);
 	if (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`)) throw new Error("SWE_OUTPUT_IN_WORKSPACE");
-	if (
-		git(cwd, ["rev-parse", "HEAD"]).trim() !== task.issue.base_commit ||
-		git(cwd, ["diff", "--cached", "--name-only"]) ||
-		git(cwd, ["ls-files", "--others", "-z"])
-	)
-		throw new Error("SWE_WORKSPACE_DRIFT_OR_UNTRACKED_FILES");
-	const changed = git(cwd, ["diff", "--name-only", "-z", "HEAD", "--"]).split("\0").filter(Boolean);
-	if (!changed.length) return { status: "agent_failed", reason: "empty_patch" } as const;
-	for (const path of changed) {
-		const target = join(cwd, path);
-		if (!safePatchPath(path) || !lstatSync(target).isFile() || realpathSync(target) !== target)
-			throw new Error("SWE_PATCH_PATH_DENIED");
-	}
-	const raw = git(cwd, ["diff", "--raw", "--no-renames", "HEAD", "--"]);
-	if (
-		raw
-			.split(/\r?\n/u)
-			.filter(Boolean)
-			.some((line) => !/^:(100644|100755) \1 [a-f0-9]+ [a-f0-9]+ M\t/u.test(line))
-	)
-		throw new Error("SWE_PATCH_MODE_DENIED");
-	const patch = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD", "--"]);
-	if (
-		Buffer.byteLength(patch) > 256 * 1024 ||
-		/(?:^Binary files |^GIT binary patch|-----BEGIN .*PRIVATE KEY-----|\b(?:sk-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]{20,}\b|\bAKIA[A-Z0-9]{16}\b|(?:api[_-]?key|password|secret|token)\s*[:=]\s*['"][^'"]{16,}['"])/imu.test(
-			patch,
+	if (diagnosticOutput && realpathSync(dirname(diagnosticOutput)) !== parent)
+		throw new Error("SWE_DIAGNOSTIC_OUTPUT_INVALID");
+	const diagnostic: {
+		status: string;
+		error: string | null;
+		candidatePatchSha256: string | null;
+		candidatePatchBytes: number | null;
+		paths: Array<{ path: string | null; pathSha256: string }> | null;
+		pathsTruncated: boolean;
+		contentSaved: false;
+	} = {
+		status: "rejected",
+		error: null,
+		candidatePatchSha256: null,
+		candidatePatchBytes: null,
+		paths: null,
+		pathsTruncated: false,
+		contentSaved: false,
+	};
+	try {
+		if (
+			git(cwd, ["rev-parse", "HEAD"]).trim() !== task.issue.base_commit ||
+			git(cwd, ["diff", "--cached", "--name-only"]) ||
+			git(cwd, ["ls-files", "--others", "-z"])
 		)
-	)
-		throw new Error("SWE_PATCH_UNSAFE");
-	git(cwd, ["apply", "--cached", "--check", "--whitespace=nowarn", "-"], patch);
-	writeFileSync(
-		output,
-		`${JSON.stringify({ instance_id: task.issue.instance_id, model_name_or_path: model, model_patch: patch })}\n`,
-		{ flag: "wx", mode: 0o600 },
-	);
-	return {
-		status: "not_run",
-		reason: "official_harness_not_run",
-		patchSha256: sha(patch),
-		changedFiles: changed,
-	} as const;
+			throw new Error("SWE_WORKSPACE_DRIFT_OR_UNTRACKED_FILES");
+		const changed = git(cwd, ["diff", "--name-only", "-z", "HEAD", "--"]).split("\0").filter(Boolean);
+		diagnostic.paths = changed.slice(0, 64).map((path) => ({
+			path:
+				path.length <= 256 &&
+				/^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.(?:py|js|ts|rst|md)$/u.test(path) &&
+				!/secret|credential|password|token|api.?key/iu.test(path)
+					? path
+					: null,
+			pathSha256: sha(path),
+		}));
+		diagnostic.pathsTruncated = changed.length > 64;
+		const patch = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD", "--"]);
+		diagnostic.candidatePatchSha256 = sha(patch);
+		diagnostic.candidatePatchBytes = Buffer.byteLength(patch);
+		if (!changed.length) {
+			diagnostic.error = "empty_patch";
+			return { status: "agent_failed", reason: "empty_patch" } as const;
+		}
+		for (const path of changed) {
+			const target = join(cwd, path);
+			if (!safePatchPath(path) || !lstatSync(target).isFile() || realpathSync(target) !== target)
+				throw new Error("SWE_PATCH_PATH_DENIED");
+		}
+		const raw = git(cwd, ["diff", "--raw", "--no-renames", "HEAD", "--"]);
+		if (
+			raw
+				.split(/\r?\n/u)
+				.filter(Boolean)
+				.some((line) => !/^:(100644|100755) \1 [a-f0-9]+ [a-f0-9]+ M\t/u.test(line))
+		)
+			throw new Error("SWE_PATCH_MODE_DENIED");
+		if (
+			Buffer.byteLength(patch) > 256 * 1024 ||
+			/(?:^Binary files |^GIT binary patch|-----BEGIN .*PRIVATE KEY-----|\b(?:sk-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]{20,}\b|\bAKIA[A-Z0-9]{16}\b|(?:api[_-]?key|password|secret|token)\s*[:=]\s*['"][^'"]{16,}['"])/imu.test(
+				patch,
+			)
+		)
+			throw new Error("SWE_PATCH_UNSAFE");
+		git(cwd, ["apply", "--cached", "--check", "--whitespace=nowarn", "-"], patch);
+		writeFileSync(
+			output,
+			`${JSON.stringify({ instance_id: task.issue.instance_id, model_name_or_path: model, model_patch: patch })}\n`,
+			{ flag: "wx", mode: 0o600 },
+		);
+		diagnostic.status = "exported";
+		return {
+			status: "not_run",
+			reason: "official_harness_not_run",
+			patchSha256: sha(patch),
+			changedFiles: changed,
+		} as const;
+	} catch (error) {
+		diagnostic.error =
+			error instanceof Error && /^SWE_[A-Z_]+$/u.test(error.message) ? error.message : "SWE_PATCH_EXPORT_FAILED";
+		throw error;
+	} finally {
+		if (diagnosticOutput)
+			writeFileSync(diagnosticOutput, `${JSON.stringify(diagnostic, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+	}
 }
 
 export function officialOutcome(report: unknown, id: string, timeout = false) {

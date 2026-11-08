@@ -71,7 +71,10 @@ try {
 		summary: { passed, failed: results.length - passed, passRate: passed / results.length },
 		results,
 	};
-	writeFileSync(new URL("../docs/p5-evaluation-results.json", import.meta.url), `${JSON.stringify(report, null, 2)}\n`);
+	writeFileSync(
+		new URL("../../docs/p5-evaluation-results.json", import.meta.url),
+		`${JSON.stringify(report, null, 2)}\n`,
+	);
 	process.stdout.write(`${JSON.stringify(report.summary)}\n`);
 } finally {
 	rmSync(root, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 # SWE-bench Verified 与 Task V2 设计
 
-当前准入适配基于 pi-agent / `0ba05f6418780dcb4e9cb3e696536c42cd8ae6ae`。该基线三项 CI 已通过；本轮适配源码尚未提交，不能引用基线 CI 作为新源码验收。
+当前准入适配基于 pi-agent / `0ba05f6418780dcb4e9cb3e696536c42cd8ae6ae`。该基线三项 CI 已通过；本轮适配已提交为 `106d6e190bd516e1fb6b718b979040db7f5c6d43`，新 CI Run 42382223747 三项通过，已有当前提交的实际证据。
 
 ## 实际调用关系
 
@@ -70,4 +70,26 @@ Gold 控制容器的直接环境和挂载不含 Provider 密钥、宿主 .env �
 
 SWE 不写历史 P5 报告。每格独占 run/task 目录保存有界脱敏 Agent JSONL、stderr、Gateway、Telemetry、审计、结果、Patch 及 predictions.jsonl。异常退出也可在工作区身份及静态 Patch 安全检查通过后保留部分补丁，不能据此标记 Agent 正常结束。补丁导出发生安全异常则停止整批。模型名称分别标记 stub/real、模式和模型。官方 Harness 使用另一独占目录，要求 --agent-result，将实例和补丁 SHA 绑定到运行结果，保存原官方报告、outcome.json 及 assessment.json。resolved/unresolved 只来自官方结果；未判分为 not_run，resolved=null。基础设施异常与 unresolved 分开记录，不更改原 Agent 结果。
 
-用户已批准本次全新 $0.09 上限：每格 12 请求、80,000 Token、$0.03、180 秒，串行 OFF→V1→V2，不重试。仍需本轮源码提交授权、新 Commit 的 Windows/Linux/Docker CI 通过，以及有效一次性宿主授权；尚未调用付费模型。
+用户已批准本次全新 $0.09 上限：每格 12 请求、80,000 Token、$0.03、180 秒，串行 OFF→V1→V2，不重试。上述提交、CI、宿主校准与一次性授权已完成。实际批次在 OFF 的第 8 次请求预留拒绝后停止；共转发 7 次、43,000 Token、网关费用 $0.0145866。模型同时编辑测试路径导致既有 Patch 导出拒绝，官方判分及 V1/V2 均 not_run。授权已消费，不复用剩余预算。详见验收报告，不能据此判断 Task 收益。
+
+## 本轮离线修复：协议、预留诊断与分类
+
+当前修改基于 106d6e190，尚未提交；旧提交的绿色 CI 不能代表这些修改。旧真实批次与已消费的授权保持原样，本轮不调用模型、不创建正式授权、不提交或推送。
+
+原始 Issue 逐字保留，并在普通用户消息后追加同一段受限源码说明。OFF/V1/V2 均允许读取测试文件，禁止写入测试及非已有 tracked 源码。safePatchPath 是工具写入检查和 Patch 导出的共用路径规则，覆盖 test/tests、test_、_test、.test/.spec、__tests__/__specs__、conftest 等常见命名；不是按答案位置生成的名单。工具写入还检查 Git 跟踪状态，在进入 Broker 前拒绝；没有修改 P1 或通用 Sandbox。新的共同 Prompt 与约束摘要进入 SWE 配置散列，宿主逐模式指纹必须重新校准。旧 issue SHA 保留为公开问题标识，userPromptSha256 则绑定 Issue 加统一说明。
+
+预算公式仍是输入上界=实际收到的 UTF-8 JSON 字节数+4096，候选预留=输入上界+受限输出；收费费率、额度、并发、校验顺序和拒绝策略不变。Token/费用拒绝新增 reservationDiagnostics，仅保存字节数、请求输出值、实际输出上限、预留上界/费用、总额及剩余额度，不保存请求正文、Key 或 Header。拒绝发生在预留计算前时该对象为 null。旧第8次请求没有这些数据，保持 unknown，不用新 Stub 或实报 Token 倒推出精确输入。
+
+终止分类只解释 Agent/网关/真实安全事件。gatewayRejections、patchExportError、patchDiagnostic、auditStatus 分别记录网关、导出和审计；补丁拒绝不覆盖真实终止分类。父批次仍在导出拒绝时停止并保留后续 not_run。导出器对完整候选 diff 计算 SHA-256 和字节数，保留至多64条路径（每条至多256字符，疑似敏感路径仅留散列）；不保存拒绝补丁正文，不能过滤掉测试修改后生成预测。无法安全取得的字段为 null。只有全部检查通过才写 predictions.jsonl。
+
+## 下一次三模式对照的离线准备（最新规则）
+
+本节更新前文的预算与批次停止规则，历史授权和结果不改。SWE_TASK_LIMITS 提案为每组20请求、200,000 Token、$0.08、600秒，全批60请求、600,000 Token、$0.24；输出2048、thinking off、并发1、不重试。不是费用授权。配置增加 continuationPolicy=verified_host_cleanup_v1，并进入原configurationSha256，旧$0.09 grant必然不匹配。
+
+仅 swe-task-v1 允许普通资源停止后安全继续，旧两格/六格策略不变。executeAgent 记录真实子进程close和PID消失、网关无在途/预留且Usage结算、容器命名空间清空、原工作区身份有效；run-real-agent在原finally真正删除私有项目/Git/Session/Task目录后，原子保存host-cleanup.json，绑定runId、模式、工作区散列及result/run文件散列。父批次等待Runner退出、核对收据和隔离审计、授权消费及公平性后才允许下一格。正常资源耗尽的cell仍记录stopped，空补丁记failed，不把其他格改成失败；not_run保留具体阻断原因。
+
+审计缺少正常关闭记录时，仍须完整性有效、runId/工作区绑定一致、无未知写入；未结束的只读操作只有在宿主清理核对通过后才允许继续。原auditComplete=false保持，绝不补写成true。审计损坏、容器/权限/身份异常、未知写入、网关Usage缺失或账本失败、违规导出、授权/指纹失配、整批余量不足仍整批停止。普通文件拒绝保留原严格安全规则，不因发生在Broker前就放行。旧isolation_boundary_stop类别表示严格策略要求停止，不能据此声称实际发生Docker逃逸；须结合具体reasonCode、拒绝发生层和Broker记录解释。
+
+--swe-stub-limits仅接受明确宿主CLI提供的减小值、仅swe-task-v1且回环Stub开启，真实执行禁止。用于确定性请求/费用/超时/整批预算负向测试；不是另一套Runner或授权。真实每格仍严格匹配提案，执行前需要全新费用批准和宿主grant。
+
+官方评分入口保持不变。生产Agent批次记录每格独立运行与可用部分补丁；随后仅对exported且绑定合法的预测调用原swebench.ts官方入口，在独立评测目录运行，逐格保留assessment及原始官方报告，再汇总。没有合法Patch不调用Harness，resolved=null。官方控制环境应无Provider Key、dotenv关闭；共享Docker socket仍具广泛宿主权限，不声称完整宿主隔离。本轮没有运行新Harness或真实模型。
