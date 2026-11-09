@@ -22,6 +22,50 @@ const baseLimits: BudgetGatewayLimits = {
 };
 
 describe("Batch H hard budget gateway", () => {
+	it("charges Pro at peak rates and keeps the 200K token and $0.40 reservations hard", async () => {
+		let forwarded = 0;
+		const upstream = await mockUpstream(async (_request, response, body) => {
+			forwarded++;
+			expect(body).toMatchObject({ model: "deepseek-v4-pro", max_tokens: 2048, stream_options: { include_usage: true } });
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end('data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110}}\n\ndata: [DONE]\n\n');
+		});
+		const limits = { ...baseLimits, maxRequests: 20, maxTotalTokens: 200_000, maxTotalCostUsd: 0.4, maxOutputTokensPerRequest: 2048, maxRequestBytes: 300_000 };
+		const proGateway = async (overrides: Partial<BudgetGatewayLimits> = {}, upstreamBaseUrl = upstream.url) => {
+			const gateway = await startBudgetGateway({
+				runId: "swe-pro-off-test", upstreamBaseUrl, upstreamApiKey: "upstream-key",
+				clientToken: "client-token", adminToken: "admin-token", allowedModel: "deepseek-v4-pro",
+				limits: { ...limits, ...overrides }, pricing: { inputUsdPerMillion: 1.32, outputUsdPerMillion: 3.96 },
+			});
+			running.push(gateway);
+			return gateway;
+		};
+		const gateway = await proGateway();
+		expect((await callGateway(gateway.url, "client-token", { max_tokens: 9999 }, "deepseek-flash")).status).toBe(400);
+		expect((await callGateway(gateway.url, "client-token", { max_tokens: 9999 }, "deepseek-v4-pro")).status).toBe(200);
+		expect(forwarded).toBe(1);
+		expect(gateway.status()).toMatchObject({ requestsStarted: 1, requestsCompleted: 1, actualTotalTokens: 110, state: "ready" });
+		expect(gateway.status().actualCostUsd).toBeCloseTo(0.0001716, 9);
+		const tokenLimited = await proGateway();
+		expect((await callGateway(tokenLimited.url, "client-token", { messages: [{ role: "user", content: "a".repeat(200_000) }] }, "deepseek-v4-pro")).status).toBe(429);
+		expect(tokenLimited.status().denials[0]?.code).toBe("GATEWAY_TOKEN_BUDGET");
+		const costLimited = await proGateway({ maxTotalCostUsd: 0.001 });
+		expect((await callGateway(costLimited.url, "client-token", {}, "deepseek-v4-pro")).status).toBe(429);
+		expect(costLimited.status().denials[0]?.code).toBe("GATEWAY_COST_BUDGET");
+		expect(forwarded).toBe(1);
+		const noUsage = await mockUpstream(async (_request, response) => {
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end("data: [DONE]\n\n");
+		});
+		const failedClosed = await proGateway({}, noUsage.url);
+		expect((await callGateway(failedClosed.url, "client-token", {}, "deepseek-v4-pro")).status).toBe(200);
+		expect(failedClosed.status()).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_USAGE_MISSING" });
+		expect(failedClosed.status().committedCostUpperBoundUsd).toBeGreaterThan(0);
+		const maxOutput = 20 * 2048;
+		const theoreticalMaxUsd = ((200_000 - maxOutput) * 1.32 + maxOutput * 3.96) / 1_000_000;
+		expect(theoreticalMaxUsd).toBeCloseTo(0.3721344, 9);
+		expect(theoreticalMaxUsd).toBeLessThan(0.4);
+	});
 	it("accepts only authenticated isolation-stop signals and never forwards them upstream", async () => {
 		const upstream = await mockUpstream(async (_request, response) => {
 			response.writeHead(500).end();

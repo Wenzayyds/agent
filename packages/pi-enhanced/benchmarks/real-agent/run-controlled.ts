@@ -25,7 +25,7 @@ import {
 } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
-import { SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import { SWE_PRO_OFF_CELLS, SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_LIMITS, SWE_PRO_OFF_PROFILE, SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	loadTaskPairAuthorization,
@@ -42,14 +42,18 @@ const stub = argument("--local-stub-url");
 const offlinePolicyPath = argument("--offline-denial-policy");
 const comparisonProfile = argument("--comparison-profile");
 const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
-const swe = comparisonProfile === SWE_TASK_PROFILE;
+const swePro = comparisonProfile === SWE_PRO_OFF_PROFILE;
+const swe = comparisonProfile === SWE_TASK_PROFILE || swePro;
+const sweConfiguration = swePro ? SWE_PRO_OFF_CONFIGURATION : SWE_TASK_CONFIGURATION;
+const sweLimits = swePro ? SWE_PRO_OFF_LIMITS : SWE_TASK_LIMITS;
+const sweCells = swePro ? SWE_PRO_OFF_CELLS : SWE_TASK_CELLS;
 const hostGrantProfile = taskPair || swe;
 const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
-if (swe && (sweId !== SWE_TASK_CONFIGURATION.instanceId || !sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
+if (swe && (sweId !== sweConfiguration.instanceId || !sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 if (!swe && (sweId || sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 let CONTROLLED_LIMITS = swe
-	? SWE_TASK_LIMITS
+	? sweLimits
 	: taskPair
 		? TASK_PAIR_LIMITS
 		: comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE
@@ -66,16 +70,16 @@ if (stubLimitsPath) {
 			(key) =>
 				Number.isFinite(limits[key]) &&
 				limits[key] > 0 &&
-				limits[key] <= SWE_TASK_LIMITS[key as keyof typeof SWE_TASK_LIMITS],
+				limits[key] <= sweLimits[key as keyof typeof SWE_TASK_LIMITS],
 		)
 	)
 		throw new Error("SWE_STUB_LIMITS_INVALID");
 	// Do not mutate frozen production constants or any other profile.
-	CONTROLLED_LIMITS = { ...limits, maxRuns: 3 };
+	CONTROLLED_LIMITS = { ...limits, maxRuns: sweLimits.maxRuns };
 }
 if (
 	comparisonProfile &&
-	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE].includes(comparisonProfile)
+	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE, SWE_PRO_OFF_PROFILE].includes(comparisonProfile)
 )
 	throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !stub)
@@ -95,7 +99,7 @@ const taskPairAuthorization =
 				commit,
 				batchId ?? "",
 				ciPath,
-				swe ? SWE_TASK_PROFILE : TASK_PAIR_PROFILE,
+				swe ? (swePro ? SWE_PRO_OFF_PROFILE : SWE_TASK_PROFILE) : TASK_PAIR_PROFILE,
 			)
 		: undefined;
 const telemetryEnabled = hostGrantProfile || process.argv.includes("--evaluation-telemetry");
@@ -110,11 +114,11 @@ if (!execute) {
 			status: "not_run",
 			commit,
 			limits: CONTROLLED_LIMITS,
-			cells: swe ? SWE_TASK_CELLS : taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
+			cells: swe ? sweCells : taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
 			...(hostGrantProfile
 				? {
-						configuration: swe ? SWE_TASK_CONFIGURATION : TASK_PAIR_CONFIGURATION,
-						configurationSha256: digest(swe ? SWE_TASK_CONFIGURATION : TASK_PAIR_CONFIGURATION),
+						configuration: swe ? sweConfiguration : TASK_PAIR_CONFIGURATION,
+						configurationSha256: digest(swe ? sweConfiguration : TASK_PAIR_CONFIGURATION),
 					}
 				: {}),
 		}),
@@ -153,7 +157,7 @@ mkdirSync(batchDir);
 if (authorization) claimBatchLAuthorization(authorizationPath!, authorization, batchDir);
 if (taskPairAuthorization) claimTaskPairAuthorization(taskPairPath!, taskPairAuthorization);
 const specs = swe
-	? SWE_TASK_CELLS
+	? sweCells
 	: taskPair
 		? TASK_PAIR_CELLS
 		: comparisonProfile
@@ -203,8 +207,8 @@ const save = () => {
 				...(swe
 					? {
 							batchLimits: {
-								maxRequests: CONTROLLED_LIMITS.maxRequests * 3,
-								maxTokens: CONTROLLED_LIMITS.maxTokens * 3,
+								maxRequests: CONTROLLED_LIMITS.maxRequests * sweCells.length,
+								maxTokens: CONTROLLED_LIMITS.maxTokens * sweCells.length,
 								maxCostUsd: CONTROLLED_LIMITS.maxBatchCostUsd,
 							},
 						}
@@ -244,7 +248,7 @@ for (let index = 0; index < specs.length; index++) {
 		"--provider",
 		"deepseek",
 		"--model",
-		"deepseek-flash",
+		swe ? sweConfiguration.model : "deepseek-flash",
 		"--api-key-env",
 		stub ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY",
 		"--max-total-cost-usd",

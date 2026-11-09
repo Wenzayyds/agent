@@ -50,7 +50,7 @@ export function buildEvaluationPlan(input: Record<string, string | undefined>, e
 	}
 	if (
 		input.budgetEnforcement === "local_hard_gateway" &&
-		(input.provider !== "deepseek" || input.model !== "deepseek-flash")
+		(input.provider !== "deepseek" || !["deepseek-flash", "deepseek-v4-pro"].includes(input.model ?? ""))
 	) {
 		throw new Error("EVAL_GATE_LOCAL_GATEWAY_MODEL_UNSUPPORTED");
 	}

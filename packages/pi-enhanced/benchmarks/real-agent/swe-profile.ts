@@ -50,3 +50,22 @@ export const SWE_TASK_CONFIGURATION = Object.freeze({
 	continuationPolicy: "verified_host_cleanup_v1",
 	moduleTools: { off: [], v1: ["enhanced_task_get"], v2: ["enhanced_task_get", "enhanced_task_plan_update"] },
 });
+
+export const SWE_PRO_OFF_PROFILE = "swe-pro-off-v1";
+export const SWE_PRO_OFF_CELLS = [SWE_TASK_CELLS[0]!];
+export const SWE_PRO_OFF_LIMITS = Object.freeze({
+	maxRequests: 20,
+	maxTokens: 200_000,
+	maxCostUsd: 0.4,
+	timeoutMs: 600_000,
+	maxRuns: 1,
+	maxBatchCostUsd: 0.4,
+});
+export const SWE_PRO_OFF_CONFIGURATION = Object.freeze({
+	...SWE_TASK_CONFIGURATION,
+	profile: SWE_PRO_OFF_PROFILE,
+	cells: [{ id: "off", taskId: "swebench", variant: "baseline" }],
+	model: "deepseek-v4-pro",
+	limits: SWE_PRO_OFF_LIMITS,
+	moduleTools: { off: [] },
+});

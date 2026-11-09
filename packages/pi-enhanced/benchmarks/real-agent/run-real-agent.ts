@@ -21,7 +21,7 @@ import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
-import { SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_LIMITS, SWE_PRO_OFF_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
 import { collectSweResult } from "./swe-results.ts";
 import { loadSweTask } from "./swebench.ts";
 import {
@@ -43,8 +43,11 @@ async function main(): Promise<void> {
 	const sweMirror = argument("--swebench-mirror");
 	const taskMode = argument("--task-mode");
 	const comparisonProfile = argument("--comparison-profile");
-	const swe = comparisonProfile === SWE_TASK_PROFILE;
-	if (swe && (sweId !== SWE_TASK_CONFIGURATION.instanceId || !sweMirror || !taskMode))
+	const swePro = comparisonProfile === SWE_PRO_OFF_PROFILE;
+	const swe = comparisonProfile === SWE_TASK_PROFILE || swePro;
+	const sweConfiguration = swePro ? SWE_PRO_OFF_CONFIGURATION : SWE_TASK_CONFIGURATION;
+	const sweLimits = swePro ? SWE_PRO_OFF_LIMITS : SWE_TASK_LIMITS;
+	if (swe && (sweId !== sweConfiguration.instanceId || !sweMirror || !taskMode || (swePro && taskMode !== "off")))
 		throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 	if (sweId || sweMirror) {
 		if (
@@ -66,7 +69,7 @@ async function main(): Promise<void> {
 	const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
 	if (
 		comparisonProfile &&
-		![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE].includes(comparisonProfile)
+		![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE, SWE_PRO_OFF_PROFILE].includes(comparisonProfile)
 	)
 		throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 	if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !localStubUrl)
@@ -94,7 +97,7 @@ async function main(): Promise<void> {
 					execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
 					authorizationBatchId ?? "",
 					argument("--ci-evidence"),
-					swe ? SWE_TASK_PROFILE : TASK_PAIR_PROFILE,
+					swe ? (swePro ? SWE_PRO_OFF_PROFILE : SWE_TASK_PROFILE) : TASK_PAIR_PROFILE,
 				)
 			: undefined;
 	const authorization =
@@ -125,7 +128,7 @@ async function main(): Promise<void> {
 				(task) => (cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task),
 			);
 	if (selectedTasks.length === 0) throw new Error("EVAL_UNKNOWN_TASK");
-	const requiredLimits = swe ? SWE_TASK_LIMITS : TASK_PAIR_LIMITS;
+	const requiredLimits = swe ? sweLimits : TASK_PAIR_LIMITS;
 	const input = {
 		runId: argument("--run-id"),
 		provider: argument("--provider"),
@@ -146,7 +149,7 @@ async function main(): Promise<void> {
 		execute &&
 		(input.apiKeyEnv !== (localStubUrl ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY") ||
 			input.provider !== "deepseek" ||
-			input.model !== "deepseek-flash" ||
+			input.model !== (swe ? sweConfiguration.model : "deepseek-flash") ||
 			input.sandboxImage !== CONTROLLED_IMAGE ||
 			input.budgetEnforcement !== "local_hard_gateway" ||
 			input.maxTasks !== "1" ||
@@ -165,6 +168,7 @@ async function main(): Promise<void> {
 				: input.timeoutMs !== String(requiredLimits.timeoutMs)))
 	)
 		throw new Error("TASK_PAIR_CONFIGURATION_MISMATCH");
+	if (input.model === "deepseek-v4-pro" && !swePro) throw new Error("SWE_PRO_OFF_PROFILE_REQUIRED");
 	if (process.argv.includes("--preflight")) {
 		const repositoryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: repositoryRoot,
@@ -204,10 +208,10 @@ async function main(): Promise<void> {
 			plan.maxTasks !== 1 ||
 			plan.sandboxImage !== CONTROLLED_IMAGE ||
 			plan.budgetEnforcement !== "local_hard_gateway" ||
-			plan.maxCallsPerTask > SWE_TASK_LIMITS.maxRequests ||
-			plan.maxTokensPerTask > SWE_TASK_LIMITS.maxTokens ||
-			plan.maxTotalCostUsd > SWE_TASK_LIMITS.maxCostUsd ||
-			plan.timeoutMs > SWE_TASK_LIMITS.timeoutMs)
+			plan.maxCallsPerTask > sweLimits.maxRequests ||
+			plan.maxTokensPerTask > sweLimits.maxTokens ||
+			plan.maxTotalCostUsd > sweLimits.maxCostUsd ||
+			plan.timeoutMs > sweLimits.timeoutMs)
 	)
 		throw new Error("SWE_BUDGET_OR_SANDBOX_INVALID");
 	if (
@@ -304,10 +308,10 @@ async function main(): Promise<void> {
 				taskPairAuthorization,
 				taskPairExpected:
 					(swe && taskPairAuthorization
-						? taskPairAuthorization.modeInputs![taskMode as "off" | "v1" | "v2"]
+						? swePro ? taskPairAuthorization.input : taskPairAuthorization.modeInputs![taskMode as "off" | "v1" | "v2"]
 						: taskPairAuthorization?.input) ??
 					(taskPairExpectedPath
-						? swe
+						? swe && !swePro
 							? readSweModeInputs(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))[
 									taskMode as "off" | "v1" | "v2"
 								]
