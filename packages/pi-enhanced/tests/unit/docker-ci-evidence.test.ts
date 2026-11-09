@@ -48,7 +48,8 @@ function report(): DockerTestReport {
 								"audit_corrupt",
 								"batch_cap",
 							].map((name) => ({ fullName: `SWE independent continuation ${name}`, status: "passed" })),
-						),
+						)
+						.concat({ fullName: "rejects real-provider, wrong-run and expired Pi PID handshakes", status: "passed" }),
 				},
 				{
 					name: "/repo/tests/e2e/swebench-stub.test.ts",
@@ -102,5 +103,25 @@ describe("Linux Docker CI evidence requirements", () => {
 		const missingPolicy = report();
 		missingPolicy.testResults.at(-2)!.assertionResults.pop();
 		expect(() => requireDockerEvidence(missingPolicy)).toThrow("SWE_POLICY_CASE_COUNT");
+	});
+	it("rejects every missing, skipped, failed, or duplicated required SWE case", () => {
+		for (const suiteIndex of [6, 7]) {
+			const count = report().testResults[suiteIndex]!.assertionResults.length;
+			for (let index = 0; index < count; index++) {
+				const missing = report();
+				missing.testResults[suiteIndex]!.assertionResults.splice(index, 1);
+				expect(() => requireDockerEvidence(missing)).toThrow();
+				const skipped = report();
+				skipped.testResults[suiteIndex]!.assertionResults[index]!.status = "pending";
+				expect(() => requireDockerEvidence(skipped)).toThrow();
+				const failed = report();
+				failed.testResults[suiteIndex]!.assertionResults[index]!.status = "failed";
+				expect(() => requireDockerEvidence(failed)).toThrow();
+				const duplicate = report();
+				duplicate.testResults[suiteIndex]!.assertionResults[index] =
+					duplicate.testResults[suiteIndex]!.assertionResults[(index + 1) % count]!;
+				expect(() => requireDockerEvidence(duplicate)).toThrow();
+			}
+		}
 	});
 });

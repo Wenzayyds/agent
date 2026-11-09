@@ -73,6 +73,7 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 				"audit_corrupt",
 				"batch_cap",
 			].map((name) => `SWE independent continuation ${name}`),
+			"rejects real-provider, wrong-run and expired Pi PID handshakes",
 		);
 	if (
 		policy.length !== policyNames.length ||
