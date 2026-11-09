@@ -435,9 +435,10 @@ it
 				: tools.includes("enhanced_task_get")
 					? "v1"
 					: "off";
-			const previous = (body.messages as Array<{ role: string }>).filter(
+			const toolMessages = (body.messages as Array<{ role: string; tool_call_id?: string; content?: string }>).filter(
 				(message) => message.role === "tool",
-			).length;
+			);
+			const previous = toolMessages.length;
 			if (!previous) modes.push(mode);
 			const containers = execFileSync(
 				"docker",
@@ -466,7 +467,7 @@ it
 			let sse =
 				scenario === "requests" ||
 				scenario === "cost" ||
-				scenario === "timeout" ||
+				(scenario === "timeout" && !previous) ||
 				scenario === "container_failure" ||
 				scenario === "audit_corrupt"
 					? toolCallSse(
@@ -477,11 +478,23 @@ it
 						)
 					: textSse("No patch produced; Stub transport only.", 100, 10);
 			if (scenario === "usage_failure") sse = sse.replace(/"usage":\{[^}]+\}/u, '"usage":{}');
-			if (scenario === "timeout" && !previous) {
+			if (scenario === "timeout" && previous) {
+				if (
+					previous !== 1 ||
+					toolMessages[0]?.tool_call_id !== `call-read-${100 + calls - 1}` ||
+					typeof toolMessages[0].content !== "string" ||
+					toolMessages[0].content.trim().length === 0 ||
+					toolMessages[0].content.includes("SANDBOX_")
+				) {
+					processError = new Error("SWE fixture read did not complete successfully before timeout pause");
+					response.writeHead(503);
+					response.end();
+					return;
+				}
 				if (process.platform !== "win32") {
 					try {
-						// The received provider request confirms Pi is ready. Stop only the verified child,
-						// then let the gateway settle this response before the Runner deadline.
+						// A second request with the read result proves the Broker finished the only file operation.
+						// The final text response starts no new tool operation before the Runner deadline.
 						const runId = `${id}_${mode}`;
 						const pi = await waitPidHandshake(pidHandshakePath(join(directory, id), runId), runId, handshakeNonce, undefined, controlledPid);
 						if (!sameLinuxPi(pi)) throw new Error("SWE fixture Pi identity changed before SIGSTOP");
@@ -496,10 +509,9 @@ it
 						response.end();
 						return;
 					}
-				} else response.once("finish", () => {
-					// Suspend the actual Pi process after its provider response has settled. The production
-					// Runner's unchanged deadline must terminate it and prove cleanup, without an active API call.
-					if (process.platform === "win32")
+				} else {
+					// Pi is waiting for this final response, so it cannot exit before the pause.
+					try {
 						execFileSync(
 							"powershell.exe",
 							[
@@ -516,7 +528,13 @@ if ($pi.Count -ne 1) { throw 'Pi fixture child identity mismatch' };
 							],
 							{ stdio: "pipe", timeout: 10000, windowsHide: true },
 						);
-				});
+					} catch (error) {
+						processError = error instanceof Error ? error : new Error(String(error));
+						response.writeHead(503);
+						response.end();
+						return;
+					}
+				}
 			}
 			response.writeHead(200, { "Content-Type": "text/event-stream" });
 			response.end(sse);
