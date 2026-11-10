@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TASK_PAIR_CONFIGURATION } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
-import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
+import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	claimTaskPairCell,
@@ -29,6 +29,93 @@ function invoke(entry: string, args: string[]) {
 }
 
 describe("Task pair offline entry", () => {
+	it("binds Pro V1/V2 to a distinct grant, two fingerprints and ordered one-use cells", () => {
+		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-pro-task-grant-")));
+		try {
+			const path = join(dir, "grant.json"), ciPath = join(dir, "ci.json");
+			const input = {
+				fixtureSha256: "a".repeat(64), fixtureCommit: SWE_PRO_TASK_CONFIGURATION.baseCommit,
+				userPromptSha256: SWE_PRO_TASK_CONFIGURATION.userPromptSha256,
+				systemPromptSha256: "b".repeat(64), toolSchemaSha256: "c".repeat(64),
+				firstRequestSha256: "d".repeat(64),
+			};
+			const grant = {
+				schemaVersion: 1, status: "authorized", authorizationId: "00000000-0000-4000-8000-000000000004",
+				profile: SWE_PRO_TASK_PROFILE, commit: "1".repeat(40), batchId: "swe_pro_task_fixture",
+				outputBase: dir, expiresAt: new Date(Date.now() + 60_000).toISOString(), ciRunId: 1,
+				configurationSha256: digest(SWE_PRO_TASK_CONFIGURATION), input,
+				modeInputs: { v1: input, v2: { ...input, toolSchemaSha256: "e".repeat(64), firstRequestSha256: "f".repeat(64) } },
+			};
+			writeFileSync(ciPath, JSON.stringify({
+				commit: grant.commit, conclusion: "success", runId: 1,
+				runUrl: "https://github.com/Wenzayyds/agent/actions/runs/1",
+				jobs: ["offline-engineering (ubuntu-latest)", "offline-engineering (windows-latest)", "docker-isolation"]
+					.map((name) => ({ name, conclusion: "success" })),
+			}));
+			const load = () => loadTaskPairAuthorization(path, root, grant.commit, grant.batchId, ciPath, SWE_PRO_TASK_PROFILE);
+			for (const invalid of [
+				{ ...grant, profile: SWE_PRO_OFF_PROFILE },
+				{ ...grant, profile: SWE_TASK_PROFILE },
+				{ ...grant, configurationSha256: digest(SWE_PRO_OFF_CONFIGURATION) },
+				{ ...grant, modeInputs: { ...grant.modeInputs, off: input } },
+				{ ...grant, modeInputs: { v1: input, v2: input } },
+				{ ...grant, modeInputs: { ...grant.modeInputs, v2: { ...input, fixtureCommit: "0".repeat(40) } } },
+				{ ...grant, modeInputs: { ...grant.modeInputs, v2: { ...input, userPromptSha256: "0".repeat(64) } } },
+				{ ...grant, input: { ...input, firstRequestSha256: "0".repeat(64) } },
+				{ ...grant, expiresAt: "2000-01-01T00:00:00Z" },
+			]) {
+				writeFileSync(path, JSON.stringify(invalid));
+				expect(load).toThrow();
+			}
+			writeFileSync(path, JSON.stringify(grant));
+			expect(() => loadTaskPairAuthorization(path, root, grant.commit, grant.batchId, ciPath, SWE_PRO_OFF_PROFILE)).toThrow();
+			const parsed = load();
+			claimTaskPairAuthorization(path, parsed);
+			expect(() => claimTaskPairAuthorization(path, parsed)).toThrow();
+			const batchDir = join(dir, grant.batchId);
+			mkdirSync(batchDir);
+			const batch = (v1: string, v2: string, continuationReady: boolean, stoppedReason: string | null = null) =>
+				writeFileSync(join(batchDir, "batch.json"), JSON.stringify({
+					commit: grant.commit, batchId: grant.batchId, comparisonProfile: grant.profile,
+					authorization: { id: grant.authorizationId }, stoppedReason,
+					cells: [
+						{ id: "v1", resultStatus: v1, continuationReady },
+						{ id: "v2", resultStatus: v2 },
+					],
+				}));
+			batch("not_run", "run", false);
+			expect(() => claimTaskPairCell(path, parsed, "v2", batchDir)).toThrow();
+			batch("run", "not_run", false);
+			claimTaskPairCell(path, parsed, "v1", batchDir);
+			expect(() => claimTaskPairCell(path, parsed, "v1", batchDir)).toThrow();
+			batch("stopped", "run", false);
+			expect(() => claimTaskPairCell(path, parsed, "v2", batchDir)).toThrow();
+			batch("stopped", "run", true, "sandbox_operation_failure");
+			expect(() => claimTaskPairCell(path, parsed, "v2", batchDir)).toThrow();
+			batch("stopped", "run", true);
+			claimTaskPairCell(path, parsed, "v2", batchDir);
+			expect(() => claimTaskPairCell(path, parsed, "v2", batchDir)).toThrow();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	it("lists only Pro V1/V2 and rejects real execution before loading a key", () => {
+		const args = ["--comparison-profile", SWE_PRO_TASK_PROFILE, "--swebench-id", SWE_PRO_TASK_CONFIGURATION.instanceId, "--swebench-mirror", root];
+		const dry = invoke("run-controlled.ts", args);
+		expect(dry.status, dry.stderr).toBe(0);
+		expect(JSON.parse(dry.stdout)).toMatchObject({
+			status: "not_run", configuration: { model: "deepseek-v4-pro", thinking: "off", retries: 0 },
+			limits: { maxRuns: 2, maxRequests: 20, maxTokens: 200000, maxCostUsd: 0.4, maxBatchCostUsd: 0.8 },
+			cells: [{ id: "v1" }, { id: "v2" }],
+		});
+		for (const entry of ["run-controlled.ts", "run-real-agent.ts"]) {
+			const run = invoke(entry, [...args, "--execute", "--task-mode", "v1", "--api-key-env", "DEEPSEEK_API_KEY"]);
+			expect(run.status).toBe(1);
+			expect(run.stderr).toContain("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
+		}
+		const off = invoke("run-real-agent.ts", [...args, "--task-mode", "off"]);
+		expect(off.stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
+	});
 	it("binds a single Pro OFF grant to its profile, CI, input and one-use cell", () => {
 		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-pro-grant-")));
 		try {

@@ -69,3 +69,18 @@ export const SWE_PRO_OFF_CONFIGURATION = Object.freeze({
 	limits: SWE_PRO_OFF_LIMITS,
 	moduleTools: { off: [] },
 });
+
+export const SWE_PRO_TASK_PROFILE = "swe-pro-task-v1";
+export const SWE_PRO_TASK_CELLS = [SWE_TASK_CELLS[1]!, SWE_TASK_CELLS[2]!];
+export const SWE_PRO_TASK_LIMITS = Object.freeze({
+	...SWE_PRO_OFF_LIMITS,
+	maxRuns: 2,
+	maxBatchCostUsd: 0.8,
+});
+export const SWE_PRO_TASK_CONFIGURATION = Object.freeze({
+	...SWE_PRO_OFF_CONFIGURATION,
+	profile: SWE_PRO_TASK_PROFILE,
+	cells: SWE_PRO_TASK_CELLS.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+	limits: SWE_PRO_TASK_LIMITS,
+	moduleTools: { v1: ["enhanced_task_get"], v2: ["enhanced_task_get", "enhanced_task_plan_update"] },
+});

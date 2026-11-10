@@ -25,7 +25,7 @@ import {
 } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
-import { SWE_PRO_OFF_CELLS, SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_LIMITS, SWE_PRO_OFF_PROFILE, SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import { SWE_PRO_OFF_CELLS, SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_LIMITS, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CELLS, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_LIMITS, SWE_PRO_TASK_PROFILE, SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	loadTaskPairAuthorization,
@@ -43,10 +43,11 @@ const offlinePolicyPath = argument("--offline-denial-policy");
 const comparisonProfile = argument("--comparison-profile");
 const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
 const swePro = comparisonProfile === SWE_PRO_OFF_PROFILE;
-const swe = comparisonProfile === SWE_TASK_PROFILE || swePro;
-const sweConfiguration = swePro ? SWE_PRO_OFF_CONFIGURATION : SWE_TASK_CONFIGURATION;
-const sweLimits = swePro ? SWE_PRO_OFF_LIMITS : SWE_TASK_LIMITS;
-const sweCells = swePro ? SWE_PRO_OFF_CELLS : SWE_TASK_CELLS;
+const sweProTask = comparisonProfile === SWE_PRO_TASK_PROFILE;
+const swe = comparisonProfile === SWE_TASK_PROFILE || swePro || sweProTask;
+const sweConfiguration = swePro ? SWE_PRO_OFF_CONFIGURATION : sweProTask ? SWE_PRO_TASK_CONFIGURATION : SWE_TASK_CONFIGURATION;
+const sweLimits = swePro ? SWE_PRO_OFF_LIMITS : sweProTask ? SWE_PRO_TASK_LIMITS : SWE_TASK_LIMITS;
+const sweCells = swePro ? SWE_PRO_OFF_CELLS : sweProTask ? SWE_PRO_TASK_CELLS : SWE_TASK_CELLS;
 const hostGrantProfile = taskPair || swe;
 const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
@@ -79,7 +80,7 @@ if (stubLimitsPath) {
 }
 if (
 	comparisonProfile &&
-	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE, SWE_PRO_OFF_PROFILE].includes(comparisonProfile)
+	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_PROFILE].includes(comparisonProfile)
 )
 	throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !stub)
@@ -99,7 +100,7 @@ const taskPairAuthorization =
 				commit,
 				batchId ?? "",
 				ciPath,
-				swe ? (swePro ? SWE_PRO_OFF_PROFILE : SWE_TASK_PROFILE) : TASK_PAIR_PROFILE,
+				swe ? (swePro ? SWE_PRO_OFF_PROFILE : sweProTask ? SWE_PRO_TASK_PROFILE : SWE_TASK_PROFILE) : TASK_PAIR_PROFILE,
 			)
 		: undefined;
 const telemetryEnabled = hostGrantProfile || process.argv.includes("--evaluation-telemetry");

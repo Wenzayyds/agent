@@ -15,7 +15,7 @@ import { digest } from "./evaluation-identity.ts";
 import { EvaluationTelemetry } from "./evaluation-telemetry.ts";
 import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
-import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_PROFILE, SWE_TASK_PROFILE } from "./swe-profile.ts";
 import { readTaskPairInput } from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -84,7 +84,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	const { provider, model, apiKeyEnv } = plan;
 	const taskPair = context.comparisonProfile === TASK_PAIR_PROFILE;
 	if (
-		(taskPair || context.comparisonProfile === SWE_TASK_PROFILE || context.comparisonProfile === SWE_PRO_OFF_PROFILE) &&
+		(taskPair || context.comparisonProfile === SWE_TASK_PROFILE || context.comparisonProfile === SWE_PRO_OFF_PROFILE || context.comparisonProfile === SWE_PRO_TASK_PROFILE) &&
 		!localStubUrl &&
 		(!context.taskPairAuthorization || !context.taskPairExpected)
 	)
@@ -178,7 +178,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 				)
 					throw new Error("TASK_PAIR_INPUT_AUDIT_INVALID");
 				const wire = JSON.parse(init.body);
-				if (wire.model !== model || wire.max_tokens !== (context.comparisonProfile === SWE_PRO_OFF_PROFILE ? SWE_PRO_OFF_CONFIGURATION.maxOutputTokens : TASK_PAIR_CONFIGURATION.maxOutputTokens))
+				if (wire.model !== model || wire.max_tokens !== (context.comparisonProfile === SWE_PRO_OFF_PROFILE || context.comparisonProfile === SWE_PRO_TASK_PROFILE ? SWE_PRO_OFF_CONFIGURATION.maxOutputTokens : TASK_PAIR_CONFIGURATION.maxOutputTokens))
 					throw new Error("TASK_PAIR_INPUT_WIRE_INVALID");
 				// Only the system message may contain the ephemeral project root. Keep user text and tools exact.
 				for (const message of wire.messages) {

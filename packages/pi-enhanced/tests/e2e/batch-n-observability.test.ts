@@ -6,14 +6,138 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TASK_PAIR_INSTRUCTIONS } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
-import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
+import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import { loadSweTask } from "../../benchmarks/real-agent/swebench.ts";
-import { readSweModeInputs, type TaskPairInput } from "../../benchmarks/real-agent/task-pair-authorization.ts";
+import { readSweModeInputs, readSweProTaskInputs, type TaskPairInput } from "../../benchmarks/real-agent/task-pair-authorization.ts";
 import { assertIsolatedMount, close, startStubProvider, textSse, toolCallSse } from "../fixtures/runner-support.ts";
 
 const root = resolve(import.meta.dirname, "../../../..");
 const docker =
 	spawnSync("docker", ["image", "inspect", CONTROLLED_IMAGE], { stdio: "ignore", timeout: 10000 }).status === 0;
+it.skipIf(!docker || !process.env.PI_ENHANCED_SWE_LOCAL_MIRROR)(
+	"runs only Pro V1 then V2 with separate state and calibrated first requests",
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-swe-pro-task-"));
+		const task = loadSweTask(SWE_PRO_TASK_CONFIGURATION.instanceId, process.env.PI_ENHANCED_SWE_LOCAL_MIRROR!);
+		const path = "astropy/__init__.py";
+		const source = execFileSync("git", ["-C", task.mirror, "show", `${task.issue.base_commit}:${path}`], { encoding: "utf8" });
+		const old = source.split(/\r?\n/u).find((line) => line.trim().length >= 16 && source.split(line).length === 2)!;
+		const firstRequests: Record<string, Record<string, unknown>> = {};
+		const counts = { v1: 0, v2: 0 };
+		const provider = await startStubProvider((body, response) => {
+			const names = (body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+			const mode = names.includes("enhanced_task_plan_update") ? "v2" : "v1";
+			counts[mode]++;
+			const turns = (body.messages as Array<{ role: string }>).filter((message) => message.role === "tool").length;
+			if (!turns) {
+				firstRequests[mode] = body;
+				const initialInput = JSON.stringify(body.messages);
+				expect(initialInput).not.toContain("ffeec313394d799b7c80b64dd5ac7bad74632e8141158f7c312ca287f2fa4caf");
+				expect(initialInput).not.toContain("test_sampled.py:403");
+				expect(initialInput).not.toContain("swe_pro_off_20261109pilot1");
+			}
+			const sse = mode === "v2" && turns === 0
+				? toolCallSse("enhanced_task_plan_update", { change: {
+					action: "create", goal: "Inspect and prepare a transport patch",
+					steps: [{ id: "inspect", title: "Inspect source", expectedOutcome: "Identify the file" }],
+				} }, 100, 10)
+				: turns === (mode === "v2" ? 1 : 0)
+					? toolCallSse("edit", { path, edits: [{ oldText: old, newText: `${old}\n# Pro Task Stub transport only.` }] }, 101, 10)
+					: textSse("Stub done.", 100, 10);
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end(sse.replaceAll('"model":"deepseek-flash"', '"model":"deepseek-v4-pro"'));
+		});
+		const run = async (id: string, expected?: string) => {
+			const child = spawn(process.execPath, [
+				"--experimental-strip-types", join(root, "packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts"),
+				"--execute", "--comparison-profile", SWE_PRO_TASK_PROFILE,
+				"--swebench-id", task.issue.instance_id, "--swebench-mirror", task.mirror,
+				"--batch-id", id, "--output-dir", dir, "--local-stub-url", provider.url,
+				...(expected ? ["--task-pair-expected-input", expected] : []),
+			], {
+				cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
+				env: {
+					PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+					TEMP: process.env.TEMP, TMP: process.env.TMP,
+					HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE,
+					PI_ENHANCED_REAL_MODEL_EVAL: "1", PI_ENHANCED_LOCAL_STUB_EVAL: "1",
+					MOCK_PROVIDER_KEY: "mock-upstream-key",
+				},
+			});
+			let stderr = "";
+			child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+			const code = await new Promise<number | null>((done, reject) => {
+				child.once("error", reject);
+				child.once("close", done);
+			});
+			expect(code, stderr).toBe(0);
+			return JSON.parse(readFileSync(join(dir, id, "batch.json"), "utf8"));
+		};
+		try {
+			const captureId = "swe_pro_task_capture";
+			const capture = await run(captureId);
+			expect(capture.stoppedReason).toBeNull();
+			expect(capture.cells.map((cell: { id: string }) => cell.id)).toEqual(["v1", "v2"]);
+			const inputs = readSweProTaskInputs(Object.fromEntries(["v1", "v2"].map((mode) => [
+				mode, JSON.parse(readFileSync(join(dir, captureId, `${captureId}_${mode}`, "swebench/input-admission.json"), "utf8")).input,
+			])));
+			expect(inputs.v1.toolSchemaSha256).not.toBe(inputs.v2.toolSchemaSha256);
+			const expected = join(dir, "expected.json");
+			writeFileSync(expected, JSON.stringify(inputs));
+			const matched = await run("swe_pro_task_matched", expected);
+			expect(matched.stoppedReason).toBeNull();
+			for (const batch of [capture, matched]) {
+				for (const cell of batch.cells) {
+					const result = cell.result;
+					const resultDir = join(dir, batch.batchId, `${batch.batchId}_${cell.id}`, "swebench");
+					expect(result).toMatchObject({
+						taskMode: cell.id, taskSeeded: false, agentCompleted: true, auditComplete: true,
+						patchExportStatus: "exported", officialHarnessStatus: "not_run",
+						configuration: { provider: "deepseek", model: "deepseek-v4-pro", maxRequests: 20, maxTokens: 200000, maxCostUsd: 0.4, memory: false, context: false, thinking: "off" },
+						gateway: { state: "ready", requestsRejected: 0 }, gatewayRejections: [],
+					});
+					expect(result.exposedModuleTools).toEqual(cell.id === "v1" ? ["enhanced_task_get"] : ["enhanced_task_get", "enhanced_task_plan_update"]);
+					if (cell.id === "v1") expect(result.telemetry.taskV2).toBeUndefined();
+					else expect(result.telemetry.taskV2.updates.at(-1)).toMatchObject({ planUpdates: 1 });
+					expect(result.inputAudit).toMatchObject({
+						userPromptSha256: "14ce3f98a91213164dd868d10b6f34bb09353c2abcda1322765243ca74cc1e75",
+						canonicalSystemPromptSha256: "13102564c62276f3c960c10a10f9d6560fdb681b34242a9bdfa3f4195ff17bcc",
+						baseToolSchemaSha256: "961c0846b2761ecc9e70d2e48ff622d71487d387cffffdb92eba14f04eb93c6c",
+					});
+					expect(result.inputFixtureSha256).toBe("7c48a2d6ae15e527b4233fde867702a4e6882fbc9e8a9e3f00df291ab7a03b9f");
+					expect(result.gateway.requestsCompleted).toBe(cell.id === "v1" ? 2 : 3);
+					expect(result.gateway.actualTotalTokens).toBeGreaterThan(0);
+					expect(result.sandboxAudit.audit.every((entry: { status: string }) => entry.status === "ok")).toBe(true);
+					expect(readFileSync(join(resultDir, "patch.diff"), "utf8")).toContain("Pro Task Stub transport only");
+					expect(JSON.parse(readFileSync(join(resultDir, "predictions.jsonl"), "utf8"))).toMatchObject({
+						instance_id: task.issue.instance_id, model_patch: expect.stringContaining("Pro Task Stub transport only"),
+					});
+					expect(JSON.parse(readFileSync(join(dir, batch.batchId, `${batch.batchId}_${cell.id}`, "host-cleanup.json"), "utf8"))).toMatchObject({
+						childClosed: true, childAbsent: true, containersRemoved: true, privateRootRemoved: true, gatewayActiveRequests: 0,
+					});
+				}
+			}
+			expect(firstRequests.v1).toMatchObject({ model: "deepseek-v4-pro", thinking: { type: "disabled" }, max_tokens: 2048, stream: true });
+			expect(firstRequests.v2).toMatchObject({ model: "deepseek-v4-pro", thinking: { type: "disabled" }, max_tokens: 2048, stream: true });
+			expect((firstRequests.v1.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name).sort()).toEqual(["edit", "enhanced_task_get", "find", "grep", "ls", "read", "write"]);
+			expect((firstRequests.v2.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name).sort()).toEqual(["edit", "enhanced_task_get", "enhanced_task_plan_update", "find", "grep", "ls", "read", "write"]);
+		const mismatched = { ...inputs, v2: { ...inputs.v2, firstRequestSha256: "0".repeat(64) } };
+		writeFileSync(expected, JSON.stringify(mismatched));
+		const denied = await run("swe_pro_task_mismatch", expected);
+		expect(denied.stoppedReason).toBe("task_pair_input_admission_failed");
+		expect(denied.cells.map((cell: { resultStatus: string }) => cell.resultStatus)).toEqual(["run", "stopped"]);
+		expect(JSON.parse(readFileSync(join(dir, "swe_pro_task_mismatch/swe_pro_task_mismatch_v2/swebench/input-admission.json"), "utf8"))).toMatchObject({
+				status: "denied", upstreamForwarded: false, previouslyForwarded: 0,
+			});
+			expect(counts.v1).toBe(6);
+			expect(counts.v2).toBe(6);
+		} finally {
+			await close(provider.server);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	},
+	180_000,
+);
 it.skipIf(!docker || !process.env.PI_ENHANCED_SWE_LOCAL_MIRROR)(
 	"runs Pro OFF alone through the production Runner and rejects a mismatched first request",
 	async () => {

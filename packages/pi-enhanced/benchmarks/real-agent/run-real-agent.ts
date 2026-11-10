@@ -21,13 +21,14 @@ import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
-import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_LIMITS, SWE_PRO_OFF_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_LIMITS, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_LIMITS, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
 import { collectSweResult } from "./swe-results.ts";
 import { loadSweTask } from "./swebench.ts";
 import {
 	claimTaskPairCell,
 	loadTaskPairAuthorization,
 	readSweModeInputs,
+	readSweProTaskInputs,
 	readTaskPairInput,
 } from "./task-pair-authorization.ts";
 
@@ -44,11 +45,13 @@ async function main(): Promise<void> {
 	const taskMode = argument("--task-mode");
 	const comparisonProfile = argument("--comparison-profile");
 	const swePro = comparisonProfile === SWE_PRO_OFF_PROFILE;
-	const swe = comparisonProfile === SWE_TASK_PROFILE || swePro;
-	const sweConfiguration = swePro ? SWE_PRO_OFF_CONFIGURATION : SWE_TASK_CONFIGURATION;
-	const sweLimits = swePro ? SWE_PRO_OFF_LIMITS : SWE_TASK_LIMITS;
+	const sweProTask = comparisonProfile === SWE_PRO_TASK_PROFILE;
+	const swe = comparisonProfile === SWE_TASK_PROFILE || swePro || sweProTask;
+	const sweConfiguration = swePro ? SWE_PRO_OFF_CONFIGURATION : sweProTask ? SWE_PRO_TASK_CONFIGURATION : SWE_TASK_CONFIGURATION;
+	const sweLimits = swePro ? SWE_PRO_OFF_LIMITS : sweProTask ? SWE_PRO_TASK_LIMITS : SWE_TASK_LIMITS;
 	if (swe && (sweId !== sweConfiguration.instanceId || !sweMirror || !taskMode || (swePro && taskMode !== "off")))
 		throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
+	if (sweProTask && taskMode !== "v1" && taskMode !== "v2") throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 	if (sweId || sweMirror) {
 		if (
 			!sweId ||
@@ -69,7 +72,7 @@ async function main(): Promise<void> {
 	const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
 	if (
 		comparisonProfile &&
-		![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE, SWE_PRO_OFF_PROFILE].includes(comparisonProfile)
+		![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_PROFILE].includes(comparisonProfile)
 	)
 		throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 	if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !localStubUrl)
@@ -97,7 +100,7 @@ async function main(): Promise<void> {
 					execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
 					authorizationBatchId ?? "",
 					argument("--ci-evidence"),
-					swe ? (swePro ? SWE_PRO_OFF_PROFILE : SWE_TASK_PROFILE) : TASK_PAIR_PROFILE,
+					swe ? (swePro ? SWE_PRO_OFF_PROFILE : sweProTask ? SWE_PRO_TASK_PROFILE : SWE_TASK_PROFILE) : TASK_PAIR_PROFILE,
 				)
 			: undefined;
 	const authorization =
@@ -168,7 +171,7 @@ async function main(): Promise<void> {
 				: input.timeoutMs !== String(requiredLimits.timeoutMs)))
 	)
 		throw new Error("TASK_PAIR_CONFIGURATION_MISMATCH");
-	if (input.model === "deepseek-v4-pro" && !swePro) throw new Error("SWE_PRO_OFF_PROFILE_REQUIRED");
+	if (input.model === "deepseek-v4-pro" && !swePro && !sweProTask) throw new Error("SWE_PRO_PROFILE_REQUIRED");
 	if (process.argv.includes("--preflight")) {
 		const repositoryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: repositoryRoot,
@@ -312,9 +315,9 @@ async function main(): Promise<void> {
 						: taskPairAuthorization?.input) ??
 					(taskPairExpectedPath
 						? swe && !swePro
-							? readSweModeInputs(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))[
-									taskMode as "off" | "v1" | "v2"
-								]
+							? sweProTask
+								? readSweProTaskInputs(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))[taskMode as "v1" | "v2"]
+								: readSweModeInputs(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))[taskMode as "off" | "v1" | "v2"]
 							: readTaskPairInput(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))
 						: undefined),
 				observedCost,
