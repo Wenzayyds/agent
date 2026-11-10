@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TASK_PAIR_INSTRUCTIONS } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
+import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
 import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import { loadSweTask } from "../../benchmarks/real-agent/swebench.ts";
 import { readSweModeInputs, readSweProTaskInputs, type TaskPairInput } from "../../benchmarks/real-agent/task-pair-authorization.ts";
@@ -101,9 +102,22 @@ it.skipIf(!docker || !process.env.PI_ENHANCED_SWE_LOCAL_MIRROR)(
 					else expect(result.telemetry.taskV2.updates.at(-1)).toMatchObject({ planUpdates: 1 });
 					expect(result.inputAudit).toMatchObject({
 						userPromptSha256: "14ce3f98a91213164dd868d10b6f34bb09353c2abcda1322765243ca74cc1e75",
-						canonicalSystemPromptSha256: "13102564c62276f3c960c10a10f9d6560fdb681b34242a9bdfa3f4195ff17bcc",
 						baseToolSchemaSha256: "961c0846b2761ecc9e70d2e48ff622d71487d387cffffdb92eba14f04eb93c6c",
 					});
+					// The audit normalizes cwd, but Pi's three documentation paths retain the host installation root.
+					const events = readFileSync(join(resultDir, "agent.stdout.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+					const session = events.find((event) => event.type === "session");
+					const system = events.find((event) => event.type === "message_end" && event.message?.role === "system").message;
+					let canonical = Object.values(system.sections).join("\n\n")
+						.replaceAll(session.cwd, "[PROJECT_ROOT]").replaceAll(session.cwd.replaceAll("\\", "/"), "[PROJECT_ROOT]");
+					expect(digest(canonical)).toBe(result.inputAudit.canonicalSystemPromptSha256);
+					for (const [label, leaf] of [["Main documentation", "README.md"], ["Additional docs", "docs"], ["Examples", "examples"]]) {
+						const actual = join(root, "packages", "coding-agent", leaf!);
+						expect(canonical).toContain(`- ${label}: ${actual}`);
+						canonical = canonical.replace(`- ${label}: ${actual}`, `- ${label}: F:\\项目代码\\pi-agent\\.artifacts\\swe-pro-off-calibration\\checkout\\packages\\coding-agent\\${leaf}`);
+					}
+					// Verify all remaining text, including rules and any Task additions, against the historical input.
+					expect(digest(canonical)).toBe("13102564c62276f3c960c10a10f9d6560fdb681b34242a9bdfa3f4195ff17bcc");
 					expect(result.inputFixtureSha256).toBe("7c48a2d6ae15e527b4233fde867702a4e6882fbc9e8a9e3f00df291ab7a03b9f");
 					expect(result.gateway.requestsCompleted).toBe(cell.id === "v1" ? 2 : 3);
 					expect(result.gateway.actualTotalTokens).toBeGreaterThan(0);
