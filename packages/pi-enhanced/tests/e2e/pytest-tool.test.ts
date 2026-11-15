@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it, vi } from "vitest";
-import { createHarness, getMessageText } from "../../../coding-agent/test/suite/harness.ts";
+import { createHarness, createTestUiContext, getMessageText } from "../../../coding-agent/test/suite/harness.ts";
+import { assessPytest } from "../../src/ccr/adaptive.ts";
 import type { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
+import { loadSandboxConfig } from "../../src/sandbox/config.ts";
 import { createSandboxExtension, sandboxToolAllowed } from "../../src/sandbox/extension.ts";
 import { createPytestExecutor, type PytestConfig } from "../../src/sandbox/pytest.ts";
 import { sandboxConfigForTesting } from "../fixtures/runner-support.ts";
@@ -20,6 +22,50 @@ const clean = (root: string) => {
 it("keeps run_tests disabled by default", () => {
 	expect(sandboxToolAllowed("run_tests")).toBe(false);
 	expect(sandboxToolAllowed("run_tests", false, false, true)).toBe(true);
+});
+
+it("counts only distinct completed repairs with valid pytest failures for the same target", () => {
+	const empty = { failures: 0, failedVersions: [] };
+	const failed = { status: "failed", canRunAgain: true } as const;
+	const initial = assessPytest(empty, failed, "initial", "test_calc.py", false);
+	expect(initial).toMatchObject({ state: empty, eligible: false, reason: "no_new_repair" });
+	const first = assessPytest(initial.state, failed, "revision-1", "test_calc.py", true);
+	expect(first).toMatchObject({ state: { failures: 1 }, eligible: false });
+	expect(assessPytest(first.state, failed, "revision-1", "test_calc.py", true).state).toEqual(first.state);
+	expect(assessPytest(first.state, { status: "execution_error", canRunAgain: true }, "revision-2", "test_calc.py", true))
+		.toMatchObject({ state: first.state, eligible: false });
+	expect(assessPytest(first.state, { status: "passed", canRunAgain: true }, "revision-2", "test_calc.py", true))
+		.toMatchObject({ state: empty, eligible: false });
+	expect(assessPytest(first.state, failed, "revision-2", "other.py", true))
+		.toMatchObject({ state: { failures: 1 }, eligible: false });
+	expect(assessPytest(first.state, { ...failed, canRunAgain: false }, "revision-2", "test_calc.py", true))
+		.toMatchObject({ state: { failures: 2 }, eligible: false, reason: "pytest_limit" });
+	expect(assessPytest(first.state, failed, "revision-2", "test_calc.py", true))
+		.toMatchObject({ state: { failures: 2 }, eligible: true });
+});
+
+it("blocks native edit when CCR auto has no trusted Sandbox", async () => {
+	const harness = await createHarness({
+		allowedToolNames: ["edit"],
+		extensionFactories: [createSandboxExtension(loadSandboxConfig({}), undefined, undefined, true)],
+	});
+	try {
+		const file = join(harness.tempDir, "calc.py");
+		writeFileSync(file, "original = True\n");
+		await harness.session.bindExtensions({});
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("edit", {
+				path: "calc.py", edits: [{ oldText: "original = True", newText: "original = False" }],
+			})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("Stopped."),
+		]);
+		await harness.session.prompt("Attempt the edit.");
+		const result = harness.session.messages.find((m) => m.role === "toolResult");
+		expect(getMessageText(result)).toContain("CCR auto requires a trusted Sandbox and pytest policy");
+		expect(readFileSync(file, "utf8")).toBe("original = True\n");
+	} finally {
+		harness.cleanup();
+	}
 });
 
 describe.skipIf(!image)("isolated pytest", () => {
@@ -83,6 +129,64 @@ describe.skipIf(!image)("isolated pytest", () => {
 			expect(results[0].output).toContain("assert -2 == 0");
 			expect(results[1]).toMatchObject({ status: "passed", passed: 2, failed: 0, exitCode: 0 });
 			expect(readFileSync(join(harness.tempDir, "calc.py"), "utf8")).toContain("max(0, x)");
+		} finally { broker?.stop(); harness.cleanup(); }
+	}, 60_000);
+
+	it.each([
+		{ mode: "approved", baseline: false, approve: true, confirm: true, usePro: true },
+		{ mode: "declined", baseline: false, approve: false, confirm: true, usePro: false },
+		{ mode: "spent", baseline: true, approve: true, confirm: false, usePro: false },
+		{ mode: "manual", baseline: false, approve: true, confirm: false, usePro: false },
+		{ mode: "strong", baseline: false, approve: true, confirm: false, usePro: false },
+	])("routes after real pytest feedback only with confirmation and a remaining call ($mode)", async (scenario) => {
+		let broker: DockerSandboxBroker | undefined;
+		const flash = "DeepSeek/deepseek-flash";
+		const pro = "DeepSeek/deepseek-v4-pro";
+		const initial = scenario.mode === "strong" ? pro : flash;
+		const other = initial === pro ? flash : pro;
+		const harness = await createHarness({
+			provider: "local-ccr", models: [{ id: initial }, { id: other }],
+			...(scenario.mode === "manual" ? { allowedToolNames: ["edit", "run_tests"] } : { initialActiveToolNames: [] }),
+			extensionFactories: [createSandboxExtension(
+				(cwd) => sandboxConfigForTesting({ workspace: cwd, runId: "ccr-adaptive" }),
+				(value) => { broker = value; }, policy(), scenario.mode !== "manual",
+			)],
+		});
+		const confirm = vi.fn(async () => scenario.approve);
+		try {
+			writeFileSync(join(harness.tempDir, "calc.py"), "def clamp(x):\n    return 0\n");
+			writeFileSync(join(harness.tempDir, "test_calc.py"), "from calc import clamp\ndef test_clamp(): assert clamp(4) == 4\n");
+			harness.session.setScopedModels(harness.models.map((model) => ({ model })));
+			await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext({ confirm }) });
+			const test = () => fauxAssistantMessage([fauxToolCall("run_tests", { targets: ["test_calc.py"] })], { stopReason: "toolUse" });
+			const edit = (oldText: string, newText: string) => fauxAssistantMessage([
+				fauxToolCall("edit", { path: "calc.py", edits: [{ oldText, newText }] }),
+			], { stopReason: "toolUse" });
+			harness.setResponses([
+				...(scenario.baseline ? [test()] : []),
+				edit("return 0", "return 1"), test(),
+				(_context, _options, _state, model) => { expect(model.id).toBe(initial); return edit("return 1", "return 2"); },
+				test(),
+				(context, _options, _state, model) => {
+					expect(model.id).toBe(scenario.usePro ? pro : initial);
+					const last = context.messages.at(-1);
+					const call = context.messages.at(-2);
+					expect(last).toMatchObject({ role: "toolResult", toolName: "run_tests" });
+					expect(call).toMatchObject({ role: "assistant", content: [expect.objectContaining({ id: last?.role === "toolResult" ? last.toolCallId : undefined })] });
+					return scenario.usePro ? edit("return 2", "return max(0, x)") : fauxAssistantMessage("Stopping.");
+				},
+				...(scenario.usePro ? [test(), fauxAssistantMessage("Verified.")] : []),
+			]);
+			await harness.session.prompt("Repair clamp and verify with the approved pytest file.");
+			expect(confirm).toHaveBeenCalledTimes(scenario.confirm ? 1 : 0);
+			if (scenario.confirm) expect(confirm.mock.calls[0]).toEqual(expect.arrayContaining([expect.stringContaining("Token")]));
+			const results = harness.session.messages.filter((m) => m.role === "toolResult" && m.toolName === "run_tests")
+				.map((m) => JSON.parse(getMessageText(m)).status);
+			expect(results).toEqual(scenario.usePro ? ["failed", "failed", "passed"] : scenario.baseline ? ["failed", "failed", "failed"] : ["failed", "failed"]);
+			expect(harness.session.model?.id).toBe(scenario.usePro ? pro : initial);
+			const changes = harness.sessionManager.getEntries().filter((entry) => entry.type === "model_change" && entry.modelId === pro);
+			expect(changes).toHaveLength(scenario.usePro ? 1 : 0);
+			if (scenario.usePro) expect(readFileSync(join(harness.tempDir, "calc.py"), "utf8")).toContain("return max(0, x)");
 		} finally { broker?.stop(); harness.cleanup(); }
 	}, 60_000);
 

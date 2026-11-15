@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	closeSync,
 	constants,
@@ -74,8 +74,9 @@ function boundedRead(fd: number): Buffer {
 	return buffer.subarray(0, length);
 }
 
-function snapshot(config: SandboxConfig, policy: PytestConfig, destination: string): void {
+export function pytestFileVersions(config: SandboxConfig, policy: PytestConfig, destination?: string): Map<string, string> {
 	assertSandboxWorkspaceIdentity(config);
+	const versions = new Map<string, string>();
 	let total = 0;
 	for (const path of policy.files) {
 		const source = checkedFile(config.workspace, path);
@@ -107,14 +108,18 @@ function snapshot(config: SandboxConfig, policy: PytestConfig, destination: stri
 				throw new Error("PYTEST_SOURCE_CHANGED");
 			total += bytes.length;
 			if (total > 8 * 1024 * 1024) throw new Error("PYTEST_COPY_LIMIT");
-			const target = join(destination, path);
-			mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
-			writeFileSync(target, bytes, { flag: "wx", mode: 0o444 });
+			versions.set(path, createHash("sha256").update(bytes).digest("hex"));
+			if (destination) {
+				const target = join(destination, path);
+				mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
+				writeFileSync(target, bytes, { flag: "wx", mode: 0o444 });
+			}
 		} finally {
 			closeSync(fd);
 		}
 	}
 	assertSandboxWorkspaceIdentity(config);
+	return versions;
 }
 
 const program = `import sys, pytest
@@ -143,6 +148,13 @@ export function isPytestConfig(input: unknown): input is PytestConfig {
 	);
 }
 
+export interface PytestEvidence {
+	status: PytestResult["status"];
+	targets: readonly string[];
+	files: ReadonlyMap<string, string>;
+	canRunAgain: boolean;
+}
+
 /** One instance per session; limits are consumed even when a call fails. */
 export function createPytestExecutor(config: SandboxConfig, input: PytestConfig) {
 	if (!config.enabled || !config.trusted || !isPytestConfig(input)) throw new Error("PYTEST_CONFIG_DENIED");
@@ -151,7 +163,7 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 	let calls = 0;
 	let elapsed = 0;
 	let busy = false;
-	return async (targets: string[], signal?: AbortSignal): Promise<PytestResult> => {
+	return async (targets: string[], signal?: AbortSignal, observe?: (evidence: PytestEvidence) => void): Promise<PytestResult> => {
 		const result: PytestResult = {
 			status: "sandbox_error",
 			targets: [],
@@ -173,6 +185,7 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 		calls++;
 		busy = true;
 		const started = performance.now();
+		let files: ReadonlyMap<string, string> | undefined;
 		let root: string | undefined;
 		let id: string | undefined;
 		const docker = (args: string[]) =>
@@ -194,7 +207,7 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 			root = mkdtempSync(join(realpathSync(tmpdir()), "pi-pytest-"));
 			const copy = join(root, "workspace");
 			mkdirSync(copy, { mode: 0o755 });
-			snapshot(config, policy, copy);
+			files = pytestFileVersions(config, policy, copy);
 			result.status = "execution_error";
 			// Image IDs are immutable; no tag resolution or implicit pulls at execution time.
 			if (docker(["image", "inspect", policy.image, "--format", "{{.Id}}"]) !== policy.image)
@@ -340,6 +353,7 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 			elapsed += performance.now() - started;
 			busy = false;
 		}
+		if (files) observe?.({ status: result.status, targets: result.targets, files, canRunAgain: calls < 3 && elapsed < 90_000 });
 		while (Buffer.byteLength(JSON.stringify(result)) > 8192) {
 			result.output = result.output.slice(Math.max(1, Math.ceil(result.output.length / 8)));
 			result.truncated = true;

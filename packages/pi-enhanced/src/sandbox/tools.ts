@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { DockerSandboxBroker } from "./broker.ts";
 import type { SandboxConfig } from "./config.ts";
-import { createPytestExecutor, type PytestConfig } from "./pytest.ts";
+import { createPytestExecutor, type PytestConfig, type PytestEvidence } from "./pytest.ts";
 
 type ToolParameters = Record<string, unknown>;
 
@@ -166,6 +166,7 @@ export function registerPytestTool(
 	config: SandboxConfig,
 	policy: PytestConfig,
 	isActive: () => boolean,
+	observe?: (id: string, evidence: PytestEvidence) => void,
 ): void {
 	const execute = createPytestExecutor(config, policy);
 	pi.registerTool({
@@ -177,14 +178,14 @@ export function registerPytestTool(
 			{ targets: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }) },
 			{ additionalProperties: false },
 		),
-		async execute(_id, params, signal) {
+		async execute(id, params, signal) {
 			if (!isActive())
 				return {
 					content: [{ type: "text", text: "Test session is no longer active." }],
 					details: { status: "sandbox_error" },
 					isError: true,
 				};
-			const result = await execute(params.targets, signal);
+			const result = await execute(params.targets, signal, observe && ((evidence) => observe(id, evidence)));
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
 				details: result,

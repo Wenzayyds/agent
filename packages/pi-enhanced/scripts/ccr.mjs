@@ -12,6 +12,7 @@ async function main() {
 	const { values } = parseArgs({
 		options: {
 			profile: { type: "string", default: "search" },
+			strategy: { type: "string" },
 			model: { type: "string" },
 			check: { type: "boolean" },
 		},
@@ -20,7 +21,11 @@ async function main() {
 	const models = new Map([["flash", flash], ["pro", pro]]);
 	const profileModel = profiles.get(values.profile);
 	if (!profileModel) throw new Error("选择 --profile search 或 --profile complex。");
-	const model = values.model === undefined ? profileModel : models.get(values.model);
+	const strategy = values.strategy;
+	if (strategy !== undefined && !["manual", "auto", "strong"].includes(strategy))
+		throw new Error("选择 --strategy manual、auto 或 strong。");
+	if (strategy === "manual" && values.model === undefined) throw new Error("manual 策略要求显式 --model。");
+	const model = values.model !== undefined ? models.get(values.model) : strategy === "strong" ? pro : profileModel;
 	if (!model) throw new Error("选择 --model flash 或 --model pro。");
 
 	const agentDir = process.env.PI_CCR_AGENT_DIR;
@@ -69,14 +74,22 @@ async function main() {
 	) {
 		throw new Error("CCR 须只登记 Flash 和 Pro，请检查其 Provider 配置。");
 	}
-	console.log("CCR " + baseUrl + " · " + model + (values.model ? " · 显式选择" : " · " + values.profile));
+	const selection = values.model ? "显式选择" : strategy === "strong" ? "strong" : strategy === "auto" ? "auto/" + values.profile : values.profile;
+	console.log("CCR " + baseUrl + " · " + model + " · " + selection);
 	if (values.check) return;
+
+	const adaptive = strategy === "auto" && values.model === undefined && model === flash;
 
 	const cli = fileURLToPath(new URL("../../coding-agent/dist/bundle/cli.js", import.meta.url));
 	if (!existsSync(cli)) throw new Error("Pi CLI 尚未构建，请先构建 packages/coding-agent。");
+	const scoped = (adaptive ? [flash, pro] : [model]).map((id) => providerId + "/" + id).join(",");
+	const isolated = adaptive ? [
+		"--no-extensions", "--no-mcp", "--no-builtin-tools",
+		"-e", fileURLToPath(new URL("../extensions/ccr-auto.ts", import.meta.url)),
+	] : [];
 	const child = spawn(process.execPath, [
 		cli, "--offline", "--no-approve", "--provider", providerId, "--model", model,
-		"--models", providerId + "/" + model, "--thinking", "off",
+		"--models", scoped, "--thinking", "off", ...isolated,
 	], { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, stdio: "inherit" });
 	child.once("error", () => { console.error("无法启动 Pi CLI。"); process.exitCode = 1; });
 	child.once("exit", (code, signal) => { process.exitCode = code ?? (signal === "SIGINT" ? 130 : 1); });
@@ -93,6 +106,6 @@ function readConfig(agentDir, file) {
 }
 
 main().catch((error) => {
-	console.error("CCR 启动检查失败。" + (error.code?.startsWith("ERR_PARSE_ARGS") ? "可用参数为 --profile、--model 和 --check。" : error.message));
+	console.error("CCR 启动检查失败。" + (error.code?.startsWith("ERR_PARSE_ARGS") ? "可用参数为 --strategy、--profile、--model 和 --check。" : error.message));
 	process.exitCode = 1;
 });

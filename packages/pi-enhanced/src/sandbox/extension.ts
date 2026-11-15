@@ -1,8 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { resolve } from "node:path";
+import { registerAdaptiveRouter } from "../ccr/adaptive.ts";
 import { DockerSandboxBroker } from "./broker.ts";
 import { loadSandboxConfig, type SandboxConfig } from "./config.ts";
 import { SANDBOX_ALLOWED_TOOLS } from "./protocol.ts";
-import { isPytestConfig } from "./pytest.ts";
+import { isPytestConfig, pytestFileVersions } from "./pytest.ts";
 import { registerPytestTool, registerSandboxTools } from "./tools.ts";
 
 export function sandboxToolAllowed(
@@ -32,12 +34,22 @@ export function createSandboxExtension(
 	configSource: SandboxConfig | ((cwd: string) => SandboxConfig) = (cwd) => loadSandboxConfig(process.env, cwd),
 	onBroker?: (broker: DockerSandboxBroker) => void,
 	pytestPolicy: unknown = loadPytestPolicy(),
+	adaptive = false,
 ): (pi: ExtensionAPI) => void {
 	return (pi) => {
 		let broker: DockerSandboxBroker | undefined;
 		let config: SandboxConfig | undefined;
 		let pytestActive = false;
+		const policy = isPytestConfig(pytestPolicy) ? pytestPolicy : undefined;
+		const observe = adaptive && policy ? registerAdaptiveRouter(pi, () => {
+			if (!pytestActive || !broker || !config?.trusted) return undefined;
+			try { return pytestFileVersions(config, policy); } catch { return undefined; }
+		}, () => policy.tests, (file) => {
+			try { return config && broker?.toRelative(resolve(config.workspace, file)); } catch { return undefined; }
+		}) : undefined;
 		pi.on("tool_call", (event) => {
+			if (adaptive && (!broker || !pytestActive || !config?.trusted))
+				return { block: true, reason: "CCR auto requires a trusted Sandbox and pytest policy" };
 			if (
 				broker &&
 				!sandboxToolAllowed(event.toolName, config?.readonlyModuleTools, config?.taskPlanTool, pytestActive)
@@ -54,10 +66,11 @@ export function createSandboxExtension(
 			onBroker?.(broker);
 			registerSandboxTools(pi, broker, config.workspace);
 			broker.start();
-			if (isPytestConfig(pytestPolicy)) {
+			if (policy) {
 				const activeConfig = config;
-				registerPytestTool(pi, config, pytestPolicy, () => pytestActive && !!broker && config === activeConfig);
+				registerPytestTool(pi, config, policy, () => pytestActive && !!broker && config === activeConfig, observe);
 				pytestActive = true;
+				if (adaptive) pi.setActiveTools([...SANDBOX_ALLOWED_TOOLS, "run_tests"]);
 			} else if (pytestPolicy !== undefined) {
 				ctx.ui.notify("Invalid pytest configuration. run_tests is disabled.", "warning");
 			}

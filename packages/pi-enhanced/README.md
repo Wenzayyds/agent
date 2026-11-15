@@ -85,6 +85,10 @@ node packages/pi-enhanced/scripts/ccr.mjs --profile search --model pro
 
 CCR 的模型标识（例如 `DeepSeek/deepseek-v4-pro`）用于普通会话。SWE-bench 的预算网关按原有 Provider 和模型 ID 校验，保留独立入口。把 Stub 地址换成真实 API 后会产生费用，演示前须单独授权。
 
+CCR V2 通过 `--strategy` 显式启用。`--strategy manual --model flash` 固定 Flash，`--strategy strong` 直接选 Pro。`--strategy auto` 默认选 Flash，配合 `--profile complex` 可直接选 Pro。显式 `--model` 始终优先。省略 `--strategy` 时沿用 V1。
+
+Flash 自动模式需要既有的可信 Docker Sandbox 和 pytest 配置。请让每次源码修改和 pytest 分别在独立工具回合执行。两次修改不同源码版本后，同一测试目标仍失败且还有测试余量，Pi 才会显示用量并询问是否切换到 Pro。`run_tests` 仍只有三次机会，初始基线测试也消耗一次。会话费用没有硬上限，拒绝确认或缺少可交互界面时继续使用 Flash。
+
 ## 模块入口
 
 Package 暴露五个独立 Extension：
