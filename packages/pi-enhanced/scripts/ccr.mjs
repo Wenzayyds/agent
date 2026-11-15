@@ -85,7 +85,7 @@ async function main() {
 	const scoped = (adaptive ? [flash, pro] : [model]).map((id) => providerId + "/" + id).join(",");
 	const isolated = adaptive ? [
 		"--no-extensions", "--no-mcp", "--no-builtin-tools",
-		"-e", fileURLToPath(new URL("../extensions/ccr-auto.ts", import.meta.url)),
+		"-e", fileURLToPath(new URL("../src/ccr/ccr-auto.ts", import.meta.url)),
 	] : [];
 	const child = spawn(process.execPath, [
 		cli, "--offline", "--no-approve", "--provider", providerId, "--model", model,
