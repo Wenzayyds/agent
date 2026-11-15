@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { sandboxUser } from "../../src/sandbox/broker.ts";
-import { assertSandboxWorkspaceIdentity, type SandboxConfig } from "../../src/sandbox/config.ts";
+import { assertSandboxContainerOwner, assertSandboxWorkspaceIdentity, SANDBOX_CONTAINER_OWNER_LABEL, type SandboxConfig } from "../../src/sandbox/config.ts";
 import { LONG_REPORT_TASK, longReport } from "./controlled-cases.ts";
 
 export interface VerificationResult {
@@ -58,6 +58,21 @@ export async function verifyPatchInDocker(
 	config: SandboxConfig,
 	limits: { timeoutMs?: number; maxOutputBytes?: number } = {},
 ): Promise<VerificationResult> {
+	return await runDockerCheck(taskId, config, limits);
+}
+
+export async function runSingleFileTestInDocker(config: SandboxConfig, signal?: AbortSignal) {
+	const output = { stdout: "", stderr: "" };
+	const result = await runDockerCheck("single-file-off-by-one", config, { maxOutputBytes: 2_048 }, { output, signal });
+	return { ...output, result };
+}
+
+async function runDockerCheck(
+	taskId: string,
+	config: SandboxConfig,
+	limits: { timeoutMs?: number; maxOutputBytes?: number },
+	feedback?: { output: { stdout: string; stderr: string }; signal?: AbortSignal },
+): Promise<VerificationResult> {
 	const started = performance.now();
 	const result: VerificationResult = {
 		mode: "docker-readonly",
@@ -93,13 +108,32 @@ export async function verifyPatchInDocker(
 			maxOutputBytes > 16_384
 		)
 			throw new Error("VERIFIER_LIMIT_INVALID");
-		const source = `const emit=process.stdout.write.bind(process.stdout);const encode=JSON.stringify;const actual=await(async()=>{${task.program}})();emit(encode({protocolVersion:1,actual}));`;
+		if (feedback?.signal?.aborted) throw new Error("VERIFIER_CANCELLED");
+		if (feedback) {
+			if (!config.containerOwner) throw new Error("VERIFIER_NOT_AUTHORIZED");
+			assertSandboxContainerOwner(config.containerOwner);
+		}
+		const source = feedback
+			? `import { strictEqual } from "node:assert/strict";
+const passed = console.log.bind(console);
+const failed = console.error.bind(console);
+try {
+	const { sumTo } = await import("./math.js");
+	strictEqual(sumTo(3), 6);
+	passed("PASS");
+} catch (error) {
+	const diagnostic = error instanceof Error ? error.name + ": " + error.message.trim() : String(error);
+	failed("sumTo(3): " + diagnostic);
+	process.exitCode = 1;
+}`
+			: `const emit=process.stdout.write.bind(process.stdout);const encode=JSON.stringify;const actual=await(async()=>{${task.program}})();emit(encode({protocolVersion:1,actual}));`;
 		id = execFileSync(
 			"docker",
 			[
 				"create",
 				"--name",
 				`pi-enhanced-verify-${randomUUID()}`,
+				...(feedback ? ["--label", SANDBOX_CONTAINER_OWNER_LABEL + "=" + config.containerOwner, "--log-driver", "none"] : []),
 				"--pull",
 				"never",
 				"--network",
@@ -176,12 +210,16 @@ export async function verifyPatchInDocker(
 				windowsHide: true,
 			});
 			const chunks: Buffer[] = [];
+			const errors: Buffer[] = [];
 			let settled = false;
 			const finish = (code: number | null, failure?: string): void => {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timer);
-				done({ code, stdout: Buffer.concat(chunks).toString("utf8"), failure });
+				feedback?.signal?.removeEventListener("abort", cancel);
+				const stdout = Buffer.concat(chunks).toString("utf8");
+				if (feedback) Object.assign(feedback.output, { stdout, stderr: Buffer.concat(errors).toString("utf8") });
+				done({ code, stdout, failure });
 			};
 			const abort = (failure: string): void => {
 				try {
@@ -190,6 +228,7 @@ export async function verifyPatchInDocker(
 				child.kill();
 				finish(null, failure);
 			};
+			const cancel = () => abort("VERIFIER_CANCELLED");
 			const timer = setTimeout(() => abort("VERIFIER_TIMEOUT"), timeoutMs);
 			const collect = (chunk: Buffer, stdout: boolean): void => {
 				if (settled) return;
@@ -199,11 +238,14 @@ export async function verifyPatchInDocker(
 					return;
 				}
 				if (stdout) chunks.push(chunk);
+				else if (feedback) errors.push(chunk);
 			};
 			child.stdout.on("data", (chunk: Buffer) => collect(chunk, true));
 			child.stderr.on("data", (chunk: Buffer) => collect(chunk, false));
 			child.once("error", () => finish(null, "VERIFIER_DOCKER_UNAVAILABLE"));
 			child.once("close", (code) => finish(code));
+			feedback?.signal?.addEventListener("abort", cancel, { once: true });
+			if (feedback?.signal?.aborted) cancel();
 		});
 		result.exitCode = execution.code;
 		assertSandboxWorkspaceIdentity(config);
@@ -228,6 +270,11 @@ export async function verifyPatchInDocker(
 				return result;
 			}
 			try {
+				if (feedback) {
+					result.status = "passed";
+					result.passed = true;
+					return result;
+				}
 				const value = JSON.parse(execution.stdout) as { protocolVersion?: unknown; actual?: unknown };
 				if (
 					!value ||

@@ -148,6 +148,75 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		}
 	}, 120_000);
 
+	it("delivers Docker test failure and passing retest to the next provider requests", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-single-file-feedback-"));
+		roots.push(root);
+		let turns = 0;
+		const provider = await startProvider((body, response) => {
+			turns++;
+			expect((body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name).sort())
+				.toEqual(["edit", "find", "grep", "ls", "read", "run_tests", "write"]);
+			const messages = body.messages as Array<{ role: string; content?: string; tool_call_id?: string; tool_calls?: { id: string }[] }>;
+			expect(Buffer.byteLength(JSON.stringify(body.tools))).toBeLessThan(4_000);
+			const historyCalls = messages.flatMap((message) => message.tool_calls ?? []);
+			const historyResults = messages.filter((message) => message.role === "tool");
+			expect(historyCalls).toHaveLength(turns - 1);
+			expect(historyResults.map((message) => message.tool_call_id)).toEqual(historyCalls.map((call) => call.id));
+			const last = messages.at(-1);
+			function feedback(exitCode: number, output: string) {
+				expect(last?.role).toBe("tool");
+				expect(last?.tool_call_id).toBe(messages.at(-2)?.tool_calls?.[0]?.id);
+				expect(last?.content).not.toContain("node:internal");
+				expect(JSON.parse(last?.content ?? "")).toMatchObject({
+					exitCode,
+					status: exitCode === 0 ? "passed" : "verification_failed",
+					[exitCode === 0 ? "stdout" : "stderr"]: expect.stringContaining(output),
+				});
+			}
+			const edit = (oldText: string, newText: string) =>
+				toolCallSse("edit", { path: "math.js", edits: [{ oldText, newText }] }, 200 + turns, 20);
+			let sse: string;
+			switch (turns) {
+				case 1:
+					sse = toolCallSse("run_tests", {}, 201, 20);
+					break;
+				case 2:
+					feedback(1, "AssertionError");
+					sse = edit("n * (n - 1) / 2", "n * n");
+					break;
+				case 3:
+					sse = toolCallSse("run_tests", {}, 203, 20);
+					break;
+				case 4:
+					feedback(1, "9 !== 6");
+					sse = edit("n * n", "n * (n + 1) / 2");
+					break;
+				case 5:
+					sse = toolCallSse("run_tests", {}, 205, 20);
+					break;
+				case 6:
+					feedback(0, "PASS");
+					expect(JSON.parse(last?.content ?? "")).toEqual({ status: "passed", exitCode: 0, stdout: "PASS" });
+					sse = textSse("Verified", 206, 20);
+					break;
+				default:
+					throw new Error("Unexpected extra request");
+			}
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(sse);
+		});
+		const runId = "single_file_feedback_stub";
+		const result = await runRunner(provider.url, root, image, runId, false, true);
+		expect(result.status, result.stderr).toBe(0);
+		expect(turns).toBe(6);
+		const report = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8"));
+		expect(report.results[0]).toMatchObject({
+			status: "passed",
+			verifierPassed: true,
+			gateway: { requestsStarted: 6, requestsCompleted: 6, requestsRejected: 0 },
+			verification: { status: "passed", cleanup: "removed", evidence: { network: "none", readOnlyRoot: true } },
+		});
+	}, 120_000);
+
 	it("fails the Docker preflight before the local provider receives a request", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-runner-preflight-"));
 		roots.push(root);
@@ -302,6 +371,7 @@ function runRunner(
 	sandboxImage = image,
 	runId = "batch_i_stub_runner",
 	readonlyModules = false,
+	singleFileTestFeedback = false,
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
 	const args = [
 		"--experimental-strip-types",
@@ -318,11 +388,11 @@ function runRunner(
 		"--api-key-env",
 		"MOCK_PROVIDER_KEY",
 		"--max-total-cost-usd",
-		"0.10",
+		singleFileTestFeedback ? "0.03" : "0.10",
 		"--max-tasks",
 		"1",
 		"--max-tokens-per-task",
-		"200000",
+		singleFileTestFeedback ? "20000" : "200000",
 		"--max-calls-per-task",
 		"8",
 		"--timeout-ms",
@@ -335,6 +405,7 @@ function runRunner(
 		output,
 		"--sandbox-image",
 		sandboxImage,
+		...(singleFileTestFeedback ? ["--task-id", "single-file-off-by-one", "--single-file-test-feedback"] : []),
 		...(readonlyModules
 			? [
 					"--readonly-module-tools",

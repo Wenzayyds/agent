@@ -74,7 +74,7 @@ function boundedRead(fd: number): Buffer {
 	return buffer.subarray(0, length);
 }
 
-export function pytestFileVersions(config: SandboxConfig, policy: PytestConfig, destination?: string): Map<string, string> {
+export function pytestFileVersions(config: SandboxConfig, policy: Pick<PytestConfig, "files">, destination?: string): Map<string, string> {
 	assertSandboxWorkspaceIdentity(config);
 	const versions = new Map<string, string>();
 	let total = 0;

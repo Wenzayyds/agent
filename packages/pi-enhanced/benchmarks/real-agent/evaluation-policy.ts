@@ -71,7 +71,7 @@ export function buildEvaluationPlan(input: Record<string, string | undefined>, e
 	};
 }
 
-export function preflightView(input: Record<string, string | undefined>, taskCount: number): Record<string, unknown> {
+export function preflightView(input: Record<string, string | undefined>, taskCount: number, singleFileTestFeedback = false): Record<string, unknown> {
 	return {
 		mode: "preflight",
 		authorized: false,
@@ -85,7 +85,7 @@ export function preflightView(input: Record<string, string | undefined>, taskCou
 		timeoutMs: Number(input.timeoutMs) || null,
 		concurrency: Number(input.concurrency) || 1,
 		outputDir: input.outputDir ?? null,
-		tools: ["read", "grep", "find", "ls", "write", "edit"],
+		tools: ["read", "grep", "find", "ls", "write", "edit", ...(singleFileTestFeedback ? ["run_tests"] : [])],
 		shell: false,
 		sandbox: {
 			mode: "docker-file-tools",

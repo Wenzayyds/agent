@@ -174,6 +174,21 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 					toolFailures,
 				}
 			: {}),
+		...(context.singleFileTestFeedback
+			? {
+					toolTrace: events
+						.filter((event) => event.type === "tool_execution_start" || event.type === "tool_execution_end")
+						.map(({ type, toolName, toolCallId, isError, result }) => ({
+							phase: type === "tool_execution_start" ? "start" : "end",
+							toolName,
+							toolCallId,
+							isError,
+							...(type === "tool_execution_end" && toolName === "run_tests"
+								? { result: JSON.parse(redactEvaluationText(JSON.stringify(result ?? null), [process.env[apiKeyEnv!]!])) }
+								: {}),
+						})),
+				}
+			: {}),
 		memorySeed,
 		moduleTools,
 		moduleToolCalls,
@@ -352,6 +367,7 @@ export function saveRunReport(
 		runOutput?: string;
 		batchL: boolean;
 		swebench?: boolean;
+		singleFileTestFeedback?: boolean;
 	},
 	results: Record<string, unknown>[],
 	observedCost: number,
@@ -379,7 +395,7 @@ export function saveRunReport(
 			? {
 					mode: "docker-file-tools",
 					image: plan.sandboxImage,
-					tools: ["read", "grep", "find", "ls", "write", "edit"],
+					tools: ["read", "grep", "find", "ls", "write", "edit", ...(options.singleFileTestFeedback ? ["run_tests"] : [])],
 					network: "none",
 					failClosed: true,
 				}
@@ -409,7 +425,7 @@ export function saveRunReport(
 		Object.assign(report.summary, {
 			evaluationPassed: ran.filter((item) => item.evaluationAccepted === true).length,
 		});
-	if (!localStubUrl && !batchL && !options.swebench)
+	if (!localStubUrl && !batchL && !options.swebench && !options.singleFileTestFeedback)
 		writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 	return report.summary;

@@ -119,6 +119,11 @@ async function main(): Promise<void> {
 	const readonlyModuleTools =
 		batchL || (cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools"));
 	const taskId = cell?.taskId ?? argument("--task-id");
+	const singleFileTestFeedback = process.argv.includes("--single-file-test-feedback");
+	if (singleFileTestFeedback && (
+		taskId !== "single-file-off-by-one" || cell || sweId || comparisonProfile ||
+		(argument("--variant") ?? "baseline") !== "baseline"
+	)) throw new Error("EVAL_SINGLE_FILE_TEST_SCOPE_INVALID");
 	const swebench = sweId && sweMirror ? loadSweTask(sweId, sweMirror) : undefined;
 	const selectedTasks: ExperimentTask[] = swebench
 		? [
@@ -182,7 +187,7 @@ async function main(): Promise<void> {
 			encoding: "utf8",
 		}).trim();
 		process.stdout.write(
-			`${JSON.stringify({ repositoryCommit, ...preflightView(input, manifest.tasks.length) }, null, 2)}\n`,
+			`${JSON.stringify({ repositoryCommit, ...preflightView(input, manifest.tasks.length, singleFileTestFeedback) }, null, 2)}\n`,
 		);
 		process.exit(0);
 	}
@@ -307,6 +312,7 @@ async function main(): Promise<void> {
 					: variants[variant]!,
 				condition,
 				readonlyModuleTools,
+				singleFileTestFeedback,
 				telemetryEnabled,
 				localStubUrl,
 				authorization,
@@ -353,6 +359,7 @@ async function main(): Promise<void> {
 				runOutput,
 				batchL,
 				swebench: Boolean(swebench),
+				singleFileTestFeedback,
 			},
 			results,
 			observedCost,

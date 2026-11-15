@@ -15,20 +15,28 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { DockerSandboxBroker } from "./broker.ts";
 import type { SandboxConfig } from "./config.ts";
+import type { SandboxToolName } from "./protocol.ts";
 import { createPytestExecutor, type PytestConfig, type PytestEvidence } from "./pytest.ts";
 
 type ToolParameters = Record<string, unknown>;
 
-export function registerSandboxTools(pi: ExtensionAPI, broker: DockerSandboxBroker, workspace: string): void {
+export function registerSandboxTools(
+	pi: ExtensionAPI,
+	broker: DockerSandboxBroker,
+	workspace: string,
+	descriptions: Partial<Record<SandboxToolName, string>> = {},
+): void {
 	const read = createReadToolDefinition(workspace);
 	pi.registerTool({
 		...read,
+		description: descriptions.read ?? read.description,
 		execute: async (id, input, signal) => executeRead(broker, workspace, id, input, signal),
 	});
 
 	const write = createWriteToolDefinition(workspace);
 	pi.registerTool({
 		...write,
+		description: descriptions.write ?? write.description,
 		execute: async (id, input, signal, onUpdate, ctx) =>
 			createWriteToolDefinition(workspace, {
 				operations: {
@@ -55,6 +63,7 @@ export function registerSandboxTools(pi: ExtensionAPI, broker: DockerSandboxBrok
 	const edit = createEditToolDefinition(workspace);
 	pi.registerTool({
 		...edit,
+		description: descriptions.edit ?? edit.description,
 		execute: async (id, input, signal, onUpdate, ctx) =>
 			createEditToolDefinition(workspace, {
 				operations: {
@@ -90,6 +99,7 @@ export function registerSandboxTools(pi: ExtensionAPI, broker: DockerSandboxBrok
 	const find = createFindToolDefinition(workspace);
 	pi.registerTool({
 		...find,
+		description: descriptions.find ?? find.description,
 		execute: async (id, input, signal, onUpdate, ctx) =>
 			createFindToolDefinition(workspace, {
 				operations: {
@@ -118,6 +128,7 @@ export function registerSandboxTools(pi: ExtensionAPI, broker: DockerSandboxBrok
 	const ls = createLsToolDefinition(workspace);
 	pi.registerTool({
 		...ls,
+		description: descriptions.ls ?? ls.description,
 		execute: async (id, input, signal, onUpdate, ctx) => {
 			let operation = 0;
 			return createLsToolDefinition(workspace, {
@@ -157,6 +168,7 @@ export function registerSandboxTools(pi: ExtensionAPI, broker: DockerSandboxBrok
 	const grep = createGrepToolDefinition(workspace);
 	pi.registerTool({
 		...grep,
+		description: descriptions.grep ?? grep.description,
 		execute: async (id, input: ToolParameters, signal) => executeGrep(broker, workspace, id, input, signal),
 	} as ToolDefinition);
 }

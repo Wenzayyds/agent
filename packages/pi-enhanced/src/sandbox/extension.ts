@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { registerAdaptiveRouter } from "../ccr/adaptive.ts";
 import { DockerSandboxBroker } from "./broker.ts";
 import { loadSandboxConfig, type SandboxConfig } from "./config.ts";
-import { SANDBOX_ALLOWED_TOOLS } from "./protocol.ts";
+import { SANDBOX_ALLOWED_TOOLS, type SandboxToolName } from "./protocol.ts";
 import { isPytestConfig, pytestFileVersions } from "./pytest.ts";
 import { registerPytestTool, registerSandboxTools } from "./tools.ts";
 
@@ -35,41 +35,48 @@ export function createSandboxExtension(
 	onBroker?: (broker: DockerSandboxBroker) => void,
 	pytestPolicy: unknown = loadPytestPolicy(),
 	adaptive = false,
+	registerTests?: (pi: ExtensionAPI, config: SandboxConfig, isActive: () => boolean) => void,
+	fileToolDescriptions?: Partial<Record<SandboxToolName, string>>,
 ): (pi: ExtensionAPI) => void {
 	return (pi) => {
 		let broker: DockerSandboxBroker | undefined;
 		let config: SandboxConfig | undefined;
-		let pytestActive = false;
+		let runTestsActive = false;
 		const policy = isPytestConfig(pytestPolicy) ? pytestPolicy : undefined;
 		const observe = adaptive && policy ? registerAdaptiveRouter(pi, () => {
-			if (!pytestActive || !broker || !config?.trusted) return undefined;
+			if (!runTestsActive || !broker || !config?.trusted) return undefined;
 			try { return pytestFileVersions(config, policy); } catch { return undefined; }
 		}, () => policy.tests, (file) => {
 			try { return config && broker?.toRelative(resolve(config.workspace, file)); } catch { return undefined; }
 		}) : undefined;
 		pi.on("tool_call", (event) => {
-			if (adaptive && (!broker || !pytestActive || !config?.trusted))
+			if (adaptive && (!broker || !runTestsActive || !config?.trusted))
 				return { block: true, reason: "CCR auto requires a trusted Sandbox and pytest policy" };
 			if (
 				broker &&
-				!sandboxToolAllowed(event.toolName, config?.readonlyModuleTools, config?.taskPlanTool, pytestActive)
+				!sandboxToolAllowed(event.toolName, config?.readonlyModuleTools, config?.taskPlanTool, runTestsActive)
 			) {
 				return { block: true, reason: "Sandbox pilot only permits isolated file tools" };
 			}
 		});
 		pi.on("session_start", (_event, ctx) => {
-			pytestActive = false;
+			runTestsActive = false;
 			config = typeof configSource === "function" ? configSource(ctx.cwd) : configSource;
 			if (!config.enabled) return;
 			broker?.stop();
 			broker = new DockerSandboxBroker(config);
 			onBroker?.(broker);
-			registerSandboxTools(pi, broker, config.workspace);
+			registerSandboxTools(pi, broker, config.workspace, fileToolDescriptions);
 			broker.start();
-			if (policy) {
-				const activeConfig = config;
-				registerPytestTool(pi, config, policy, () => pytestActive && !!broker && config === activeConfig, observe);
-				pytestActive = true;
+			const activeConfig = config;
+			const isActive = () => runTestsActive && !!broker && config === activeConfig;
+			if (registerTests) {
+				registerTests(pi, config, isActive);
+				runTestsActive = true;
+				pi.setActiveTools([...SANDBOX_ALLOWED_TOOLS, "run_tests"]);
+			} else if (policy) {
+				registerPytestTool(pi, config, policy, isActive, observe);
+				runTestsActive = true;
 				if (adaptive) pi.setActiveTools([...SANDBOX_ALLOWED_TOOLS, "run_tests"]);
 			} else if (pytestPolicy !== undefined) {
 				ctx.ui.notify("Invalid pytest configuration. run_tests is disabled.", "warning");
