@@ -18,6 +18,73 @@ Pi Enhanced 为 Pi 提供五个可独立启停的扩展：MCP Policy、Memory、
 | `scripts/ci/` | CI 元数据、测试身份清单、Docker 证据与打包检查 |
 | `docs/` | 设计和验收资料；旧记录只用于追溯 |
 
+## 普通开发会话接入 CCR
+
+CCR 3.1.3 独立运行，Pi 使用原生的 OpenAI Chat Completions Provider。代码搜索、解释等任务选 `search`（Flash），复杂修改选 `complex`（Pro）。启动参数 `--model flash` 或 `--model pro` 优先于 Profile。选型在打开会话前完成，工具返回的内容不会参与选型。
+
+1. 用 Node.js 22.19+ 安装官方 CLI（`npm install -g @musistudio/claude-code-router@3.1.3`）。在专用用户目录保存下面的 CCR `config.json`。CCR 3.1.3 会把配置迁移至本地 SQLite。Windows 下在 CCR 终端把 `CCR_INTERNAL_APP_DATA_DIR`、`CCR_INTERNAL_HOME_DIR` 指向同一专用父目录，配置放在其 `claude-code-router` 子目录。Linux 下用 `CCR_INTERNAL_HOME_DIR` 指向专用父目录，配置放在其 `.claude-code-router` 子目录。这些路径变量对应固定的 3.1.3 版本。
+2. 把 `APIKEY` 换成独立的 CCR 客户端令牌，其值与 `PI_CCR_TOKEN` 一致。示例上游是本机 Stub。日后接真实 API 时，Provider Key 只录入 CCR 的专用用户配置，限制该目录访问权限。
+
+```json
+{
+  "HOST": "127.0.0.1",
+  "PORT": 3456,
+  "APIKEY": "local-client-placeholder",
+  "gateway": { "host": "127.0.0.1", "port": 3456 },
+  "Providers": [{
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "type": "openai_chat_completions",
+    "api_base_url": "http://127.0.0.1:3460/v1",
+    "api_key": "stub-key",
+    "models": ["deepseek-flash", "deepseek-v4-pro"]
+  }],
+  "Router": {
+    "builtInRules": { "claude-code": { "enabled": false }, "codex": { "enabled": false } },
+    "rules": [],
+    "fallback": { "mode": "off", "models": [], "retryCount": 0 }
+  },
+  "profile": { "enabled": false },
+  "observability": { "requestLogs": false, "requestLogBodyCapture": "none" }
+}
+```
+
+3. 在 CCR 终端设置独立的管理令牌 `CCR_WEB_AUTH_TOKEN`，并把 `CCR_RAW_TRACE_ENABLED=0` 写入该进程的环境，再执行 `ccr serve --host 127.0.0.1 --port 3458 --no-open *> $null`（PowerShell），或 `ccr serve --host 127.0.0.1 --port 3458 --no-open >/dev/null 2>&1`（Linux）。CCR 会在启动 URL 中附带管理令牌，因此直接丢弃输出。模型和管理端口均留在本机，勿做端口映射。完全离线时，可将 CCR 终端的 `CCR_MODEL_CATALOG_PATH` 指向官方安装包的 `dist/models.json`，关闭目录更新请求。
+4. 在 Pi 终端设置 `PI_CCR_AGENT_DIR` 为工作区外的可信 Pi 用户目录绝对路径，从可信配置加载 `PI_CCR_TOKEN`。在该目录创建下面的 `models.json`，以及内容为 `{"retry":{"enabled":false,"provider":{"maxRetries":0}}}` 的 `settings.json`。文件使用 UTF-8。Pi 的用户级扩展与 `pi-enhanced.json` 可配置在这个独立目录。
+
+```json
+{
+  "providers": {
+    "local-ccr": {
+      "baseUrl": "http://127.0.0.1:3456/v1",
+      "api": "openai-completions",
+      "apiKey": "$PI_CCR_TOKEN",
+      "compat": {
+        "supportsStore": false,
+        "supportsDeveloperRole": false,
+        "maxTokensField": "max_tokens",
+        "thinkingFormat": "deepseek"
+      },
+      "models": [
+        { "id": "DeepSeek/deepseek-flash", "name": "DeepSeek Flash", "reasoning": true, "contextWindow": 64000, "maxTokens": 4096 },
+        { "id": "DeepSeek/deepseek-v4-pro", "name": "DeepSeek Pro", "reasoning": true, "contextWindow": 64000, "maxTokens": 4096 }
+      ]
+    }
+  }
+}
+```
+
+5. 构建 Pi CLI 后，从仓库根目录运行以下命令。启动时显示通过检查的 CCR 地址和选定模型。用 Pi 的 `/session` 查看会话用量。本配置关闭 CCR 的原始追踪，用量以 Pi 收到的 SSE 数据为准。独立目录不采用工作区设置，防止项目覆盖模型和重试设置。Docker Sandbox 和 `run_tests` 仍通过既有宿主配置开启。
+
+```powershell
+node packages/pi-enhanced/scripts/ccr.mjs --check
+node packages/pi-enhanced/scripts/ccr.mjs --profile search
+node packages/pi-enhanced/scripts/ccr.mjs --profile complex
+node packages/pi-enhanced/scripts/ccr.mjs --profile search --model pro
+```
+
+CCR 的模型标识（例如 `DeepSeek/deepseek-v4-pro`）用于普通会话。SWE-bench 的预算网关按原有 Provider 和模型 ID 校验，保留独立入口。把 Stub 地址换成真实 API 后会产生费用，演示前须单独授权。
+
 ## 模块入口
 
 Package 暴露五个独立 Extension：
