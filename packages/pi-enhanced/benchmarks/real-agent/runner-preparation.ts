@@ -20,7 +20,9 @@ import { digest } from "./evaluation-identity.ts";
 import type { EvaluationPlan } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_INSTRUCTIONS, NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import type { OfflineDenialPolicy } from "./offline-denial-policy.ts";
-import { prepareSweWorkspace, type SweTask, swePrompt } from "./swebench.ts";
+import { SWE_TASK_CONFIGURATION } from "./swe-profile.ts";
+import { swePrompt } from "./swe-instance.ts";
+import { prepareSweWorkspace, type SweTask } from "./swe-workspace.ts";
 import type { TaskPairAuthorization, TaskPairInput } from "./task-pair-authorization.ts";
 export interface ExperimentTask {
 	id: string;
@@ -153,11 +155,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		}
 	}
 	const moduleTools = task.swebench
-		? context.taskMode === "v2"
-			? ["enhanced_task_get", "enhanced_task_plan_update"]
-			: context.taskMode === "v1"
-				? ["enhanced_task_get"]
-				: []
+		? [...SWE_TASK_CONFIGURATION.moduleTools[context.taskMode ?? "off"]]
 		: batchL
 			? BATCH_L_MODULE_TOOLS
 			: readonlyModuleTools

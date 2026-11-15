@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { CONTROLLED_IMAGE } from "./controlled-cases.ts";
 import { digest } from "./evaluation-identity.ts";
-import { SWE_SOURCE_INSTRUCTIONS, swePrompt } from "./swebench.ts";
+import { readSweManifest, SWE_SOURCE_INSTRUCTIONS, swePrompt } from "./swe-instance.ts";
 
 export const SWE_TASK_PROFILE = "swe-task-v1";
 export const SWE_TASK_CELLS = ["off", "v1", "v2"].map((id) => ({
@@ -39,11 +38,7 @@ export const SWE_TASK_CONFIGURATION = Object.freeze({
 	problemSha256: "a295c83e68ff62290947b0796b75659b94621b7f2340d6f0055512d04be3f1d1",
 	userPromptSha256: digest(
 		swePrompt(
-			(
-				JSON.parse(readFileSync(new URL("./swebench-verified.json", import.meta.url), "utf8")) as {
-					instances: Array<{ instance_id: string; problem_statement?: string }>;
-				}
-			).instances.find((row) => row.instance_id === "astropy__astropy-13033")!.problem_statement!,
+			readSweManifest().instances.find((row) => row.instance_id === "astropy__astropy-13033")!.problem_statement!,
 		),
 	),
 	sourcePolicySha256: digest(SWE_SOURCE_INSTRUCTIONS),
@@ -84,3 +79,32 @@ export const SWE_PRO_TASK_CONFIGURATION = Object.freeze({
 	limits: SWE_PRO_TASK_LIMITS,
 	moduleTools: { v1: ["enhanced_task_get"], v2: ["enhanced_task_get", "enhanced_task_plan_update"] },
 });
+
+// CLI and authorization share the same mode list, configuration and admission shape.
+const profiles = [
+	{
+		configuration: SWE_TASK_CONFIGURATION,
+		cells: SWE_TASK_CELLS,
+		batchIdPattern: /^swe_task_[a-z0-9_]{4,20}$/u,
+		admission: "all",
+	},
+	{
+		configuration: SWE_PRO_OFF_CONFIGURATION,
+		cells: SWE_PRO_OFF_CELLS,
+		batchIdPattern: /^swe_pro_off_[a-z0-9_]{4,20}$/u,
+		admission: "off",
+	},
+	{
+		configuration: SWE_PRO_TASK_CONFIGURATION,
+		cells: SWE_PRO_TASK_CELLS,
+		batchIdPattern: /^swe_pro_task_[a-z0-9_]{4,20}$/u,
+		admission: "task",
+	},
+] as const;
+
+export type SweProfile = (typeof profiles)[number];
+export type SweProfileName = SweProfile["configuration"]["profile"];
+
+export function resolveSweProfile(name: string | undefined): SweProfile | undefined {
+	return profiles.find(({ configuration }) => configuration.profile === name);
+}

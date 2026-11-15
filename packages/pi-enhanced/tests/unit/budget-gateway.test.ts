@@ -1,10 +1,14 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type BudgetGatewayLimits,
 	type RunningBudgetGateway,
 	startBudgetGateway,
 } from "../../benchmarks/real-agent/budget-gateway.ts";
+import { finalizeAgentExecution } from "../../benchmarks/real-agent/runner-cleanup.ts";
 
 const running: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
@@ -22,6 +26,40 @@ const baseLimits: BudgetGatewayLimits = {
 };
 
 describe("Batch H hard budget gateway", () => {
+	it("still closes the gateway and removes containers when final evidence cannot be written", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-gateway-cleanup-"));
+		try {
+			mkdirSync(join(dir, "gateway-final.json"));
+			const gateway = await gatewayFor("http://127.0.0.1:1", baseLimits);
+			let removed = false;
+			const executionError = new Error("setup failed");
+			const closeError = new Error("close reported an error");
+			await expect(
+				finalizeAgentExecution(
+					{
+						status: gateway.status,
+						async close() {
+							await gateway.close();
+							throw closeError;
+						},
+					},
+					dir,
+					() => {
+						removed = true;
+						return true;
+					},
+					{ error: executionError },
+				),
+			).rejects.toMatchObject({
+				errors: [executionError, expect.objectContaining({ path: join(dir, "gateway-final.json") }), closeError],
+			});
+			expect(gateway.status().state).toBe("closed");
+			expect(removed).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("charges Pro at peak rates and keeps the 200K token and $0.40 reservations hard", async () => {
 		let forwarded = 0;
 		const upstream = await mockUpstream(async (_request, response, body) => {

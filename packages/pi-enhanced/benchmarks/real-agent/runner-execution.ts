@@ -4,19 +4,18 @@ import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
-import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { assertSandboxWorkspaceIdentity, loadSandboxConfig } from "../../src/sandbox/config.ts";
 import { TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { type BudgetGatewayStatus, startBudgetGateway } from "./budget-gateway.ts";
 import { verifyPatchInDocker } from "./docker-verifier.ts";
-import { digest } from "./evaluation-identity.ts";
 import { EvaluationTelemetry } from "./evaluation-telemetry.ts";
-import { gatewayEvidence, gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
+import { gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
+import { createInputAdmission } from "./input-admission.ts";
+import { INPUT_AUDIT_FILE } from "./input-audit.ts";
+import { finalizeAgentExecution, removeRunContainers } from "./runner-cleanup.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
-import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_PROFILE, SWE_TASK_PROFILE } from "./swe-profile.ts";
-import { readTaskPairInput } from "./task-pair-authorization.ts";
+import { resolveSweProfile } from "./swe-profile.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export function stubPidHandshakeEnabled(flag: string | undefined, localStubUrl: string | undefined, swe: boolean, stubEval: string | undefined): boolean {
@@ -83,12 +82,15 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	const controlled = Boolean(cell || task.swebench);
 	const { provider, model, apiKeyEnv } = plan;
 	const taskPair = context.comparisonProfile === TASK_PAIR_PROFILE;
+	const swe = resolveSweProfile(context.comparisonProfile);
+	const maxOutputTokens = swe?.configuration.maxOutputTokens ?? TASK_PAIR_CONFIGURATION.maxOutputTokens;
 	if (
-		(taskPair || context.comparisonProfile === SWE_TASK_PROFILE || context.comparisonProfile === SWE_PRO_OFF_PROFILE || context.comparisonProfile === SWE_PRO_TASK_PROFILE) &&
+		(taskPair || swe) &&
 		!localStubUrl &&
 		(!context.taskPairAuthorization || !context.taskPairExpected)
 	)
 		throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
+	const containerOwner = randomUUID();
 	const gatewayToken = randomUUID().replaceAll("-", "");
 	const adminToken = randomUUID().replaceAll("-", "");
 	const sandboxAuditPath = join(root, `${task.id}-sandbox-audit.json`);
@@ -106,6 +108,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			PI_ENHANCED_MAX_TOTAL_COST_USD: String(plan!.maxTotalCostUsd),
 			PI_ENHANCED_SANDBOX_ENABLED: "1",
 			PI_ENHANCED_SANDBOX_TRUSTED: "1",
+			PI_ENHANCED_SANDBOX_CONTAINER_OWNER: containerOwner,
 			PI_ENHANCED_SANDBOX_RUN_ID: `${plan!.runId.slice(0, 50)}-${task.id}`,
 			PI_ENHANCED_SANDBOX_WORKSPACE: cwd,
 			PI_ENHANCED_SANDBOX_IMAGE: plan!.sandboxImage,
@@ -113,7 +116,6 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools || (task.swebench && switches.task) ? "1" : "0",
 			...(task.swebench && context.taskMode === "v2" ? { PI_ENHANCED_SANDBOX_TASK_PLAN_TOOL: "1" } : {}),
 			PI_ENHANCED_CONTEXT_REPORT_PATH: contextReportPath,
-			...(task.swebench ? { PI_ENHANCED_SWE_INPUT_AUDIT_ONLY: "1" } : {}),
 			...(batchL
 				? {
 						PI_ENHANCED_BATCH_L_MEMORY: switches.memory ? "1" : "0",
@@ -160,74 +162,29 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			throw new Error("SWE_STUB_PID_HANDSHAKE_PATH_INVALID");
 		handshakePath = join(evidenceDir, "agent-spawn-pid.json");
 	}
-	let forwarded = 0;
-	let admissionDenied = false;
-	const gatedFetch: typeof fetch = (input, init) => {
-		const evidencePath = join(runOutput, task.id, "input-admission.json");
-		try {
-			if (context.taskPairAuthorization && Date.parse(context.taskPairAuthorization.expiresAt) <= Date.now())
-				throw new Error("TASK_PAIR_INPUT_AUTHORIZATION_EXPIRED");
-			if (forwarded === 0) {
-				const audit = JSON.parse(readFileSync(join(root, "batch-l-input-audit.json"), "utf8"));
-				if (
-					typeof init?.body !== "string" ||
-					audit.userPromptSha256 !== digest(prompt) ||
-					audit.model !== model ||
-					audit.provider !== provider ||
-					audit.thinking !== TASK_PAIR_CONFIGURATION.thinking
-				)
-					throw new Error("TASK_PAIR_INPUT_AUDIT_INVALID");
-				const wire = JSON.parse(init.body);
-				if (wire.model !== model || wire.max_tokens !== (context.comparisonProfile === SWE_PRO_OFF_PROFILE || context.comparisonProfile === SWE_PRO_TASK_PROFILE ? SWE_PRO_OFF_CONFIGURATION.maxOutputTokens : TASK_PAIR_CONFIGURATION.maxOutputTokens))
-					throw new Error("TASK_PAIR_INPUT_WIRE_INVALID");
-				// Only the system message may contain the ephemeral project root. Keep user text and tools exact.
-				for (const message of wire.messages) {
-					if (message.role === "system")
-						message.content = JSON.parse(
-							JSON.stringify(message.content)
-								.replaceAll(JSON.stringify(cwd).slice(1, -1), "[PROJECT_ROOT]")
-								.replaceAll(cwd.replaceAll("\\", "/"), "[PROJECT_ROOT]"),
-						);
-				}
-				const observed = readTaskPairInput({
-					fixtureSha256: prepared.inputFixtureHash,
-					fixtureCommit: prepared.repositoryCommit,
-					userPromptSha256: audit.userPromptSha256,
-					systemPromptSha256: audit.canonicalSystemPromptSha256,
-					toolSchemaSha256: audit.toolSchemaSha256,
-					firstRequestSha256: digest(wire),
-				});
-				if (context.taskPairExpected && !isDeepStrictEqual(observed, context.taskPairExpected))
-					throw new Error("TASK_PAIR_INPUT_FINGERPRINT_MISMATCH");
-				atomicPrivateJson(evidencePath, {
-					status: context.taskPairExpected ? "matched" : "stub_capture",
-					runId: plan.runId,
-					input: observed,
-				});
-			}
-		} catch (error) {
-			admissionDenied = true;
-			atomicPrivateJson(evidencePath, {
-				status: "denied",
+	const admission = taskPair || task.swebench
+		? createInputAdmission({
+				auditPath: join(root, INPUT_AUDIT_FILE),
+				evidencePath: join(runOutput, task.id, "input-admission.json"),
 				runId: plan.runId,
-				upstreamForwarded: false,
-				previouslyForwarded: forwarded,
-				reason:
-					error instanceof Error && error.message.startsWith("TASK_PAIR_INPUT_")
-						? error.message
-						: "TASK_PAIR_INPUT_EVIDENCE_INVALID",
-			});
-			throw new Error("TASK_PAIR_INPUT_ADMISSION_FAILED");
-		}
-		forwarded++;
-		return globalThis.fetch(input, init);
-	};
+				cwd,
+				prompt,
+				provider,
+				model,
+				thinking: swe?.configuration.thinking ?? TASK_PAIR_CONFIGURATION.thinking,
+				maxOutputTokens,
+				fixtureSha256: prepared.inputFixtureHash,
+				fixtureCommit: prepared.repositoryCommit,
+				expectedInput: context.taskPairExpected,
+				expiresAt: context.taskPairAuthorization?.expiresAt,
+			})
+		: undefined;
 	const gateway = await startBudgetGateway({
 		// The gateway has reserved a request at this point. A local veto is recorded only in input-admission.json.
 		get telemetry() {
-			return admissionDenied ? undefined : telemetry;
+			return admission?.denied ? undefined : telemetry;
 		},
-		...(taskPair || task.swebench ? { fetch: gatedFetch } : {}),
+		...(admission ? { fetch: admission.fetch } : {}),
 		runId: plan!.runId,
 		upstreamBaseUrl: localStubUrl ?? "https://api.deepseek.com",
 		upstreamApiKey: process.env[apiKeyEnv!]!,
@@ -240,15 +197,13 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			maxTotalCostUsd: Math.max(0.01, plan!.maxTotalCostUsd - observedCost),
 			maxConcurrency: 1,
 			requestTimeoutMs: Math.min(plan!.timeoutMs, 120_000),
-			maxOutputTokensPerRequest: Math.min(2_048, plan!.maxTokensPerTask),
+			maxOutputTokensPerRequest: Math.min(maxOutputTokens, plan!.maxTokensPerTask),
 			maxRequestBytes: 2 * 1024 * 1024,
 		},
 		pricing: model === "deepseek-v4-pro"
 			? { inputUsdPerMillion: 1.32, outputUsdPerMillion: 3.96 }
 			: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
 	});
-	writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));
-	if (controlled) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
 	const cli = join(repositoryRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
 	const extensionArgs = [
 		"--extension",
@@ -272,13 +227,16 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
 	if (batchL) extensionArgs.push("--extension", join(here, "batch-l-tools.ts"));
 	else if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
-	if (task.swebench) extensionArgs.push("--extension", join(here, "batch-l-tools.ts"));
+	if (task.swebench) extensionArgs.push("--extension", join(here, "swe-tools.ts"));
 	const started = performance.now();
 	let gatewayStatus: BudgetGatewayStatus;
 	let child: Awaited<ReturnType<typeof runAgentProcess>>;
 	let handshakeError: Error | undefined;
-	let containersRemoved = false;
+	let containersRemoved: boolean;
+	let executionFailure: { error: unknown } | undefined;
 	try {
+		writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));
+		if (controlled) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
 		child = await runAgentProcess(
 			process.execPath,
 			[
@@ -337,44 +295,18 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			},
 		);
 		if (handshakeError) throw handshakeError;
+	} catch (error) {
+		executionFailure = { error };
+		throw error;
 	} finally {
-		gatewayStatus = gateway.status();
-		if (controlled && !admissionDenied) {
-			const evidenceDir = join(runOutput!, task.id);
-			mkdirSync(evidenceDir, { recursive: true });
-			writeFileSync(
-				join(evidenceDir, "gateway-final.json"),
-				JSON.stringify(gatewayEvidence(gatewayStatus), null, 2),
-			);
-		}
-		await gateway.close();
-		if (controlled) {
-			const prefix = `pi-enhanced-tools-${plan!.runId.slice(0, 50)}-${task.id}-`;
-			const ids = execFileSync("docker", ["ps", "-a", "--filter", `name=^/${prefix}`, "--format", "{{.ID}}"], {
-				encoding: "utf8",
-				timeout: 10_000,
-				windowsHide: true,
-			})
-				.trim()
-				.split(/\s+/u)
-				.filter(Boolean);
-			for (const id of ids) {
-				if (!/^[a-f0-9]{12,64}$/u.test(id)) {
-					// biome-ignore lint/correctness/noUnsafeFinally: Invalid Docker identities must fail closed during cleanup too.
-					throw new Error("EVAL_SANDBOX_CLEANUP_ID_INVALID");
-				}
-				execFileSync("docker", ["rm", "-f", id], { timeout: 10_000, windowsHide: true, stdio: "ignore" });
-			}
-			containersRemoved =
-				execFileSync("docker", ["ps", "-a", "--filter", `name=^/${prefix}`, "--format", "{{.ID}}"], {
-					encoding: "utf8",
-					timeout: 10_000,
-					windowsHide: true,
-				}).trim() === "";
-		}
+		({ gatewayStatus, containersRemoved } = await finalizeAgentExecution(
+			gateway,
+			controlled && !admission?.denied ? join(runOutput!, task.id) : undefined,
+			controlled ? () => removeRunContainers(containerOwner) : undefined,
+			executionFailure,
+		));
 	}
-	if (admissionDenied) throw new Error("TASK_PAIR_INPUT_ADMISSION_FAILED");
-	if ((taskPair || task.swebench) && forwarded === 0) throw new Error("TASK_PAIR_INPUT_NO_REQUEST");
+	admission?.assertForwarded();
 	let childAbsent = false;
 	if (child.pid) {
 		try {

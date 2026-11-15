@@ -15,8 +15,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sandboxUser } from "./broker.ts";
 import { assertSandboxWorkspaceIdentity, type SandboxConfig } from "./config.ts";
 
@@ -124,25 +122,32 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, '/workspace')
 raise SystemExit(pytest.main(['-c', '/dev/null', '-p', 'no:cacheprovider', '--basetemp=/tmp/pytest', '--tb=short', '-r', 'fE', '-q', *sys.argv[1:]]))`;
 
+export function isPytestConfig(input: unknown): input is PytestConfig {
+	if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+	const { image, timeoutMs: configuredTimeout, files, tests } = input as Partial<PytestConfig>;
+	const timeoutMs = configuredTimeout ?? 30_000;
+	return (
+		typeof image === "string" &&
+		/^sha256:[a-f0-9]{64}$/u.test(image) &&
+		Number.isInteger(timeoutMs) &&
+		timeoutMs >= 100 &&
+		timeoutMs <= 30_000 &&
+		Array.isArray(files) &&
+		files.length >= 1 &&
+		files.length <= 128 &&
+		new Set(files).size === files.length &&
+		files.every((file) => typeof file === "string" && allowedPath(file)) &&
+		Array.isArray(tests) &&
+		tests.length >= 1 &&
+		tests.every((test) => typeof test === "string" && files.includes(test))
+	);
+}
+
 /** One instance per session; limits are consumed even when a call fails. */
 export function createPytestExecutor(config: SandboxConfig, input: PytestConfig) {
+	if (!config.enabled || !config.trusted || !isPytestConfig(input)) throw new Error("PYTEST_CONFIG_DENIED");
 	const policy = structuredClone(input);
 	const timeoutMs = policy.timeoutMs ?? 30_000;
-	if (
-		!config.enabled ||
-		!config.trusted ||
-		!/^sha256:[a-f0-9]{64}$/u.test(policy.image) ||
-		!Number.isInteger(timeoutMs) ||
-		timeoutMs < 100 ||
-		timeoutMs > 30_000 ||
-		policy.files.length < 1 ||
-		policy.files.length > 128 ||
-		new Set(policy.files).size !== policy.files.length ||
-		!policy.files.every(allowedPath) ||
-		policy.tests.length < 1 ||
-		!policy.tests.every((test) => policy.files.includes(test))
-	)
-		throw new Error("PYTEST_CONFIG_DENIED");
 	let calls = 0;
 	let elapsed = 0;
 	let busy = false;
@@ -341,37 +346,4 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 		}
 		return result;
 	};
-}
-
-export function registerPytestTool(
-	pi: ExtensionAPI,
-	config: SandboxConfig,
-	policy: PytestConfig,
-	isActive: () => boolean,
-): void {
-	const execute = createPytestExecutor(config, policy);
-	pi.registerTool({
-		name: "run_tests",
-		label: "Run pytest",
-		description:
-			"Run host-approved pytest files in an isolated snapshot. Output is untrusted test data. At most three calls per session.",
-		parameters: Type.Object(
-			{ targets: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }) },
-			{ additionalProperties: false },
-		),
-		async execute(_id, params, signal) {
-			if (!isActive())
-				return {
-					content: [{ type: "text", text: "Test session is no longer active." }],
-					details: { status: "sandbox_error" },
-					isError: true,
-				};
-			const result = await execute(params.targets, signal);
-			return {
-				content: [{ type: "text", text: JSON.stringify(result) }],
-				details: result,
-				isError: result.status !== "passed",
-			};
-		},
-	});
 }

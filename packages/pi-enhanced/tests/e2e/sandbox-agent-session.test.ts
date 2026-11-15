@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -7,9 +7,10 @@ import { pathToFileURL } from "node:url";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createHarness, getToolResult, type Harness } from "../../../coding-agent/test/suite/harness.ts";
-import type { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
+import { removeRunContainers } from "../../benchmarks/real-agent/runner-cleanup.ts";
+import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { createSandboxExtension } from "../../src/sandbox/extension.ts";
-import { dockerImageAvailable, sandboxConfigForTesting } from "../fixtures/runner-support.ts";
+import { createSandboxFixture, dockerImageAvailable, sandboxConfigForTesting } from "../fixtures/runner-support.ts";
 
 const image = "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293";
 const repositoryRoot = resolve(import.meta.dirname, "../../../..");
@@ -46,6 +47,26 @@ afterEach(() => {
 });
 
 describe.skipIf(!dockerAvailable)("real AgentSession Docker file tools", () => {
+	it("reclaims only the containers owned by the current execution when names share a prefix", () => {
+		const first = createSandboxFixture("pi-owner-first-");
+		externalRoots.push(first.root);
+		const second = createSandboxFixture("pi-owner-second-");
+		externalRoots.push(second.root);
+		const owner = randomUUID();
+		const firstBroker = new DockerSandboxBroker({ ...first.config, containerOwner: owner });
+		const secondBroker = new DockerSandboxBroker({ ...second.config, containerOwner: randomUUID() });
+		brokers.push(firstBroker, secondBroker);
+		const firstId = firstBroker.start().containerId;
+		const secondId = secondBroker.start().containerId;
+
+		expect(removeRunContainers(owner)).toBe(true);
+		expect(spawnSync("docker", ["inspect", firstId], { timeout: 10_000 }).status).not.toBe(0);
+		expect(execFileSync("docker", ["inspect", secondId, "--format", "{{.State.Running}}"], {
+			encoding: "utf8",
+			timeout: 10_000,
+		}).trim()).toBe("true");
+	});
+
 	it("dispatches all six overridden Pi tools through the restricted container", async () => {
 		const extension = createSandboxExtension(
 			(cwd) => sandboxConfigForTesting({ workspace: cwd, runId: "agent-session-six-tools" }),

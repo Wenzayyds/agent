@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
-import { loadEnhancedConfig } from "../../src/shared/config.ts";
 import { loadTaskManagerConfig } from "../../src/task-manager/config.ts";
 import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
@@ -213,7 +212,7 @@ it("requires an explicit host config for V2 writes and keeps the legacy toggle",
 		expect(load().config.enabled).toBe(false);
 		config(agentDir, { mode: "v2", modelPlanTool: true });
 		expect(load().config).toMatchObject({ mode: "v2", hostV2Writes: true });
-		expect(loadEnhancedConfig({ agentDir, cwd: root, projectTrusted: true }).errors).toEqual([]);
+		expect(load().errors).toEqual([]);
 		config(join(root, ".pi"), { mode: "off" });
 		expect(load().config).toMatchObject({ mode: "off", enabled: false, hostV2Writes: false });
 	} finally {

@@ -25,7 +25,7 @@ import {
 } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
-import { SWE_PRO_OFF_CELLS, SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_LIMITS, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CELLS, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_LIMITS, SWE_PRO_TASK_PROFILE, SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_LIMITS, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import { resolveSweProfile, type SWE_TASK_LIMITS } from "./swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	loadTaskPairAuthorization,
@@ -42,19 +42,14 @@ const stub = argument("--local-stub-url");
 const offlinePolicyPath = argument("--offline-denial-policy");
 const comparisonProfile = argument("--comparison-profile");
 const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
-const swePro = comparisonProfile === SWE_PRO_OFF_PROFILE;
-const sweProTask = comparisonProfile === SWE_PRO_TASK_PROFILE;
-const swe = comparisonProfile === SWE_TASK_PROFILE || swePro || sweProTask;
-const sweConfiguration = swePro ? SWE_PRO_OFF_CONFIGURATION : sweProTask ? SWE_PRO_TASK_CONFIGURATION : SWE_TASK_CONFIGURATION;
-const sweLimits = swePro ? SWE_PRO_OFF_LIMITS : sweProTask ? SWE_PRO_TASK_LIMITS : SWE_TASK_LIMITS;
-const sweCells = swePro ? SWE_PRO_OFF_CELLS : sweProTask ? SWE_PRO_TASK_CELLS : SWE_TASK_CELLS;
-const hostGrantProfile = taskPair || swe;
+const swe = resolveSweProfile(comparisonProfile);
+const hostGrantProfile = taskPair || Boolean(swe);
 const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
-if (swe && (sweId !== sweConfiguration.instanceId || !sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
+if (swe && (sweId !== swe.configuration.instanceId || !sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 if (!swe && (sweId || sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 let CONTROLLED_LIMITS = swe
-	? sweLimits
+	? swe.configuration.limits
 	: taskPair
 		? TASK_PAIR_LIMITS
 		: comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE
@@ -64,6 +59,7 @@ let CONTROLLED_LIMITS = swe
 const stubLimitsPath = argument("--swe-stub-limits");
 if (stubLimitsPath) {
 	if (!swe || !stub || process.env.PI_ENHANCED_LOCAL_STUB_EVAL !== "1") throw new Error("SWE_STUB_LIMITS_FORBIDDEN");
+	const sweLimits = swe.configuration.limits;
 	const limits = JSON.parse(readFileSync(stubLimitsPath, "utf8"));
 	if (
 		Object.keys(limits).sort().join(",") !== "maxBatchCostUsd,maxCostUsd,maxRequests,maxTokens,timeoutMs" ||
@@ -80,7 +76,8 @@ if (stubLimitsPath) {
 }
 if (
 	comparisonProfile &&
-	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE, SWE_TASK_PROFILE, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_PROFILE].includes(comparisonProfile)
+	!swe &&
+	![BATCH_L_PROFILE, NEXT_EVALUATION_PROFILE, TASK_PAIR_PROFILE].includes(comparisonProfile)
 )
 	throw new Error("EVAL_UNKNOWN_COMPARISON_PROFILE");
 if (comparisonProfile === NEXT_EVALUATION_PROFILE && execute && !stub)
@@ -100,7 +97,7 @@ const taskPairAuthorization =
 				commit,
 				batchId ?? "",
 				ciPath,
-				swe ? (swePro ? SWE_PRO_OFF_PROFILE : sweProTask ? SWE_PRO_TASK_PROFILE : SWE_TASK_PROFILE) : TASK_PAIR_PROFILE,
+				swe?.configuration.profile ?? TASK_PAIR_PROFILE,
 			)
 		: undefined;
 const telemetryEnabled = hostGrantProfile || process.argv.includes("--evaluation-telemetry");
@@ -115,11 +112,11 @@ if (!execute) {
 			status: "not_run",
 			commit,
 			limits: CONTROLLED_LIMITS,
-			cells: swe ? sweCells : taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
+			cells: swe ? swe.cells : taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
 			...(hostGrantProfile
 				? {
-						configuration: swe ? sweConfiguration : TASK_PAIR_CONFIGURATION,
-						configurationSha256: digest(swe ? sweConfiguration : TASK_PAIR_CONFIGURATION),
+						configuration: swe?.configuration ?? TASK_PAIR_CONFIGURATION,
+						configurationSha256: digest(swe?.configuration ?? TASK_PAIR_CONFIGURATION),
 					}
 				: {}),
 		}),
@@ -158,7 +155,7 @@ mkdirSync(batchDir);
 if (authorization) claimBatchLAuthorization(authorizationPath!, authorization, batchDir);
 if (taskPairAuthorization) claimTaskPairAuthorization(taskPairPath!, taskPairAuthorization);
 const specs = swe
-	? sweCells
+	? swe.cells
 	: taskPair
 		? TASK_PAIR_CELLS
 		: comparisonProfile
@@ -208,8 +205,8 @@ const save = () => {
 				...(swe
 					? {
 							batchLimits: {
-								maxRequests: CONTROLLED_LIMITS.maxRequests * sweCells.length,
-								maxTokens: CONTROLLED_LIMITS.maxTokens * sweCells.length,
+								maxRequests: CONTROLLED_LIMITS.maxRequests * swe.cells.length,
+								maxTokens: CONTROLLED_LIMITS.maxTokens * swe.cells.length,
 								maxCostUsd: CONTROLLED_LIMITS.maxBatchCostUsd,
 							},
 						}
@@ -249,7 +246,7 @@ for (let index = 0; index < specs.length; index++) {
 		"--provider",
 		"deepseek",
 		"--model",
-		swe ? sweConfiguration.model : "deepseek-flash",
+		swe ? swe.configuration.model : "deepseek-flash",
 		"--api-key-env",
 		stub ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY",
 		"--max-total-cost-usd",

@@ -381,8 +381,13 @@ it.skipIf(!available).each(cases)(
 			} else {
 				expect(calls).toBe(2);
 				expect(result.agentCompleted).toBe(false);
-				expect(result.toolFailures).toHaveLength(1);
-				expect(JSON.stringify(result.toolFailures)).toContain("SWE_WRITE_PATH_DENIED");
+				expect(result.safetyEvents).toEqual([
+					expect.objectContaining({
+						toolName: scenario === "edit_test" ? "edit" : "write",
+						classification: "isolation_boundary_stop",
+						reasonCode: "SWE_WRITE_PATH_DENIED",
+					}),
+				]);
 				expect(result.sandboxAudit.audit.every((entry: { toolName: string }) => entry.toolName === "read")).toBe(
 					true,
 				);

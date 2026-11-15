@@ -21,6 +21,7 @@ import {
 } from "./evaluation-policy.ts";
 import { memoryTouchMetadata } from "./evaluation-telemetry.ts";
 import { gatewayEvidence } from "./gateway-integration.ts";
+import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { classifyTermination } from "./result-classification.ts";
 import type { AgentExecution } from "./runner-execution.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
@@ -199,7 +200,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 			: {}),
 	});
 	if (batchL) {
-		const inputAuditPath = join(root, "batch-l-input-audit.json");
+		const inputAuditPath = join(root, INPUT_AUDIT_FILE);
 		const inputAudit = existsSync(inputAuditPath)
 			? (JSON.parse(readFileSync(inputAuditPath, "utf8")) as Record<string, unknown>)
 			: null;

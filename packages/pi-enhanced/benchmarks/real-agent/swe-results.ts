@@ -7,10 +7,12 @@ import type { SafetyEvent } from "./controlled-stop.ts";
 import { digest } from "./evaluation-identity.ts";
 import { executionOutcome, parseAgentEvents, redactEvaluationText } from "./evaluation-policy.ts";
 import { gatewayEvidence } from "./gateway-integration.ts";
+import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { classifyTermination } from "./result-classification.ts";
 import type { AgentExecution } from "./runner-execution.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
-import { exportSwePrediction, SWE_EVALUATION_PROTOCOL } from "./swebench.ts";
+import { SWE_EVALUATION_PROTOCOL } from "./swe-instance.ts";
+import { exportSwePrediction } from "./swe-patch.ts";
 
 /** Persist SWE evidence and export a safe patch; official grading remains a separate invocation. */
 export function collectSweResult(context: RunnerContext, prepared: PreparedAgent, execution: AgentExecution) {
@@ -33,7 +35,7 @@ export function collectSweResult(context: RunnerContext, prepared: PreparedAgent
 			2,
 		),
 	);
-	const inputAuditPath = join(root, "batch-l-input-audit.json");
+	const inputAuditPath = join(root, INPUT_AUDIT_FILE);
 	const inputAudit = existsSync(inputAuditPath) ? JSON.parse(readFileSync(inputAuditPath, "utf8")) : null;
 	const trace = execution.telemetry?.finish(execution.gatewayStatus, audit);
 	const agentCompleted =
@@ -113,6 +115,7 @@ export function collectSweResult(context: RunnerContext, prepared: PreparedAgent
 			auditComplete: audit?.complete === true,
 		}),
 		sandboxAudit: audit,
+		safetyEvents: safety.events,
 		toolFailures: events
 			.filter((event) => event.type === "tool_execution_end" && event.isError)
 			.map((event) => ({ toolName: event.toolName, result: event.result })),

@@ -9,6 +9,7 @@ export interface SandboxConfig {
 	readonlyModuleTools?: boolean;
 	taskPlanTool?: boolean;
 	runId: string;
+	containerOwner?: string;
 	runRoot: string;
 	workspace: string;
 	workspaceDevice: number;
@@ -18,6 +19,13 @@ export interface SandboxConfig {
 	timeoutMs: number;
 	maxRequestBytes: number;
 	maxResponseBytes: number;
+}
+
+export const SANDBOX_CONTAINER_OWNER_LABEL = "pi-enhanced.container-owner";
+
+export function assertSandboxContainerOwner(owner: string): void {
+	if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(owner))
+		throw new Error("SANDBOX_CONTAINER_OWNER_INVALID");
 }
 
 const DEFAULT_IMAGE = "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293";
@@ -46,6 +54,8 @@ export function loadSandboxConfig(
 
 	const runId = required(env, "PI_ENHANCED_SANDBOX_RUN_ID");
 	assertRunId(runId);
+	const containerOwner = env.PI_ENHANCED_SANDBOX_CONTAINER_OWNER;
+	if (containerOwner !== undefined) assertSandboxContainerOwner(containerOwner);
 	const configuredRunRoot = required(env, "PI_ENHANCED_SANDBOX_RUN_ROOT");
 	if (!isAbsolute(configuredRunRoot)) throw new Error("SANDBOX_RUN_ROOT_NOT_ABSOLUTE");
 	const runRoot = realpathSync(configuredRunRoot);
@@ -71,6 +81,7 @@ export function loadSandboxConfig(
 		...(env.PI_ENHANCED_SANDBOX_TASK_PLAN_TOOL === "1" ? { taskPlanTool: true } : {}),
 		trusted: env.PI_ENHANCED_SANDBOX_TRUSTED === "1",
 		runId,
+		...(containerOwner !== undefined ? { containerOwner } : {}),
 		runRoot,
 		workspace,
 		workspaceDevice: workspaceStat.dev,

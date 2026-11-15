@@ -2,7 +2,12 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
 import { AUDIT_MAX_RECORDS, SandboxAuditJournal } from "./audit.ts";
-import { assertSandboxWorkspaceIdentity, type SandboxConfig } from "./config.ts";
+import {
+	assertSandboxContainerOwner,
+	assertSandboxWorkspaceIdentity,
+	SANDBOX_CONTAINER_OWNER_LABEL,
+	type SandboxConfig,
+} from "./config.ts";
 import {
 	assertRequestId,
 	SANDBOX_PROTOCOL_VERSION,
@@ -64,6 +69,8 @@ export class DockerSandboxBroker {
 		assertSandboxWorkspaceIdentity(this.config);
 		if (this.containerId && this.evidence) return this.evidence;
 		const name = `pi-enhanced-tools-${this.config.runId}-${randomUUID().slice(0, 8)}`;
+		const owner = this.config.containerOwner;
+		if (owner !== undefined) assertSandboxContainerOwner(owner);
 		try {
 			const id = execFileSync(
 				"docker",
@@ -71,6 +78,7 @@ export class DockerSandboxBroker {
 					"create",
 					"--name",
 					name,
+					...(owner === undefined ? [] : ["--label", SANDBOX_CONTAINER_OWNER_LABEL + "=" + owner]),
 					"--network",
 					"none",
 					"--read-only",
@@ -113,7 +121,7 @@ export class DockerSandboxBroker {
 				}),
 			) as {
 				Image: string;
-				Config: { User: string };
+				Config: { User: string; Labels?: Record<string, string> };
 				HostConfig: { NetworkMode: string; ReadonlyRootfs: boolean; Privileged: boolean };
 				Mounts: Array<{ Source: string; Destination: string; RW: boolean }>;
 			};
@@ -124,6 +132,7 @@ export class DockerSandboxBroker {
 				!inspected.HostConfig.ReadonlyRootfs ||
 				inspected.HostConfig.Privileged ||
 				inspected.Config.User !== sandboxUser() ||
+				(owner !== undefined && inspected.Config.Labels?.[SANDBOX_CONTAINER_OWNER_LABEL] !== owner) ||
 				workspaceMount.length !== 1 ||
 				!workspaceMount[0]?.RW ||
 				inspected.Mounts.some((mount) => mount.Destination !== "/workspace")

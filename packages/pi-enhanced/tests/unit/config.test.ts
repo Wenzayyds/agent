@@ -6,8 +6,8 @@ import { loadMcpPolicyConfig } from "../../src/mcp-policy/config.ts";
 import { loadContextConfig } from "../../src/context/config.ts";
 import { loadMemoryConfig } from "../../src/memory/config.ts";
 import { evaluatePolicy } from "../../src/mcp-policy/policy.ts";
-import { ENHANCED_CONFIG_FILE, loadEnhancedConfig } from "../../src/shared/config.ts";
-import { ENHANCED_MODULE_NAMES } from "../../src/shared/types.ts";
+import { ENHANCED_CONFIG_FILE } from "../../src/shared/config.ts";
+import { loadTaskManagerConfig } from "../../src/task-manager/config.ts";
 
 const tempDirs: string[] = [];
 
@@ -28,13 +28,26 @@ afterEach(() => {
 
 describe("P0 shared configuration regression", () => {
 	it("keeps all four modules disabled by default and independently switchable", () => {
-		for (const enabled of ENHANCED_MODULE_NAMES) {
-			const root = tempDir();
-			const agentDir = join(root, "agent");
+		const loaders = {
+			"mcp-policy": loadMcpPolicyConfig,
+			memory: loadMemoryConfig,
+			context: loadContextConfig,
+			"task-manager": loadTaskManagerConfig,
+		};
+		const root = tempDir();
+		const agentDir = join(root, "agent");
+		const options = { agentDir, cwd: root, projectTrusted: false };
+		for (const load of Object.values(loaders)) {
+			const result = load(options);
+			expect(result.errors).toEqual([]);
+			expect(result.config.enabled).toBe(false);
+		}
+		for (const enabled of Object.keys(loaders)) {
 			writeJson(join(agentDir, ENHANCED_CONFIG_FILE), { modules: { [enabled]: { enabled: true } } });
-			const loaded = loadEnhancedConfig({ agentDir, cwd: root, projectTrusted: false });
-			for (const name of ENHANCED_MODULE_NAMES) {
-				expect(loaded.config.modules[name].enabled).toBe(name === enabled);
+			for (const [name, load] of Object.entries(loaders)) {
+				const result = load(options);
+				expect(result.errors).toEqual([]);
+				expect(result.config.enabled).toBe(name === enabled);
 			}
 		}
 	});

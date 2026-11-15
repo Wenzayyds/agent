@@ -2,8 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DockerSandboxBroker } from "./broker.ts";
 import { loadSandboxConfig, type SandboxConfig } from "./config.ts";
 import { SANDBOX_ALLOWED_TOOLS } from "./protocol.ts";
-import { type PytestConfig, registerPytestTool } from "./pytest.ts";
-import { registerSandboxTools } from "./tools.ts";
+import { isPytestConfig } from "./pytest.ts";
+import { registerPytestTool, registerSandboxTools } from "./tools.ts";
 
 export function sandboxToolAllowed(
 	toolName: string,
@@ -19,25 +19,34 @@ export function sandboxToolAllowed(
 	);
 }
 
+function loadPytestPolicy(): unknown {
+	if (process.env.PI_ENHANCED_PYTEST_ENABLED !== "1") return undefined;
+	try {
+		return JSON.parse(process.env.PI_ENHANCED_PYTEST_CONFIG_JSON ?? "null") ?? undefined;
+	} catch {
+		return false;
+	}
+}
+
 export function createSandboxExtension(
 	configSource: SandboxConfig | ((cwd: string) => SandboxConfig) = (cwd) => loadSandboxConfig(process.env, cwd),
 	onBroker?: (broker: DockerSandboxBroker) => void,
-	pytestPolicy: PytestConfig | undefined = process.env.PI_ENHANCED_PYTEST_ENABLED === "1"
-		? (JSON.parse(process.env.PI_ENHANCED_PYTEST_CONFIG_JSON ?? "null") ?? undefined)
-		: undefined,
+	pytestPolicy: unknown = loadPytestPolicy(),
 ): (pi: ExtensionAPI) => void {
 	return (pi) => {
 		let broker: DockerSandboxBroker | undefined;
 		let config: SandboxConfig | undefined;
+		let pytestActive = false;
 		pi.on("tool_call", (event) => {
 			if (
 				broker &&
-				!sandboxToolAllowed(event.toolName, config?.readonlyModuleTools, config?.taskPlanTool, !!pytestPolicy)
+				!sandboxToolAllowed(event.toolName, config?.readonlyModuleTools, config?.taskPlanTool, pytestActive)
 			) {
 				return { block: true, reason: "Sandbox pilot only permits isolated file tools" };
 			}
 		});
 		pi.on("session_start", (_event, ctx) => {
+			pytestActive = false;
 			config = typeof configSource === "function" ? configSource(ctx.cwd) : configSource;
 			if (!config.enabled) return;
 			broker?.stop();
@@ -45,9 +54,12 @@ export function createSandboxExtension(
 			onBroker?.(broker);
 			registerSandboxTools(pi, broker, config.workspace);
 			broker.start();
-			if (pytestPolicy) {
+			if (isPytestConfig(pytestPolicy)) {
 				const activeConfig = config;
-				registerPytestTool(pi, config, pytestPolicy, () => !!broker && config === activeConfig);
+				registerPytestTool(pi, config, pytestPolicy, () => pytestActive && !!broker && config === activeConfig);
+				pytestActive = true;
+			} else if (pytestPolicy !== undefined) {
+				ctx.ui.notify("Invalid pytest configuration. run_tests is disabled.", "warning");
 			}
 		});
 		pi.on("session_before_switch", () => {

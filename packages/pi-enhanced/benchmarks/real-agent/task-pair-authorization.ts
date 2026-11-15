@@ -4,7 +4,12 @@ import { isDeepStrictEqual } from "node:util";
 import { TASK_PAIR_CELLS, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { verifyControlledCi } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
-import { SWE_PRO_OFF_CELLS, SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CELLS, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CELLS, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "./swe-profile.ts";
+import {
+	resolveSweProfile,
+	SWE_PRO_TASK_CONFIGURATION,
+	SWE_TASK_CONFIGURATION,
+	type SweProfileName,
+} from "./swe-profile.ts";
 
 export interface TaskPairInput {
 	fixtureSha256: string;
@@ -19,7 +24,7 @@ export interface TaskPairAuthorization {
 	schemaVersion: 1;
 	status: "authorized";
 	authorizationId: string;
-	profile: typeof TASK_PAIR_PROFILE | typeof SWE_TASK_PROFILE | typeof SWE_PRO_OFF_PROFILE | typeof SWE_PRO_TASK_PROFILE;
+	profile: typeof TASK_PAIR_PROFILE | SweProfileName;
 	commit: string;
 	batchId: string;
 	outputBase: string;
@@ -59,7 +64,7 @@ export function loadTaskPairAuthorization(
 	commit: string,
 	batchId: string,
 	ciPath: string | undefined,
-	expectedProfile: typeof TASK_PAIR_PROFILE | typeof SWE_TASK_PROFILE | typeof SWE_PRO_OFF_PROFILE | typeof SWE_PRO_TASK_PROFILE = TASK_PAIR_PROFILE,
+	expectedProfile: typeof TASK_PAIR_PROFILE | SweProfileName = TASK_PAIR_PROFILE,
 ): TaskPairAuthorization {
 	if (!path || !isAbsolute(path)) throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
 	const stat = lstatSync(path);
@@ -69,23 +74,21 @@ export function loadTaskPairAuthorization(
 	const grant = JSON.parse(readFileSync(path, "utf8")) as TaskPairAuthorization;
 	const expiry = Date.parse(grant?.expiresAt);
 	const now = Date.now();
+	const swe = resolveSweProfile(expectedProfile);
 	if (
 		!grant ||
-		Object.keys(grant).length !== (expectedProfile === SWE_TASK_PROFILE || expectedProfile === SWE_PRO_TASK_PROFILE ? 12 : 11) ||
+		Object.keys(grant).length !== (swe && swe.admission !== "off" ? 12 : 11) ||
 		grant.schemaVersion !== 1 ||
 		grant.status !== "authorized" ||
 		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(grant.authorizationId) ||
 		grant.profile !== expectedProfile ||
 		grant.commit !== commit ||
-		!(expectedProfile === SWE_TASK_PROFILE ? /^swe_task_[a-z0-9_]{4,20}$/u : expectedProfile === SWE_PRO_OFF_PROFILE ? /^swe_pro_off_[a-z0-9_]{4,20}$/u : expectedProfile === SWE_PRO_TASK_PROFILE ? /^swe_pro_task_[a-z0-9_]{4,20}$/u : /^task_pair_[a-z0-9_]{4,20}$/u).test(
-			batchId,
-		) ||
+		!(swe?.batchIdPattern ?? /^task_pair_[a-z0-9_]{4,20}$/u).test(batchId) ||
 		grant.batchId !== batchId ||
 		!Number.isFinite(expiry) ||
 		expiry <= now ||
 		expiry > now + 86_400_000 ||
-		grant.configurationSha256 !==
-			digest(expectedProfile === SWE_TASK_PROFILE ? SWE_TASK_CONFIGURATION : expectedProfile === SWE_PRO_OFF_PROFILE ? SWE_PRO_OFF_CONFIGURATION : expectedProfile === SWE_PRO_TASK_PROFILE ? SWE_PRO_TASK_CONFIGURATION : TASK_PAIR_CONFIGURATION) ||
+		grant.configurationSha256 !== digest(swe?.configuration ?? TASK_PAIR_CONFIGURATION) ||
 		typeof grant.outputBase !== "string" ||
 		!isAbsolute(grant.outputBase) ||
 		realpathSync(grant.outputBase) !== grant.outputBase ||
@@ -96,18 +99,18 @@ export function loadTaskPairAuthorization(
 	)
 		throw new Error("TASK_PAIR_AUTHORIZATION_INVALID_OR_EXPIRED");
 	readTaskPairInput(grant.input);
-	if (expectedProfile === SWE_TASK_PROFILE) {
+	if (swe?.admission === "all") {
 		const inputs = readSweModeInputs(grant.modeInputs);
 		if (!isDeepStrictEqual(inputs.off, grant.input)) throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
 	}
-	if (expectedProfile === SWE_PRO_TASK_PROFILE) {
+	if (swe?.admission === "task") {
 		const inputs = readSweProTaskInputs(grant.modeInputs);
 		if (!isDeepStrictEqual(inputs.v1, grant.input)) throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
 	}
 	if (
-		expectedProfile === SWE_PRO_OFF_PROFILE &&
-		(grant.input.fixtureCommit !== SWE_PRO_OFF_CONFIGURATION.baseCommit ||
-			grant.input.userPromptSha256 !== SWE_PRO_OFF_CONFIGURATION.userPromptSha256)
+		swe?.admission === "off" &&
+		(grant.input.fixtureCommit !== swe.configuration.baseCommit ||
+			grant.input.userPromptSha256 !== swe.configuration.userPromptSha256)
 	)
 		throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
 	if (!ciPath) throw new Error("CONTROLLED_CI_REQUIRED");
@@ -127,8 +130,8 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 	if (realpathSync(outputDir) !== batchDir || readFileSync(`${path}.used`, "utf8") !== digest(grant))
 		throw new Error("TASK_PAIR_AUTHORIZATION_CLAIM_MISMATCH");
 	const batch = JSON.parse(readFileSync(join(batchDir, "batch.json"), "utf8"));
-	const swe = grant.profile === SWE_TASK_PROFILE || grant.profile === SWE_PRO_OFF_PROFILE || grant.profile === SWE_PRO_TASK_PROFILE;
-	const cells = grant.profile === SWE_TASK_PROFILE ? SWE_TASK_CELLS : grant.profile === SWE_PRO_OFF_PROFILE ? SWE_PRO_OFF_CELLS : grant.profile === SWE_PRO_TASK_PROFILE ? SWE_PRO_TASK_CELLS : TASK_PAIR_CELLS;
+	const swe = resolveSweProfile(grant.profile);
+	const cells = swe?.cells ?? TASK_PAIR_CELLS;
 	const index = cells.findIndex((cell) => cell.id === cellId);
 	if (
 		index < 0 ||

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHarness, getMessageText } from "../../../coding-agent/test/suite/harness.ts";
 import type { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { createSandboxExtension, sandboxToolAllowed } from "../../src/sandbox/extension.ts";
@@ -33,6 +33,30 @@ describe.skipIf(!image)("isolated pytest", () => {
 			await harness.session.bindExtensions({});
 			expect(harness.session.getAllTools().map((tool) => tool.name)).not.toContain("run_tests");
 		} finally { broker?.stop(); harness.cleanup(); }
+	});
+	it.each(["{", '{"image":42,"files":{}}'])("keeps Docker file tools active with invalid pytest configuration %s", async (value) => {
+		let broker: DockerSandboxBroker | undefined;
+		vi.stubEnv("PI_ENHANCED_PYTEST_ENABLED", "1");
+		vi.stubEnv("PI_ENHANCED_PYTEST_CONFIG_JSON", value);
+		const factory = (() => {
+			try {
+				return createSandboxExtension(
+					(cwd) => sandboxConfigForTesting({ workspace: cwd, runId: "pytest-invalid" }),
+					(value) => { broker = value; },
+				);
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		})();
+		const harness = await createHarness({ extensionFactories: [factory] });
+		try {
+			await harness.session.bindExtensions({});
+			expect(broker?.getEvidence()?.network).toBe("none");
+			expect(harness.session.getAllTools().map((tool) => tool.name)).not.toContain("run_tests");
+		} finally {
+			broker?.stop();
+			harness.cleanup();
+		}
 	});
 	it("uses real failure feedback and fresh code through the native Pi loop", async () => {
 		let broker: DockerSandboxBroker | undefined;

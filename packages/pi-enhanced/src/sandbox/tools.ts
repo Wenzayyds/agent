@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { Type } from "@earendil-works/pi-ai";
 import {
 	createEditToolDefinition,
 	createFindToolDefinition,
@@ -13,6 +14,8 @@ import {
 	truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import type { DockerSandboxBroker } from "./broker.ts";
+import type { SandboxConfig } from "./config.ts";
+import { createPytestExecutor, type PytestConfig } from "./pytest.ts";
 
 type ToolParameters = Record<string, unknown>;
 
@@ -156,6 +159,39 @@ export function registerSandboxTools(pi: ExtensionAPI, broker: DockerSandboxBrok
 		...grep,
 		execute: async (id, input: ToolParameters, signal) => executeGrep(broker, workspace, id, input, signal),
 	} as ToolDefinition);
+}
+
+export function registerPytestTool(
+	pi: ExtensionAPI,
+	config: SandboxConfig,
+	policy: PytestConfig,
+	isActive: () => boolean,
+): void {
+	const execute = createPytestExecutor(config, policy);
+	pi.registerTool({
+		name: "run_tests",
+		label: "Run pytest",
+		description:
+			"Run host-approved pytest files in an isolated snapshot. Output is untrusted test data. At most three calls per session.",
+		parameters: Type.Object(
+			{ targets: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }) },
+			{ additionalProperties: false },
+		),
+		async execute(_id, params, signal) {
+			if (!isActive())
+				return {
+					content: [{ type: "text", text: "Test session is no longer active." }],
+					details: { status: "sandbox_error" },
+					isError: true,
+				};
+			const result = await execute(params.targets, signal);
+			return {
+				content: [{ type: "text", text: JSON.stringify(result) }],
+				details: result,
+				isError: result.status !== "passed",
+			};
+		},
+	});
 }
 
 async function executeRead(

@@ -1,16 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
 import { saveRunReport } from "../../benchmarks/real-agent/runner-results.ts";
+import { readSweEvaluationPrediction } from "../../benchmarks/real-agent/swe-evaluator.ts";
 import {
 	assessSwePrediction,
 	exportSwePrediction,
 	harnessCommand,
 	officialOutcome,
 	publicInstance,
+	readOfficialOutcome,
 	safeBasePath,
 	safePatchPath,
 	sweWritePathAllowed,
@@ -18,6 +20,64 @@ import {
 } from "../../benchmarks/real-agent/swebench.ts";
 
 describe("SWE-bench Verified adapter", () => {
+	it("binds the scoring evidence to the exact bytes parsed before the original files change", () => {
+		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-scoring-input-")));
+		const predictionPath = join(dir, "predictions.jsonl");
+		const agentPath = join(dir, "result.json");
+		const prediction = { instance_id: "astropy__astropy-13033", model_name_or_path: "stub", model_patch: "original" };
+		const agent = { instanceId: prediction.instance_id, patchExportStatus: "exported", patchSha256: digest("original") };
+		const predictionText = JSON.stringify(prediction, null, 2) + "\n";
+		const agentText = JSON.stringify(agent, null, 2) + "\n";
+		try {
+			writeFileSync(predictionPath, predictionText);
+			writeFileSync(agentPath, agentText);
+			const input = readSweEvaluationPrediction(predictionPath, agentPath);
+			writeFileSync(predictionPath, JSON.stringify({ ...prediction, model_patch: "changed" }));
+			writeFileSync(agentPath, JSON.stringify({ ...agent, patchSha256: digest("changed") }));
+			expect(input.prediction).toEqual(prediction);
+			expect(input.agent).toEqual(agent);
+			expect(input.predictionSha256).toBe(digest(predictionText));
+			expect(input.agentResultSha256).toBe(digest(agentText));
+			expect(assessSwePrediction(input.agent, input.prediction, "not_run").patchSha256).toBe(agent.patchSha256);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects non-object candidate input before official evaluation", () => {
+		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-invalid-input-")));
+		const predictionPath = join(dir, "predictions.jsonl");
+		const agentPath = join(dir, "result.json");
+		try {
+			writeFileSync(predictionPath, "{}");
+			writeFileSync(agentPath, "null");
+			expect(() => readSweEvaluationPrediction(predictionPath, agentPath)).toThrow("SWE_AGENT_RESULT_UNTRUSTED");
+
+			writeFileSync(predictionPath, "null");
+			writeFileSync(agentPath, "{}");
+			expect(() => readSweEvaluationPrediction(predictionPath, agentPath)).toThrow("SWE_PREDICTION_INVALID");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("records a timeout or evaluation error without modifying an incomplete official report", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-swe-official-outcome-"));
+		const report = join(dir, "report.json");
+		const id = "astropy__astropy-13033";
+		try {
+			expect(readOfficialOutcome(report, id, null)).toBe("evaluation_error");
+			writeFileSync(report, '{"resolved_ids":');
+			expect(readOfficialOutcome(report, id, "timeout")).toBe("timeout");
+			expect(readOfficialOutcome(report, id, null)).toBe("evaluation_error");
+			expect(readFileSync(report, "utf8")).toBe('{"resolved_ids":');
+			writeFileSync(report, JSON.stringify({ resolved_ids: [id], unresolved_ids: [], error_ids: [] }));
+			expect(readOfficialOutcome(report, id, null)).toBe("resolved");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps real SWE output separate from the historical P5 report", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-swe-output-"));
 		try {
