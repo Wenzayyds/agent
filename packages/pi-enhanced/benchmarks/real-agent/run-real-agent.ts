@@ -120,10 +120,13 @@ async function main(): Promise<void> {
 		batchL || (cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools"));
 	const taskId = cell?.taskId ?? argument("--task-id");
 	const singleFileTestFeedback = process.argv.includes("--single-file-test-feedback");
-	if (singleFileTestFeedback && (
-		taskId !== "single-file-off-by-one" || cell || sweId || comparisonProfile ||
-		(argument("--variant") ?? "baseline") !== "baseline"
-	)) throw new Error("EVAL_SINGLE_FILE_TEST_SCOPE_INVALID");
+	const configDefaultTestFeedback = process.argv.includes("--config-default-test-feedback");
+	const baselineFixture = !cell && !sweId && !comparisonProfile && (argument("--variant") ?? "baseline") === "baseline";
+	if (singleFileTestFeedback && (taskId !== "single-file-off-by-one" || !baselineFixture))
+		throw new Error("EVAL_SINGLE_FILE_TEST_SCOPE_INVALID");
+	if (configDefaultTestFeedback && (taskId !== "config-default" || !baselineFixture))
+		throw new Error("EVAL_CONFIG_DEFAULT_TEST_SCOPE_INVALID");
+	const testFeedback = singleFileTestFeedback || configDefaultTestFeedback;
 	const swebench = sweId && sweMirror ? loadSweTask(sweId, sweMirror) : undefined;
 	const selectedTasks: ExperimentTask[] = swebench
 		? [
@@ -187,7 +190,7 @@ async function main(): Promise<void> {
 			encoding: "utf8",
 		}).trim();
 		process.stdout.write(
-			`${JSON.stringify({ repositoryCommit, ...preflightView(input, manifest.tasks.length, singleFileTestFeedback) }, null, 2)}\n`,
+			`${JSON.stringify({ repositoryCommit, ...preflightView(input, testFeedback ? selectedTasks.length : manifest.tasks.length, testFeedback) }, null, 2)}\n`,
 		);
 		process.exit(0);
 	}
@@ -312,7 +315,7 @@ async function main(): Promise<void> {
 					: variants[variant]!,
 				condition,
 				readonlyModuleTools,
-				singleFileTestFeedback,
+				testFeedback,
 				telemetryEnabled,
 				localStubUrl,
 				authorization,
@@ -359,7 +362,7 @@ async function main(): Promise<void> {
 				runOutput,
 				batchL,
 				swebench: Boolean(swebench),
-				singleFileTestFeedback,
+				testFeedback,
 			},
 			results,
 			observedCost,

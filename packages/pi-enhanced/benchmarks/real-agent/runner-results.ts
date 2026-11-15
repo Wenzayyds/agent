@@ -27,7 +27,7 @@ import type { AgentExecution } from "./runner-execution.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 /** Interprets completed evidence and persists results; never starts an Agent, model request or container. */
 export function collectTaskResult(context: RunnerContext, prepared: PreparedAgent, execution: AgentExecution) {
-	const { task, root, runOutput, plan, cell, batchL, switches, comparisonProfile, localStubUrl, authorization } =
+	const { task, root, runOutput, plan, cell, batchL, switches, comparisonProfile, localStubUrl, authorization, testFeedback } =
 		context;
 	const {
 		cwd,
@@ -40,7 +40,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		moduleTools,
 		prompt,
 	} = prepared;
-	const { child, gatewayStatus, verification, telemetry, sandboxAuditPath, contextReportPath, started } = execution;
+	const { child, gatewayStatus, verification, telemetry, sandboxAuditPath, contextReportPath, started, hostLifecycle } = execution;
 	if (!verification) throw new Error("SYNTHETIC_VERIFIER_REQUIRED");
 	const apiKeyEnv = plan.apiKeyEnv;
 	const events = parseAgentEvents(child.stdout ?? "");
@@ -83,14 +83,20 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		? (JSON.parse(readFileSync(contextReportPath, "utf8")) as Record<string, unknown>)
 		: { state: switches.context ? "missing" : "disabled", diagnostics: [] };
 	const overBudget = budgetExceeded(usage, observedCost, plan!) || gatewayStatus.requestsRejected > 0;
-	const timedOut = child.timedOut;
-	const status = classifyExecution({ overBudget, timedOut, exitCode: child.status, verifierPassed });
+	const timedOut = child.timedOut || (testFeedback === true && gatewayStatus.lastError === "GATEWAY_UPSTREAM_TIMEOUT");
+	const agentFailed = testFeedback && (gatewayStatus.state === "failed_closed" || events.some((event) => {
+		const message = event.message as { role?: string; stopReason?: string } | undefined;
+		return event.type === "message_end" && message?.role === "assistant" &&
+			["error", "aborted", "length"].includes(message.stopReason ?? "");
+	}));
+	const exitCode = agentFailed ? 1 : child.status;
+	const status = classifyExecution({ overBudget, timedOut, exitCode, verifierPassed });
 	const outcome = executionOutcome({
 		overBudget: budgetExceeded(usage, observedCost, plan!),
 		budgetRejected: gatewayStatus.requestsRejected > 0,
 		gatewayFailed: gatewayStatus.state === "failed_closed",
 		timedOut,
-		exitCode: child.status,
+		exitCode,
 		verifierPassed,
 	});
 	const auditComplete = sandboxAudit.complete === true && Boolean(sandboxAudit.evidence);
@@ -128,6 +134,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		agentReportedUsage,
 		gateway: gatewayEvidence(gatewayStatus),
 		sandboxAudit,
+		...(testFeedback ? { hostLifecycle } : {}),
 		patchSha256: createHash("sha256").update(patch).digest("hex"),
 		durationMs: Number((performance.now() - started).toFixed(3)),
 	};
@@ -174,7 +181,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 					toolFailures,
 				}
 			: {}),
-		...(context.singleFileTestFeedback
+		...(context.testFeedback
 			? {
 					toolTrace: events
 						.filter((event) => event.type === "tool_execution_start" || event.type === "tool_execution_end")
@@ -367,7 +374,7 @@ export function saveRunReport(
 		runOutput?: string;
 		batchL: boolean;
 		swebench?: boolean;
-		singleFileTestFeedback?: boolean;
+		testFeedback?: boolean;
 	},
 	results: Record<string, unknown>[],
 	observedCost: number,
@@ -395,7 +402,7 @@ export function saveRunReport(
 			? {
 					mode: "docker-file-tools",
 					image: plan.sandboxImage,
-					tools: ["read", "grep", "find", "ls", "write", "edit", ...(options.singleFileTestFeedback ? ["run_tests"] : [])],
+					tools: ["read", "grep", "find", "ls", "write", "edit", ...(options.testFeedback ? ["run_tests"] : [])],
 					network: "none",
 					failClosed: true,
 				}
@@ -425,7 +432,7 @@ export function saveRunReport(
 		Object.assign(report.summary, {
 			evaluationPassed: ran.filter((item) => item.evaluationAccepted === true).length,
 		});
-	if (!localStubUrl && !batchL && !options.swebench && !options.singleFileTestFeedback)
+	if (!localStubUrl && !batchL && !options.swebench && !options.testFeedback)
 		writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 	return report.summary;

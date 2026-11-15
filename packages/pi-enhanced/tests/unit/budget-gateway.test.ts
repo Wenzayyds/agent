@@ -104,6 +104,86 @@ describe("Batch H hard budget gateway", () => {
 		expect(theoreticalMaxUsd).toBeCloseTo(0.3721344, 9);
 		expect(theoreticalMaxUsd).toBeLessThan(0.4);
 	});
+	it("sends the affordable cap, holds it once, and refunds unused Tokens and USD", async () => {
+		const outbound = {
+			model: "deepseek-flash", messages: [{ role: "user", content: "test" }], stream: true,
+			max_tokens: 256, stream_options: { include_usage: true }, user_id: "pi_enhanced_controlled_pilot",
+		};
+		const inputBound = Buffer.byteLength(JSON.stringify(outbound)) + 4096;
+		let release!: () => void;
+		let reached!: () => void;
+		const hold = new Promise<void>((resolve) => { release = resolve; });
+		const started = new Promise<void>((resolve) => { reached = resolve; });
+		const caps: unknown[] = [];
+		const upstream = await mockUpstream(async (_request, response, body) => {
+			caps.push(body.max_tokens);
+			expect(body).not.toHaveProperty("max_output_tokens");
+			if (caps.length === 1) {
+				reached();
+				await hold;
+			}
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end('data: {"usage":{"prompt_tokens":15,"completion_tokens":5,"total_tokens":20}}\n\ndata: [DONE]\n\n');
+		});
+		const gateway = await gatewayFor(upstream.url, {
+			...baseLimits, maxTotalTokens: inputBound + 120, minOutputTokensPerRequest: 64,
+		});
+		const first = callGateway(gateway.url, "client-token", { max_output_tokens: 512 });
+		await started;
+		try {
+			expect(gateway.status()).toMatchObject({ reservedTokens: inputBound + 120, activeRequests: 1 });
+			const concurrent = await callGateway(gateway.url, "client-token", { max_output_tokens: 512 });
+			expect(await concurrent.json()).toEqual({ error: "GATEWAY_CONCURRENCY_LIMIT" });
+		} finally {
+			release();
+		}
+		await (await first).text();
+		const [outcome] = gateway.status().requestOutcomes;
+		expect(outcome).toMatchObject({
+			inputTokens: 15, outputTokens: 5,
+			reservationDiagnostics: {
+				inputTokenUpperBound: inputBound,
+				defaultOutputTokenLimit: 256, minimumOutputTokens: 64,
+				requestedOutputTokens: 512, outputTokenLimit: 120, outputLimitReduced: true,
+				candidateReservedTokens: inputBound + 120,
+			},
+			settlement: { committedTokens: 20, releasedTokens: inputBound + 100 },
+		});
+		expect(outcome!.settlement.releasedCostUsd).toBeCloseTo(
+			outcome!.reservationDiagnostics.candidateReservedCostUsd - outcome!.actualCostUsd!, 12,
+		);
+		await (await callGateway(gateway.url, "client-token", { max_output_tokens: 512 })).text();
+		expect(caps).toEqual([120, 100]);
+		const denied = await callGateway(gateway.url, "client-token", {
+			max_output_tokens: 512, messages: [{ role: "user", content: "x".repeat(200) }],
+		});
+		expect(await denied.json()).toEqual({ error: "GATEWAY_TOKEN_BUDGET" });
+		expect(caps).toEqual([120, 100]);
+		expect(gateway.status()).toMatchObject({ reservedTokens: 0, activeRequests: 0, actualTotalTokens: 40 });
+	});
+
+	it("honors the USD cap and keeps the reservation when reported usage exceeds the effective cap", async () => {
+		let outputLimit = 0;
+		const upstream = await mockUpstream(async (_request, response, body) => {
+			outputLimit = Number(body.max_tokens);
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			const tooMany = outputLimit + 1;
+			response.end(`data: {"usage":{"prompt_tokens":1,"completion_tokens":${tooMany}}}\n\ndata: [DONE]\n\n`);
+		});
+		const gateway = await gatewayFor(upstream.url, {
+			...baseLimits, maxTotalCostUsd: 0.00145, minOutputTokensPerRequest: 64,
+		});
+		await (await callGateway(gateway.url, "client-token")).text();
+		expect(outputLimit).toBeGreaterThanOrEqual(64);
+		expect(outputLimit).toBeLessThan(256);
+		const status = gateway.status();
+		expect(status).toMatchObject({
+			state: "failed_closed", lastError: "GATEWAY_PROVIDER_USAGE_EXCEEDED_RESERVATION", reservedTokens: 0,
+		});
+		expect(status.requestOutcomes[0]).toMatchObject({ settlement: { releasedTokens: 0, releasedCostUsd: 0 } });
+		expect(status.committedCostUpperBoundUsd).toBeLessThanOrEqual(0.00145);
+	});
+
 	it("accepts only authenticated isolation-stop signals and never forwards them upstream", async () => {
 		const upstream = await mockUpstream(async (_request, response) => {
 			response.writeHead(500).end();
@@ -186,18 +266,16 @@ describe("Batch H hard budget gateway", () => {
 			code: "GATEWAY_TOKEN_BUDGET",
 			upstreamForwarded: false,
 			reservationDiagnostics: {
-				formulaVersion: "utf8_bytes_plus4096_v1",
+				formulaVersion: "utf8_max_in_out_plus4096_v2",
 				requestBodyBytes: Buffer.byteLength(
 					JSON.stringify({ model: "deepseek-flash", messages: [{ role: "user", content: "test" }], stream: true }),
 				),
-				inputTokenUpperBound:
-					Buffer.byteLength(
-						JSON.stringify({
-							model: "deepseek-flash",
-							messages: [{ role: "user", content: "test" }],
-							stream: true,
-						}),
-					) + 4096,
+				inputSafetyMarginTokens: 4096,
+				inputEstimateBytes: Buffer.byteLength(JSON.stringify({
+					model: "deepseek-flash", messages: [{ role: "user", content: "test" }], stream: true,
+					max_tokens: 256, stream_options: { include_usage: true }, user_id: "pi_enhanced_controlled_pilot",
+				})),
+				inputTokenUpperBound: 4280,
 				requestedOutputTokens: 256,
 				outputTokenLimit: 256,
 				maxTotalTokens: 100,

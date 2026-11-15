@@ -350,7 +350,7 @@ it.skipIf(!available).each(cases)(
 				const denial = result.gatewayRejections.at(-1);
 				expect(denial).toMatchObject({ code: "GATEWAY_TOKEN_BUDGET", upstreamForwarded: false });
 				const d = denial.reservationDiagnostics;
-				expect(d.inputTokenUpperBound).toBe(d.requestBodyBytes + 4096);
+				expect(d.inputTokenUpperBound).toBe(d.inputEstimateBytes + d.inputSafetyMarginTokens);
 				expect(d.candidateReservedTokens).toBe(d.inputTokenUpperBound + d.outputTokenLimit);
 				expect(d.candidateReservedTokens).toBeGreaterThan(d.remainingTokenHeadroom);
 				expect(result.telemetry.requests.at(-1)).toMatchObject({

@@ -26,6 +26,12 @@ export interface VerificationResult {
 	} | null;
 }
 
+const CONFIG_CHECKS = [
+	{ input: "{}", expected: 5000 },
+	{ input: "{timeoutMs:7}", expected: 7 },
+];
+const configObservations = CONFIG_CHECKS.map(({ input }) => `config.loadConfig(${input}).timeoutMs`);
+
 const TASKS: Record<string, { program: string; expected: unknown }> = {
 	"single-file-off-by-one": { program: "const m=await import('./math.js');return [m.sumTo(3)];", expected: [6] },
 	"cross-file-export": {
@@ -33,9 +39,8 @@ const TASKS: Record<string, { program: string; expected: unknown }> = {
 		expected: ["PI"],
 	},
 	"config-default": {
-		program:
-			"const m=await import('./config.js');return [m.loadConfig({}).timeoutMs,m.loadConfig({timeoutMs:7}).timeoutMs];",
-		expected: [5000, 7],
+		program: `const config = await import('./config.js');return [${configObservations.join(",")}];`,
+		expected: CONFIG_CHECKS.map(({ expected }) => expected),
 	},
 	"long-output-localization": {
 		program: "const m=await import('./validate.js');return [m.validateItems([...Array(20).fill(1),-1])];",
@@ -61,9 +66,13 @@ export async function verifyPatchInDocker(
 	return await runDockerCheck(taskId, config, limits);
 }
 
-export async function runSingleFileTestInDocker(config: SandboxConfig, signal?: AbortSignal) {
+export async function runApprovedTestInDocker(
+	taskId: "single-file-off-by-one" | "config-default",
+	config: SandboxConfig,
+	signal?: AbortSignal,
+) {
 	const output = { stdout: "", stderr: "" };
-	const result = await runDockerCheck("single-file-off-by-one", config, { maxOutputBytes: 2_048 }, { output, signal });
+	const result = await runDockerCheck(taskId, config, { maxOutputBytes: 2_048 }, { output, signal });
 	return { ...output, result };
 }
 
@@ -113,8 +122,25 @@ async function runDockerCheck(
 			if (!config.containerOwner) throw new Error("VERIFIER_NOT_AUTHORIZED");
 			assertSandboxContainerOwner(config.containerOwner);
 		}
-		const source = feedback
-			? `import { strictEqual } from "node:assert/strict";
+		const configFeedback = feedback && taskId === "config-default" ? feedback : undefined;
+		const source = configFeedback
+			? `const emit = process.stdout.write.bind(process.stdout);
+const encode = JSON.stringify;
+const isFinite = Number.isFinite;
+const observe = (check) => {
+	try {
+		const value = check();
+		return isFinite(value) ? value : null;
+	} catch {
+		return null;
+	}
+};
+const config = await import("./config.js");
+const actual = [${configObservations.map((expression) => `observe(() => ${expression})`).join(",")}];
+emit(encode({ protocolVersion: 1, actual }));
+process.exitCode = ${CONFIG_CHECKS.map(({ expected }, index) => `actual[${index}] === ${expected}`).join(" && ")} ? 0 : 1;`
+			: feedback
+				? `import { strictEqual } from "node:assert/strict";
 const passed = console.log.bind(console);
 const failed = console.error.bind(console);
 try {
@@ -126,7 +152,7 @@ try {
 	failed("sumTo(3): " + diagnostic);
 	process.exitCode = 1;
 }`
-			: `const emit=process.stdout.write.bind(process.stdout);const encode=JSON.stringify;const actual=await(async()=>{${task.program}})();emit(encode({protocolVersion:1,actual}));`;
+				: `const emit=process.stdout.write.bind(process.stdout);const encode=JSON.stringify;const actual=await(async()=>{${task.program}})();emit(encode({protocolVersion:1,actual}));`;
 		id = execFileSync(
 			"docker",
 			[
@@ -218,7 +244,12 @@ try {
 				clearTimeout(timer);
 				feedback?.signal?.removeEventListener("abort", cancel);
 				const stdout = Buffer.concat(chunks).toString("utf8");
-				if (feedback) Object.assign(feedback.output, { stdout, stderr: Buffer.concat(errors).toString("utf8") });
+				if (feedback) {
+				Object.assign(feedback.output, {
+					stdout: configFeedback ? "" : stdout,
+					stderr: Buffer.concat(errors).toString("utf8"),
+				});
+			}
 				done({ code, stdout, failure });
 			};
 			const abort = (failure: string): void => {
@@ -264,13 +295,14 @@ try {
 			if (state.Status !== "exited" || state.OOMKilled || state.Error || state.StartedAt.startsWith("0001-"))
 				throw new Error("VERIFIER_CONTAINER_EXECUTION_FAILED");
 			result.containerExitCode = state.ExitCode;
-			if (execution.code !== 0 || state.ExitCode !== 0) {
+			const configCheckFailed = configFeedback && execution.code === 1 && state.ExitCode === 1;
+			if ((execution.code !== 0 || state.ExitCode !== 0) && !configCheckFailed) {
 				result.status = state.ExitCode === 1 ? "verification_failed" : "runtime_error";
 				result.errorCode = "VERIFIER_PROGRAM_FAILED";
 				return result;
 			}
 			try {
-				if (feedback) {
+				if (feedback && !configFeedback) {
 					result.status = "passed";
 					result.passed = true;
 					return result;
@@ -282,8 +314,29 @@ try {
 					Object.keys(value).sort().join(",") !== "actual,protocolVersion"
 				)
 					throw new Error("invalid protocol");
-				result.passed = isDeepStrictEqual(value.actual, task.expected);
-				result.status = result.passed ? "passed" : "verification_failed";
+				const passed = isDeepStrictEqual(value.actual, task.expected);
+				if (configFeedback) {
+					const actual = value.actual;
+					if (
+						!Array.isArray(actual) ||
+						actual.length !== CONFIG_CHECKS.length ||
+						!actual.every((item: unknown) => item === null || Number.isFinite(item)) ||
+						state.ExitCode !== (passed ? 0 : 1)
+					) {
+						throw new Error("invalid config checks");
+					}
+					const stdout: string[] = [];
+					const stderr: string[] = [];
+					for (const [index, { input, expected }] of CONFIG_CHECKS.entries()) {
+						const observed: number | null = actual[index];
+						const label = `loadConfig(${input}).timeoutMs`;
+						if (observed === expected) stdout.push(`PASS ${label}: ${observed}`);
+						else stderr.push(`FAIL ${label}: expected ${expected}, got ${observed ?? "no numeric result"}`);
+					}
+					Object.assign(configFeedback.output, { stdout: stdout.join("\n"), stderr: stderr.join("\n") });
+				}
+				result.passed = passed;
+				result.status = passed ? "passed" : "verification_failed";
 			} catch {
 				result.status = "protocol_error";
 				result.errorCode = "VERIFIER_INVALID_RESPONSE";

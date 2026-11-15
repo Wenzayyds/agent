@@ -48,7 +48,7 @@ export interface RunnerContext {
 	comparisonProfile?: string;
 	condition: string;
 	readonlyModuleTools: boolean;
-	singleFileTestFeedback?: boolean;
+	testFeedback?: boolean;
 	telemetryEnabled: boolean;
 	localStubUrl?: string;
 	authorization?: BatchLAuthorization;
@@ -99,7 +99,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		join(agentDir, "settings.json"),
 		JSON.stringify({
 			defaultProjectTrust: "always",
-			...(cell || task.swebench || context.singleFileTestFeedback ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
+			...(cell || task.swebench || context.testFeedback ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
 		}),
 	);
 	writeFileSync(
@@ -172,7 +172,9 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 						? `\n${NEXT_EVALUATION_INSTRUCTIONS}`
 						: "")
 			: task.prompt +
-				(context.singleFileTestFeedback ? "\n先用 run_tests 复现失败。只修改 math.js，修改后复测；若失败，按测试反馈继续修复。" : "") +
+				(context.testFeedback
+					? `\n先用 run_tests 复现失败。只修改 ${task.id === "config-default" ? "config.js" : "math.js"}，修改后复测；若失败，按测试反馈继续修复。`
+					: "") +
 				(cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") +
 				(cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") +
 				(moduleTools.includes("enhanced_memory_search")

@@ -63,7 +63,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		batchL,
 		switches,
 		readonlyModuleTools,
-		singleFileTestFeedback,
+		testFeedback,
 		telemetryEnabled,
 		localStubUrl,
 		authorization,
@@ -199,6 +199,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			maxConcurrency: 1,
 			requestTimeoutMs: Math.min(plan!.timeoutMs, 120_000),
 			maxOutputTokensPerRequest: Math.min(maxOutputTokens, plan!.maxTokensPerTask),
+			...(testFeedback ? { minOutputTokensPerRequest: Math.min(256, plan!.maxTokensPerTask) } : {}),
 			maxRequestBytes: 2 * 1024 * 1024,
 		},
 		pricing: model === "deepseek-v4-pro"
@@ -210,7 +211,9 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		"--extension",
 		join(packageRoot, "extensions", "mcp-policy.ts"),
 		"--extension",
-		singleFileTestFeedback ? join(here, "single-file-test-feedback.ts") : join(packageRoot, "extensions", "sandbox.ts"),
+		testFeedback
+			? join(here, task.id === "config-default" ? "config-default-test-feedback.ts" : "single-file-test-feedback.ts")
+			: join(packageRoot, "extensions", "sandbox.ts"),
 	];
 	if (controlled)
 		extensionArgs.push(
@@ -235,6 +238,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	let handshakeError: Error | undefined;
 	let containersRemoved: boolean;
 	let executionFailure: { error: unknown } | undefined;
+	let boundaryShutdownDeadline: number | undefined;
 	try {
 		writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));
 		if (controlled) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
@@ -249,8 +253,8 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 				provider!,
 				"--model",
 				model!,
-				...(batchL || task.swebench || singleFileTestFeedback ? ["--thinking", "off"] : []),
-				...(singleFileTestFeedback
+				...(batchL || task.swebench || testFeedback ? ["--thinking", "off"] : []),
+				...(testFeedback
 					? [
 							"--no-extensions",
 							"--no-builtin-tools",
@@ -291,11 +295,22 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 						}
 					: {}),
 				env: childEnvironment,
-				...(controlled || singleFileTestFeedback
+				...(testFeedback ? { onTimeout: () => gateway.stop("GATEWAY_RUN_TIMEOUT") } : {}),
+				...(controlled || testFeedback
 					? {
 							stopOnBoundaryFailure: () => {
 								const status = gateway.status();
-								return status.state !== "ready" || status.requestsRejected > 0;
+								if (status.state === "ready" && status.requestsRejected === 0) return false;
+								const denial = status.denials[0]?.code ?? "";
+								const budgetStop = ["GATEWAY_TOKEN_BUDGET", "GATEWAY_COST_BUDGET", "GATEWAY_REQUEST_LIMIT"].includes(denial);
+								const providerStop = /^GATEWAY_(?:UPSTREAM_|USAGE_|PROVIDER_USAGE_)/u.test(status.lastError ?? "");
+								if (testFeedback && status.activeRequests === 0 && (providerStop || (status.requestsRejected === 1 && budgetStop))) {
+									// The feedback profile disables retries. Give Pi time to flush its real terminal audit.
+									const now = performance.now();
+									boundaryShutdownDeadline ??= now + 2_000;
+									return now >= boundaryShutdownDeadline;
+								}
+								return true;
 							},
 						}
 					: {}),
@@ -309,7 +324,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		({ gatewayStatus, containersRemoved } = await finalizeAgentExecution(
 			gateway,
 			controlled && !admission?.denied ? join(runOutput!, task.id) : undefined,
-			controlled || singleFileTestFeedback ? () => removeRunContainers(containerOwner) : undefined,
+			controlled || testFeedback ? () => removeRunContainers(containerOwner) : undefined,
 			executionFailure,
 		));
 	}
@@ -369,6 +384,7 @@ async function runAgentProcess(
 		env: NodeJS.ProcessEnv;
 		timeoutMs: number;
 		stopOnBoundaryFailure?: () => boolean;
+		onTimeout?: () => void;
 		onEvent?: (value: unknown) => void;
 		onEventError?: () => void;
 		onSpawn?: (pid: number | undefined) => void;
@@ -392,6 +408,7 @@ async function runAgentProcess(
 		const stderr: Buffer[] = [];
 		let size = 0;
 		let timedOut = false;
+		let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 		let eventBuffer = "";
 		const decoder = new TextDecoder();
 		const collect = (target: Buffer[], chunk: Buffer) => {
@@ -421,17 +438,23 @@ async function runAgentProcess(
 		child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
 		const boundaryTimer = options.stopOnBoundaryFailure
 			? setInterval(() => {
-					if (options.stopOnBoundaryFailure?.()) child.kill();
+					if (!(timedOut && options.onTimeout) && options.stopOnBoundaryFailure?.()) child.kill();
 				}, 25)
 			: undefined;
 		const timer = setTimeout(() => {
 			timedOut = true;
+			if (options.onTimeout) {
+				options.onTimeout();
+				forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+				return;
+			}
 			// A SIGSTOPped Linux child cannot handle SIGTERM until it resumes.
 			if (process.platform === "linux") child.kill("SIGCONT");
 			child.kill();
 		}, options.timeoutMs);
 		child.once("close", (status) => {
 			clearTimeout(timer);
+			clearTimeout(forceKillTimer);
 			clearInterval(boundaryTimer);
 			resolveProcess({
 				status,
@@ -444,6 +467,7 @@ async function runAgentProcess(
 		});
 		child.once("error", (error) => {
 			clearTimeout(timer);
+			clearTimeout(forceKillTimer);
 			clearInterval(boundaryTimer);
 			stderr.push(Buffer.from(error.message));
 			resolveProcess({

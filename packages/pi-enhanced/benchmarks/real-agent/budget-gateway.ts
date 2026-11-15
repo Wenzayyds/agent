@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { EvaluationTelemetry, ReservationDiagnostics } from "./evaluation-telemetry.ts";
+import type { EvaluationTelemetry, ReservationDiagnostics, ReservationSettlement } from "./evaluation-telemetry.ts";
 
 export interface BudgetGatewayLimits {
 	maxRequests: number;
@@ -8,6 +8,7 @@ export interface BudgetGatewayLimits {
 	maxConcurrency: number;
 	requestTimeoutMs: number;
 	maxOutputTokensPerRequest: number;
+	minOutputTokensPerRequest?: number;
 	maxRequestBytes: number;
 }
 
@@ -51,6 +52,7 @@ interface ProviderUsage {
 }
 
 interface Reservation {
+	diagnostics: ReservationDiagnostics;
 	inputTokenUpperBound: number;
 	outputTokenLimit: number;
 	reservedTokens: number;
@@ -81,6 +83,11 @@ export interface BudgetGatewayStatus {
 		usageSeen: boolean;
 		doneSeen: boolean;
 		elapsedMs: number;
+		reservationDiagnostics: ReservationDiagnostics;
+		settlement: ReservationSettlement;
+		inputTokens: number | null;
+		outputTokens: number | null;
+		actualCostUsd: number | null;
 	}>;
 	limits: BudgetGatewayLimits;
 }
@@ -134,91 +141,102 @@ class BudgetLedger {
 		if (this.state.requestOutcomes.length > 64) this.state.requestOutcomes.shift();
 	}
 
-	reserve(bodyBytes: number, requestedOutputTokens: number, requestSequence: number): Reservation {
+	reserve(bodyBytes: number, outboundBytes: number, requestedOutputTokens: number, defaultOutputTokenLimit: number, requestSequence: number): Reservation {
 		if (this.state.state !== "ready") return this.reject("GATEWAY_FAILED_CLOSED", requestSequence);
 		if (this.state.activeRequests >= this.limits.maxConcurrency)
 			return this.reject("GATEWAY_CONCURRENCY_LIMIT", requestSequence);
 		if (this.state.requestsStarted >= this.limits.maxRequests)
 			return this.reject("GATEWAY_REQUEST_LIMIT", requestSequence);
-		const outputTokenLimit = Math.max(1, Math.min(requestedOutputTokens, this.limits.maxOutputTokensPerRequest));
-		// A UTF-8 token cannot contain fewer than one byte. The fixed allowance covers provider-side
-		// message framing that is not present in the serialized request body.
-		const inputTokenUpperBound = bodyBytes + 4096;
+
+		const minimumOutputTokens = this.limits.minOutputTokensPerRequest ?? defaultOutputTokenLimit;
+		const inputEstimateBytes = Math.max(bodyBytes, outboundBytes);
+		// At least one byte per token, plus a fixed allowance for provider-side framing.
+		const inputSafetyMarginTokens = 4096;
+		const inputTokenUpperBound = inputEstimateBytes + inputSafetyMarginTokens;
+		const remainingTokenHeadroom = this.limits.maxTotalTokens - this.state.committedTokenUpperBound - this.state.reservedTokens;
+		const remainingCostHeadroomUsd = this.limits.maxTotalCostUsd - this.state.committedCostUpperBoundUsd - this.state.reservedCostUsd;
+		const outputRoomByTokens = Math.floor(remainingTokenHeadroom - inputTokenUpperBound);
+		const inputCostUsd = this.cost(inputTokenUpperBound, 0);
+		const outputRoomByCost = this.pricing.outputUsdPerMillion === 0
+			? Infinity
+			: Math.floor((remainingCostHeadroomUsd - inputCostUsd) * 1_000_000 / this.pricing.outputUsdPerMillion);
+		const affordableOutputTokens = Math.min(defaultOutputTokenLimit, outputRoomByTokens, outputRoomByCost);
+		const outputTokenLimit = Math.min(defaultOutputTokenLimit, Math.max(minimumOutputTokens, affordableOutputTokens));
 		const reservedTokens = inputTokenUpperBound + outputTokenLimit;
-		const reservedCostUsd =
-			(inputTokenUpperBound * this.pricing.inputUsdPerMillion +
-				outputTokenLimit * this.pricing.outputUsdPerMillion) /
-			1_000_000;
+		const reservedCostUsd = this.cost(inputTokenUpperBound, outputTokenLimit);
 		const diagnostics: ReservationDiagnostics = {
-			formulaVersion: "utf8_bytes_plus4096_v1",
+			formulaVersion: "utf8_max_in_out_plus4096_v2",
 			requestBodyBytes: bodyBytes,
+			inputEstimateBytes,
+			inputSafetyMarginTokens,
 			requestedOutputTokens,
+			defaultOutputTokenLimit,
+			minimumOutputTokens,
 			outputTokenLimit,
+			outputLimitReduced: outputTokenLimit < defaultOutputTokenLimit,
 			inputTokenUpperBound,
 			candidateReservedTokens: reservedTokens,
 			candidateReservedCostUsd: reservedCostUsd,
 			maxTotalTokens: this.limits.maxTotalTokens,
-			remainingTokenHeadroom:
-				this.limits.maxTotalTokens - this.state.committedTokenUpperBound - this.state.reservedTokens,
+			remainingTokenHeadroom,
 			maxTotalCostUsd: this.limits.maxTotalCostUsd,
-			remainingCostHeadroomUsd:
-				this.limits.maxTotalCostUsd - this.state.committedCostUpperBoundUsd - this.state.reservedCostUsd,
+			remainingCostHeadroomUsd,
 		};
-		if (
-			this.state.committedTokenUpperBound + this.state.reservedTokens + reservedTokens >
-			this.limits.maxTotalTokens
-		) {
+		if (defaultOutputTokenLimit < minimumOutputTokens)
+			return this.reject("GATEWAY_OUTPUT_LIMIT_TOO_LOW", requestSequence, diagnostics);
+		if (reservedTokens > remainingTokenHeadroom)
 			return this.reject("GATEWAY_TOKEN_BUDGET", requestSequence, diagnostics);
-		}
-		if (
-			this.state.committedCostUpperBoundUsd + this.state.reservedCostUsd + reservedCostUsd >
-			this.limits.maxTotalCostUsd + Number.EPSILON
-		) {
+		if (reservedCostUsd > remainingCostHeadroomUsd)
 			return this.reject("GATEWAY_COST_BUDGET", requestSequence, diagnostics);
-		}
 		this.state.requestsStarted += 1;
 		this.state.activeRequests += 1;
 		this.state.reservedTokens += reservedTokens;
 		this.state.reservedCostUsd += reservedCostUsd;
-		return {
-			inputTokenUpperBound,
-			outputTokenLimit,
-			reservedTokens,
-			reservedCostUsd,
-		};
+		return { diagnostics, inputTokenUpperBound, outputTokenLimit, reservedTokens, reservedCostUsd };
 	}
 
-	complete(reservation: Reservation, usage: ProviderUsage | null): void {
-		this.releaseActive(reservation);
+	complete(reservation: Reservation, usage: ProviderUsage | null): ReservationSettlement {
 		this.state.requestsCompleted += 1;
-		if (!usage) {
-			this.commitReservation(reservation, "GATEWAY_USAGE_MISSING");
-			return;
-		}
-		const actualCostUsd =
-			(usage.promptTokens * this.pricing.inputUsdPerMillion +
-				usage.completionTokens * this.pricing.outputUsdPerMillion) /
-			1_000_000;
+		if (!usage) return this.fail(reservation, "GATEWAY_USAGE_MISSING");
+
+		const actualCostUsd = this.cost(usage.promptTokens, usage.completionTokens);
 		this.state.actualInputTokens += usage.promptTokens;
 		this.state.actualOutputTokens += usage.completionTokens;
 		this.state.actualTotalTokens += usage.totalTokens;
 		this.state.actualCostUsd += actualCostUsd;
-		this.state.committedTokenUpperBound += usage.totalTokens;
-		this.state.committedCostUpperBoundUsd += actualCostUsd;
 		if (
 			usage.promptTokens > reservation.inputTokenUpperBound ||
 			usage.completionTokens > reservation.outputTokenLimit ||
-			usage.totalTokens > reservation.reservedTokens ||
-			this.state.committedTokenUpperBound > this.limits.maxTotalTokens ||
-			this.state.committedCostUpperBoundUsd > this.limits.maxTotalCostUsd + Number.EPSILON
+			usage.totalTokens > reservation.reservedTokens
 		) {
 			this.failClosed("GATEWAY_PROVIDER_USAGE_EXCEEDED_RESERVATION");
+			return this.settle(reservation, Math.max(usage.totalTokens, reservation.reservedTokens),
+				Math.max(actualCostUsd, reservation.reservedCostUsd));
 		}
+		return this.settle(reservation, usage.totalTokens, actualCostUsd);
 	}
 
-	fail(reservation: Reservation, reason: string): void {
-		this.releaseActive(reservation);
-		this.commitReservation(reservation, reason);
+	fail(reservation: Reservation, reason: string): ReservationSettlement {
+		this.failClosed(reason);
+		return this.settle(reservation, reservation.reservedTokens, reservation.reservedCostUsd);
+	}
+
+	private cost(input: number, output: number): number {
+		return (input * this.pricing.inputUsdPerMillion + output * this.pricing.outputUsdPerMillion) / 1_000_000;
+	}
+
+	private settle(reservation: Reservation, committedTokens: number, committedCostUsd: number): ReservationSettlement {
+		this.state.activeRequests -= 1;
+		this.state.reservedTokens = Math.max(0, this.state.reservedTokens - reservation.reservedTokens);
+		this.state.reservedCostUsd = Math.max(0, this.state.reservedCostUsd - reservation.reservedCostUsd);
+		this.state.committedTokenUpperBound += committedTokens;
+		this.state.committedCostUpperBoundUsd += committedCostUsd;
+		return {
+			committedTokens,
+			committedCostUsd,
+			releasedTokens: Math.max(0, reservation.reservedTokens - committedTokens),
+			releasedCostUsd: Math.max(0, reservation.reservedCostUsd - committedCostUsd),
+		};
 	}
 
 	deny(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null): void {
@@ -274,24 +292,12 @@ class BudgetLedger {
 		this.state.state = "closed";
 	}
 
-	stopForIsolation(): void {
-		this.failClosed("GATEWAY_ISOLATION_STOP");
+	stop(reason: string): void {
+		this.failClosed(reason);
 	}
 
 	snapshot(): BudgetGatewayStatus {
 		return JSON.parse(JSON.stringify(this.state)) as BudgetGatewayStatus;
-	}
-
-	private releaseActive(reservation: Reservation): void {
-		this.state.activeRequests = Math.max(0, this.state.activeRequests - 1);
-		this.state.reservedTokens = Math.max(0, this.state.reservedTokens - reservation.reservedTokens);
-		this.state.reservedCostUsd = Math.max(0, this.state.reservedCostUsd - reservation.reservedCostUsd);
-	}
-
-	private commitReservation(reservation: Reservation, reason: string): void {
-		this.state.committedTokenUpperBound += reservation.reservedTokens;
-		this.state.committedCostUpperBoundUsd += reservation.reservedCostUsd;
-		this.failClosed(reason);
 	}
 
 	private failClosed(reason: string): void {
@@ -312,14 +318,16 @@ class GatewayRejection extends Error {
 export interface RunningBudgetGateway {
 	url: string;
 	status(): BudgetGatewayStatus;
+	stop(reason: "GATEWAY_RUN_TIMEOUT"): void;
 	close(): Promise<void>;
 }
 
 export async function startBudgetGateway(options: BudgetGatewayOptions): Promise<RunningBudgetGateway> {
 	validateOptions(options);
 	const ledger = new BudgetLedger(options.runId, options.limits, options.pricing, options.telemetry);
+	const active = new Set<AbortController>();
 	const server = createServer((request, response) => {
-		void handleRequest(request, response, options, ledger);
+		void handleRequest(request, response, options, ledger, active);
 	});
 	server.requestTimeout = options.limits.requestTimeoutMs + 5_000;
 	server.headersTimeout = Math.min(server.requestTimeout, 30_000);
@@ -330,6 +338,10 @@ export async function startBudgetGateway(options: BudgetGatewayOptions): Promise
 	return {
 		url: `http://127.0.0.1:${address.port}`,
 		status: () => ledger.snapshot(),
+		stop: (reason) => {
+			ledger.stop(reason);
+			for (const controller of active) controller.abort(new Error(reason));
+		},
 		close: async () => {
 			ledger.close();
 			await closeServer(server);
@@ -342,10 +354,11 @@ async function handleRequest(
 	response: ServerResponse,
 	options: BudgetGatewayOptions,
 	ledger: BudgetLedger,
+	active: Set<AbortController>,
 ): Promise<void> {
 	if (request.method === "POST" && request.url === "/__budget/stop-isolation") {
 		if (!hasBearer(request, options.clientToken)) return sendJson(response, 401, { error: "GATEWAY_CLIENT_AUTH" });
-		ledger.stopForIsolation();
+		ledger.stop("GATEWAY_ISOLATION_STOP");
 		return sendJson(response, 200, { state: "failed_closed" });
 	}
 	if (request.method === "GET" && request.url === "/__budget/health") {
@@ -389,32 +402,54 @@ async function handleRequest(
 		ledger.deny("GATEWAY_STREAM_REQUIRED", requestSequence);
 		return sendJson(response, 400, { error: "GATEWAY_STREAM_REQUIRED" });
 	}
-	const requestedOutput =
-		positiveInteger(body.max_tokens) ??
-		positiveInteger(body.max_completion_tokens) ??
-		options.limits.maxOutputTokensPerRequest;
+	if ((body.n !== undefined && body.n !== 1) || (body.best_of !== undefined && body.best_of !== 1)) {
+		ledger.deny("GATEWAY_MULTIPLE_OUTPUTS_DENIED", requestSequence);
+		return sendJson(response, 400, { error: "GATEWAY_MULTIPLE_OUTPUTS_DENIED" });
+	}
+	const requestedOutput = Math.min(
+		positiveInteger(body.max_tokens) ?? Infinity,
+		positiveInteger(body.max_completion_tokens) ?? Infinity,
+		positiveInteger(body.max_output_tokens) ?? Infinity,
+		options.limits.maxOutputTokensPerRequest,
+	);
+	const requestedOutputTokens =
+		positiveInteger(body.max_tokens) ?? positiveInteger(body.max_completion_tokens) ??
+		positiveInteger(body.max_output_tokens) ?? options.limits.maxOutputTokensPerRequest;
+	delete body.max_completion_tokens;
+	delete body.max_output_tokens;
+	delete body.best_of;
+	body.max_tokens = requestedOutput;
+	body.stream_options = { include_usage: true };
+	body.user_id = "pi_enhanced_controlled_pilot";
 	let reservation: Reservation;
 	try {
-		reservation = ledger.reserve(bodyBytes.byteLength, requestedOutput, requestSequence);
+		reservation = ledger.reserve(
+			bodyBytes.byteLength, Buffer.byteLength(JSON.stringify(body)), requestedOutputTokens, requestedOutput, requestSequence,
+		);
 	} catch (error) {
 		const code = error instanceof GatewayRejection ? error.code : "GATEWAY_REJECTED";
 		return sendJson(response, 429, { error: code });
 	}
 	body.max_tokens = reservation.outputTokenLimit;
-	delete body.max_completion_tokens;
-	body.stream_options = { include_usage: true };
-	body.user_id = "pi_enhanced_controlled_pilot";
 
 	const controller = new AbortController();
+	active.add(controller);
 	let settled = false;
 	let usage: ProviderUsage | null = null;
 	let doneSeen = false;
 	let receivedBytes = 0;
 	const startedAt = Date.now();
 	let usageAccounted = false;
+	let invalidUsage = false;
+	let settlement: ReservationSettlement;
 	const responseIds = new Set<string>();
 	const started = performance.now();
 	const recordOutcome = (outcome: string) => {
+		const inputTokens = usageAccounted ? usage!.promptTokens : null;
+		const outputTokens = usageAccounted ? usage!.completionTokens : null;
+		const actualCostUsd = inputTokens !== null && outputTokens !== null
+			? (inputTokens * options.pricing.inputUsdPerMillion + outputTokens * options.pricing.outputUsdPerMillion) / 1_000_000
+			: null;
 		ledger.recordOutcome({
 			requestSequence,
 			outcome,
@@ -422,6 +457,11 @@ async function handleRequest(
 			usageSeen: usage !== null,
 			doneSeen,
 			elapsedMs: Number((performance.now() - started).toFixed(3)),
+			reservationDiagnostics: reservation.diagnostics,
+			settlement,
+			inputTokens,
+			outputTokens,
+			actualCostUsd,
 		});
 		options.telemetry?.provider({
 			runId: options.runId,
@@ -432,14 +472,12 @@ async function handleRequest(
 			outcome,
 			usageSeen: usage !== null,
 			doneSeen,
-			inputTokens: usageAccounted ? usage!.promptTokens : null,
-			outputTokens: usageAccounted ? usage!.completionTokens : null,
+			inputTokens,
+			outputTokens,
 			totalTokens: usageAccounted ? usage!.totalTokens : null,
-			conservativeCostUsd: usageAccounted
-				? (usage!.promptTokens * options.pricing.inputUsdPerMillion +
-						usage!.completionTokens * options.pricing.outputUsdPerMillion) /
-					1_000_000
-				: null,
+			conservativeCostUsd: actualCostUsd,
+			reservationDiagnostics: reservation.diagnostics,
+			settlement,
 			reservedTokenUpperBound: reservation.reservedTokens,
 			reservedCostUpperBoundUsd: reservation.reservedCostUsd,
 			responseIds: [...responseIds],
@@ -471,7 +509,7 @@ async function handleRequest(
 		response.setHeader("Content-Type", upstream.headers.get("content-type") ?? "text/event-stream; charset=utf-8");
 		response.setHeader("Cache-Control", "no-store");
 		if (!upstream.body) {
-			ledger.fail(reservation, "GATEWAY_UPSTREAM_BODY_MISSING");
+			settlement = ledger.fail(reservation, "GATEWAY_UPSTREAM_BODY_MISSING");
 			settled = true;
 			recordOutcome("GATEWAY_UPSTREAM_BODY_MISSING");
 			response.end();
@@ -486,12 +524,13 @@ async function handleRequest(
 			const parsed = consumeSseLines(pending, options.telemetry ? responseIds : undefined);
 			pending = parsed.remainder;
 			if (parsed.hasUsage) usage = parsed.usage;
+			invalidUsage ||= parsed.invalidUsage;
 			doneSeen ||= parsed.done;
 			// Settle before exposing DONE: Pi may close the downstream immediately.
 			if (doneSeen) {
-				if (upstream.ok) ledger.complete(reservation, usage);
-				else ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
-				usageAccounted = upstream.ok && usage !== null;
+				if (upstream.ok) settlement = ledger.complete(reservation, invalidUsage ? null : usage);
+				else settlement = ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
+				usageAccounted = upstream.ok && !invalidUsage && usage !== null;
 				settled = true;
 				recordOutcome(ledger.snapshot().lastError ?? "completed_done");
 			}
@@ -501,10 +540,11 @@ async function handleRequest(
 		pending += decoder.decode();
 		const final = consumeSseLines(`${pending}\n`, options.telemetry ? responseIds : undefined);
 		if (final.hasUsage) usage = final.usage;
+		invalidUsage ||= final.invalidUsage;
 		if (!settled) {
-			if (upstream.ok) ledger.complete(reservation, usage);
-			else ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
-			usageAccounted = upstream.ok && usage !== null;
+			if (upstream.ok) settlement = ledger.complete(reservation, invalidUsage ? null : usage);
+			else settlement = ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
+			usageAccounted = upstream.ok && !invalidUsage && usage !== null;
 			settled = true;
 			recordOutcome(ledger.snapshot().lastError ?? "completed_eof");
 		}
@@ -513,7 +553,7 @@ async function handleRequest(
 		if (!settled) {
 			const reason = controller.signal.reason;
 			const code = controller.signal.aborted && reason instanceof Error ? reason.message : "GATEWAY_UPSTREAM_ERROR";
-			ledger.fail(reservation, code);
+			settlement = ledger.fail(reservation, code);
 			settled = true;
 			recordOutcome(code);
 		}
@@ -521,18 +561,20 @@ async function handleRequest(
 		else response.destroy(error instanceof Error ? error : undefined);
 	} finally {
 		clearTimeout(timeout);
+		active.delete(controller);
 	}
 }
 
 function consumeSseLines(
 	input: string,
 	responseIds?: Set<string>,
-): { remainder: string; usage: ProviderUsage | null; done: boolean; hasUsage: boolean } {
+): { remainder: string; usage: ProviderUsage | null; done: boolean; hasUsage: boolean; invalidUsage: boolean } {
 	const lines = input.split(/\r?\n/u);
 	const remainder = lines.pop() ?? "";
 	let usage: ProviderUsage | null = null;
 	let done = false;
 	let hasUsage = false;
+	let invalidUsage = false;
 	for (const line of lines) {
 		if (!line.startsWith("data:")) continue;
 		const data = line.slice(5).trim();
@@ -554,10 +596,11 @@ function consumeSseLines(
 			if (parsed.usage !== undefined && parsed.usage !== null) {
 				hasUsage = true;
 				usage = typeof parsed.usage === "object" ? parseUsage(parsed.usage) : null;
+				invalidUsage ||= usage === null;
 			}
 		} catch {}
 	}
-	return { remainder, usage, done, hasUsage };
+	return { remainder, usage, done, hasUsage, invalidUsage };
 }
 
 function parseUsage(value: Record<string, unknown>): ProviderUsage | null {
@@ -566,7 +609,7 @@ function parseUsage(value: Record<string, unknown>): ProviderUsage | null {
 	if (promptTokens === undefined || completionTokens === undefined) return null;
 	const totalTokens =
 		value.total_tokens === undefined ? promptTokens + completionTokens : nonnegativeInteger(value.total_tokens);
-	if (totalTokens === undefined) return null;
+	if (totalTokens === undefined || !Number.isSafeInteger(totalTokens)) return null;
 	if (totalTokens !== promptTokens + completionTokens) return null;
 	return {
 		promptTokens,
@@ -623,6 +666,12 @@ function validateOptions(options: BudgetGatewayOptions): void {
 		throw new Error("GATEWAY_SECRET_MISSING");
 	for (const value of Object.values(options.limits))
 		if (!Number.isFinite(value) || value <= 0) throw new Error("GATEWAY_LIMIT_INVALID");
+	const minimumOutput = options.limits.minOutputTokensPerRequest;
+	if (minimumOutput !== undefined &&
+		(!Number.isSafeInteger(minimumOutput) || minimumOutput > options.limits.maxOutputTokensPerRequest))
+		throw new Error("GATEWAY_OUTPUT_LIMIT_INVALID");
+	for (const rate of Object.values(options.pricing))
+		if (!Number.isFinite(rate) || rate < 0) throw new Error("GATEWAY_PRICING_INVALID");
 	if (options.limits.maxConcurrency !== 1) throw new Error("GATEWAY_CONCURRENCY_MUST_BE_ONE");
 }
 

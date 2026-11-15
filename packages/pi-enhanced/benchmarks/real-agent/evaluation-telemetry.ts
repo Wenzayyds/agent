@@ -30,8 +30,13 @@ const id = (value: unknown): string | null =>
 	typeof value === "string" && value.length > 0 && value.length <= 512 ? value : null;
 
 export interface ReservationDiagnostics {
-	formulaVersion: "utf8_bytes_plus4096_v1";
+	formulaVersion: "utf8_max_in_out_plus4096_v2";
 	requestBodyBytes: number;
+	inputEstimateBytes: number;
+	inputSafetyMarginTokens: number;
+	defaultOutputTokenLimit: number;
+	minimumOutputTokens: number;
+	outputLimitReduced: boolean;
 	requestedOutputTokens: number;
 	outputTokenLimit: number;
 	inputTokenUpperBound: number;
@@ -42,6 +47,13 @@ export interface ReservationDiagnostics {
 	maxTotalCostUsd: number;
 	remainingCostHeadroomUsd: number;
 }
+export interface ReservationSettlement {
+	committedTokens: number;
+	committedCostUsd: number;
+	releasedTokens: number;
+	releasedCostUsd: number;
+}
+
 export interface ProviderObservation {
 	runId: string;
 	requestSequence: number;
@@ -60,6 +72,7 @@ export interface ProviderObservation {
 	responseIds: string[];
 	pricing?: { inputUsdPerMillion: number; outputUsdPerMillion: number };
 	reservationDiagnostics?: ReservationDiagnostics | null;
+	settlement?: ReservationSettlement;
 	budgetSnapshot?: {
 		requestsStarted: number;
 		actualTotalTokens: number;

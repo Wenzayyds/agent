@@ -148,7 +148,36 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		}
 	}, 120_000);
 
-	it("delivers Docker test failure and passing retest to the next provider requests", async () => {
+	it.each([
+		{
+			task: "single-file-off-by-one" as const,
+			file: "math.js",
+			initial: "n * (n - 1) / 2",
+			firstEdit: "n * n",
+			secondEdit: "n * (n + 1) / 2",
+			initialFeedback: { stderr: expect.stringContaining("AssertionError") },
+			failedRetest: { stderr: expect.stringContaining("9 !== 6") },
+			passingRetest: { stdout: "PASS" },
+		},
+		{
+			task: "config-default" as const,
+			file: "config.js",
+			initial: "input.timeoutMs || 1000",
+			firstEdit: "5000",
+			secondEdit: "input.timeoutMs ?? 5000",
+			initialFeedback: {
+				stdout: "PASS loadConfig({timeoutMs:7}).timeoutMs: 7",
+				stderr: "FAIL loadConfig({}).timeoutMs: expected 5000, got 1000",
+			},
+			failedRetest: {
+				stdout: "PASS loadConfig({}).timeoutMs: 5000",
+				stderr: "FAIL loadConfig({timeoutMs:7}).timeoutMs: expected 7, got 5000",
+			},
+			passingRetest: {
+				stdout: "PASS loadConfig({}).timeoutMs: 5000\nPASS loadConfig({timeoutMs:7}).timeoutMs: 7",
+			},
+		},
+	])("delivers Docker test failure and passing retest to the next provider requests for $task", async (scenario) => {
 		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-single-file-feedback-"));
 		roots.push(root);
 		let turns = 0;
@@ -163,40 +192,40 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 			expect(historyCalls).toHaveLength(turns - 1);
 			expect(historyResults.map((message) => message.tool_call_id)).toEqual(historyCalls.map((call) => call.id));
 			const last = messages.at(-1);
-			function feedback(exitCode: number, output: string) {
+			function feedback(exitCode: number, output: { stdout?: string; stderr?: unknown }) {
 				expect(last?.role).toBe("tool");
 				expect(last?.tool_call_id).toBe(messages.at(-2)?.tool_calls?.[0]?.id);
 				expect(last?.content).not.toContain("node:internal");
 				expect(JSON.parse(last?.content ?? "")).toMatchObject({
 					exitCode,
 					status: exitCode === 0 ? "passed" : "verification_failed",
-					[exitCode === 0 ? "stdout" : "stderr"]: expect.stringContaining(output),
+					...output,
 				});
 			}
 			const edit = (oldText: string, newText: string) =>
-				toolCallSse("edit", { path: "math.js", edits: [{ oldText, newText }] }, 200 + turns, 20);
+				toolCallSse("edit", { path: scenario.file, edits: [{ oldText, newText }] }, 200 + turns, 20);
 			let sse: string;
 			switch (turns) {
 				case 1:
 					sse = toolCallSse("run_tests", {}, 201, 20);
 					break;
 				case 2:
-					feedback(1, "AssertionError");
-					sse = edit("n * (n - 1) / 2", "n * n");
+					feedback(1, scenario.initialFeedback);
+					sse = edit(scenario.initial, scenario.firstEdit);
 					break;
 				case 3:
 					sse = toolCallSse("run_tests", {}, 203, 20);
 					break;
 				case 4:
-					feedback(1, "9 !== 6");
-					sse = edit("n * n", "n * (n + 1) / 2");
+					feedback(1, scenario.failedRetest);
+					sse = edit(scenario.firstEdit, scenario.secondEdit);
 					break;
 				case 5:
 					sse = toolCallSse("run_tests", {}, 205, 20);
 					break;
 				case 6:
-					feedback(0, "PASS");
-					expect(JSON.parse(last?.content ?? "")).toEqual({ status: "passed", exitCode: 0, stdout: "PASS" });
+					feedback(0, scenario.passingRetest);
+					expect(JSON.parse(last?.content ?? "")).toEqual({ status: "passed", exitCode: 0, ...scenario.passingRetest });
 					sse = textSse("Verified", 206, 20);
 					break;
 				default:
@@ -204,8 +233,8 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 			}
 			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(sse);
 		});
-		const runId = "single_file_feedback_stub";
-		const result = await runRunner(provider.url, root, image, runId, false, true);
+		const runId = "approved_feedback_stub";
+		const result = await runRunner(provider.url, root, image, runId, false, scenario.task);
 		expect(result.status, result.stderr).toBe(0);
 		expect(turns).toBe(6);
 		const report = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8"));
@@ -215,6 +244,137 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 			gateway: { requestsStarted: 6, requestsCompleted: 6, requestsRejected: 0 },
 			verification: { status: "passed", cleanup: "removed", evidence: { network: "none", readOnlyRoot: true } },
 		});
+	}, 120_000);
+
+	it.each(["reduced", "provider_error", "timeout"] as const)(
+		"settles a config-default retest with %s",
+		async (scenario) => {
+			const root = mkdtempSync(join(tmpdir(), "pi-enhanced-config-budget-"));
+			roots.push(root);
+			let calls = 0;
+			let cap: number | undefined;
+			let feedback: Record<string, unknown> | undefined;
+			const provider = await startProvider((body, response) => {
+				calls++;
+				if (calls === 3) {
+					cap = Number(body.max_tokens);
+					const messages = body.messages as Array<{ content?: string; role: string; tool_call_id?: string }>;
+					const last = messages.at(-1);
+					if (last?.role === "tool" && last.tool_call_id === "call-run_tests-" + retestInput)
+						feedback = JSON.parse(last.content ?? "null");
+					if (scenario === "timeout") return;
+					if (scenario === "provider_error") {
+						response.writeHead(503, { "Content-Type": "application/json" }).end('{"error":"stub provider unavailable"}');
+						return;
+					}
+					response.writeHead(200, { "Content-Type": "text/event-stream" }).end(textSse("Verified", 120, 20));
+					return;
+				}
+				if (calls > 3) {
+					response.writeHead(500).end();
+					return;
+				}
+				if (calls === 2 && scenario === "reduced") {
+					const targetHeadroom = Buffer.byteLength(JSON.stringify(body)) + 4096 + 1050;
+					retestInput = 20_000 - targetHeadroom - 2500 - 40;
+				}
+				const reply = calls === 1
+					? toolCallSse("edit", {
+						path: "config.js",
+						edits: [{ oldText: "input.timeoutMs || 1000", newText: "input.timeoutMs ?? 5000" }],
+					}, 2500, 20)
+					: toolCallSse("run_tests", {}, retestInput, 20);
+				response.writeHead(200, { "Content-Type": "text/event-stream" }).end(reply);
+			});
+			let retestInput = 800;
+			const runId = `config_default_budget_${scenario}`;
+			const result = await runRunner(provider.url, root, image, runId, false, "config-default", scenario === "timeout" ? 12_000 : 60_000);
+			expect(result.status, result.stderr).toBe(0);
+			const report = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8"));
+			const task = report.results[0];
+			expect(calls).toBe(3);
+			expect(feedback).toEqual({
+				status: "passed", exitCode: 0,
+				stdout: "PASS loadConfig({}).timeoutMs: 5000\nPASS loadConfig({timeoutMs:7}).timeoutMs: 7",
+			});
+			expect(task).toMatchObject({
+				verifierPassed: true, patchStatus: "passed", auditComplete: true,
+				sandboxAudit: { state: "completed", pending: [] },
+				hostLifecycle: { childClosed: true, containersRemoved: true, gatewayClosed: true, gatewayActiveRequests: 0 },
+			});
+			if (scenario === "reduced") {
+				expect(cap).toBeGreaterThanOrEqual(256);
+				expect(cap).toBeLessThan(2048);
+				expect(task).toMatchObject({ status: "passed", runStatus: "completed", agentTermination: "normal" });
+				expect(task.gateway.requestOutcomes[2]).toMatchObject({
+					reservationDiagnostics: { outputTokenLimit: cap, outputLimitReduced: true },
+					settlement: { committedTokens: 140, releasedTokens: expect.any(Number) },
+				});
+			} else {
+				expect(report.summary.passed).toBe(0);
+				expect(task).toMatchObject(scenario === "timeout"
+					? { status: "timeout", runStatus: "timeout", agentTermination: "abnormal", gateway: { lastError: "GATEWAY_RUN_TIMEOUT" } }
+					: { status: "agent_error", runStatus: "gateway_error", agentTermination: "abnormal", gateway: { lastError: "GATEWAY_UPSTREAM_HTTP_503" } });
+			}
+		},
+		120_000,
+	);
+
+	it("finishes the file audit when the token budget blocks the request after a passing retest", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-budget-feedback-"));
+		roots.push(root);
+		let calls = 0;
+		const provider = await startProvider((_body, response) => {
+			calls++;
+			const reply = calls === 1
+				? toolCallSse("edit", {
+					path: "config.js",
+					edits: [{ oldText: "input.timeoutMs || 1000", newText: "input.timeoutMs ?? 5000" }],
+				}, 6000, 20)
+				: toolCallSse("run_tests", {}, 6500, 20);
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(reply);
+		});
+		const runId = "config_default_budget_feedback";
+		const result = await runRunner(provider.url, root, image, runId, false, "config-default");
+		expect(result.status, result.stderr).toBe(0);
+		expect(calls).toBe(2);
+		const report = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8"));
+		expect(report.summary).toMatchObject({ passed: 0, patchPassed: 1, normallyCompleted: 0, budgetStopped: 1 });
+		const task = report.results[0];
+		expect(task).toMatchObject({
+			status: "budget_exceeded",
+			runStatus: "budget_stopped",
+			terminationClassification: "gateway_budget_stop",
+			agentTermination: "abnormal",
+			timedOut: false,
+			verifierPassed: true,
+			gateway: {
+				requestAttempts: 3,
+				requestsStarted: 2,
+				requestsCompleted: 2,
+				requestsRejected: 1,
+				denials: [{ code: "GATEWAY_TOKEN_BUDGET", requestSequence: 3, upstreamForwarded: false }],
+			},
+		});
+		expect(task.toolTrace).toEqual([
+			expect.objectContaining({ phase: "start", toolName: "edit" }),
+			expect.objectContaining({ phase: "end", toolName: "edit", isError: false }),
+			expect.objectContaining({ phase: "start", toolName: "run_tests" }),
+			expect.objectContaining({
+				phase: "end", toolName: "run_tests", isError: false,
+				result: expect.objectContaining({ details: expect.objectContaining({ status: "passed", exitCode: 0 }) }),
+			}),
+		]);
+		expect(task.auditComplete).toBe(true);
+		expect(task.sandboxAudit).toMatchObject({ state: "completed", integrity: "valid", pending: [] });
+		expect(task.sandboxAudit.audit).toEqual([
+			expect.objectContaining({ toolName: "edit", operation: "access", status: "ok" }),
+			expect.objectContaining({ toolName: "edit", operation: "read_file", status: "ok" }),
+			expect.objectContaining({ toolName: "edit", operation: "write_file", status: "ok" }),
+		]);
+		const containers = spawnSync("docker", ["ps", "-a", "--no-trunc", "--format", "{{.ID}}"], { encoding: "utf8" });
+		expect(containers.status).toBe(0);
+		expect(containers.stdout.split(/\r?\n/u)).not.toContain(task.sandboxAudit.evidence.containerId);
 	}, 120_000);
 
 	it("fails the Docker preflight before the local provider receives a request", async () => {
@@ -371,7 +531,8 @@ function runRunner(
 	sandboxImage = image,
 	runId = "batch_i_stub_runner",
 	readonlyModules = false,
-	singleFileTestFeedback = false,
+	feedbackTask?: "single-file-off-by-one" | "config-default",
+	timeoutMs = 60_000,
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
 	const args = [
 		"--experimental-strip-types",
@@ -388,15 +549,15 @@ function runRunner(
 		"--api-key-env",
 		"MOCK_PROVIDER_KEY",
 		"--max-total-cost-usd",
-		singleFileTestFeedback ? "0.03" : "0.10",
+		feedbackTask ? "0.03" : "0.10",
 		"--max-tasks",
 		"1",
 		"--max-tokens-per-task",
-		singleFileTestFeedback ? "20000" : "200000",
+		feedbackTask ? "20000" : "200000",
 		"--max-calls-per-task",
 		"8",
 		"--timeout-ms",
-		"60000",
+		String(timeoutMs),
 		"--concurrency",
 		"1",
 		"--budget-enforcement",
@@ -405,7 +566,9 @@ function runRunner(
 		output,
 		"--sandbox-image",
 		sandboxImage,
-		...(singleFileTestFeedback ? ["--task-id", "single-file-off-by-one", "--single-file-test-feedback"] : []),
+		...(feedbackTask
+			? ["--task-id", feedbackTask, feedbackTask === "config-default" ? "--config-default-test-feedback" : "--single-file-test-feedback"]
+			: []),
 		...(readonlyModules
 			? [
 					"--readonly-module-tools",
