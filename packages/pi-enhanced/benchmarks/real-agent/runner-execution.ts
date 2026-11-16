@@ -152,6 +152,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			verifierScope.runId,
 		);
 	};
+	if (context.stubRecovery !== "resume") startTelemetry();
 	let handshakePath: string | undefined;
 	if (pidHandshake) {
 		const output = realpathSync(runOutput);
@@ -169,7 +170,6 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			throw new Error("SWE_STUB_PID_HANDSHAKE_PATH_INVALID");
 		handshakePath = join(evidenceDir, "agent-spawn-pid.json");
 	}
-	if (context.stubRecovery !== "resume") startTelemetry();
 	const admission = taskPair || task.swebench
 		? createInputAdmission({
 				auditPath: join(root, INPUT_AUDIT_FILE),
