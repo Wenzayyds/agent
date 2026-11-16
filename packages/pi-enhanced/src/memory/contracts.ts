@@ -78,6 +78,27 @@ export interface MemoryRecord {
 	updatedAt: number;
 }
 
+const TASK_EXPERIENCE_SOURCE = /^task:([^:\s]+):experience:/u;
+
+export function memoryTaskId(sources: readonly Pick<MemorySource, "ref">[]): string | undefined {
+	const taskIds = new Set(
+		sources.flatMap(({ ref }) => {
+			const id = TASK_EXPERIENCE_SOURCE.exec(ref)?.[1];
+			return id ? [id] : [];
+		}),
+	);
+	return taskIds.size === 1 ? taskIds.values().next().value : undefined;
+}
+
+export function classifyMemory(record: MemoryRecord): "profile" | "preference" | "long-term" | "task" {
+	if (record.sources.some(({ ref }) => TASK_EXPERIENCE_SOURCE.test(ref)) || record.category === "temporary")
+		return "task";
+	if (record.category === "preference") return "preference";
+	if (record.subjectKey?.startsWith("profile:") && record.sources.some(({ type }) => type === "user"))
+		return "profile";
+	return "long-term";
+}
+
 export interface NewMemoryInput {
 	kind: MemoryKind;
 	content: string;

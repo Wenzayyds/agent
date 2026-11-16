@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -22,6 +22,7 @@ import {
 	type MemoryRecord,
 	type MemoryRelation,
 	type MemoryStatus,
+	memoryTaskId,
 	type NewMemoryInput,
 	type ProjectScope,
 	type ScopedSearchQuery,
@@ -79,7 +80,7 @@ export class MemoryService {
 			kind: input.kind,
 			content,
 			normalizedContent: normalizeMemoryText(content),
-			contentHash: hashNormalizedContent(content),
+			contentHash: hashNormalizedContent(content, memoryTaskId([{ ref: sourceRef }])),
 			source: {
 				type: input.source.type,
 				ref: sourceRef,
@@ -187,7 +188,7 @@ export class MemoryService {
 			id: memoryId,
 			content: validated,
 			normalizedContent: normalized,
-			contentHash: hashNormalizedContent(validated),
+			contentHash: hashNormalizedContent(validated, memoryTaskId(current.sources)),
 			expectedRevision,
 			now: Date.now(),
 		});
@@ -238,19 +239,7 @@ export class MemoryService {
 			throw validationError(`Cannot verify a ${current.status} memory`);
 		}
 		const relativePath = validateText(evidence.relativePath, "Evidence path", MAX_SOURCE_REF_LENGTH);
-		if (isAbsolute(relativePath)) throw validationError("Evidence path must be relative to the current project");
-		let targetPath: string;
-		let fileContent: string;
-		try {
-			targetPath = realpathSync.native(resolve(this.scope.rootPath, relativePath));
-			fileContent = readFileSync(targetPath, "utf8");
-		} catch {
-			throw validationError("File evidence could not be read");
-		}
-		const pathFromRoot = relative(this.scope.rootPath, targetPath);
-		if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) {
-			throw validationError("Evidence path is outside the current project");
-		}
+		const { pathFromRoot, fileContent } = this.readEvidenceFile(relativePath);
 		const excerpt = validateText(evidence.exactExcerpt, "Evidence excerpt", MAX_CONTENT_LENGTH);
 		if (!fileContent.includes(excerpt) || normalizeMemoryText(excerpt) !== normalizeMemoryText(current.content)) {
 			throw validationError("File evidence does not contain the exact memory content");
@@ -272,6 +261,55 @@ export class MemoryService {
 			expectedRevision,
 			now: Date.now(),
 		});
+	}
+
+	async reflectFileEvidence(id: string, expectedRevision: number): Promise<MemoryRecord> {
+		this.assertOpen();
+		validateRevision(expectedRevision);
+		const record = await this.require(validateId(id));
+		if (record.revision !== expectedRevision) throw revisionConflict();
+		const proof = record.verifications.filter((item) => item.verifiedContentRevision === record.contentRevision);
+		const files = proof.filter((item) => item.type === "file_observed");
+		if (record.status !== "verified" || !files.length || files.length !== proof.length)
+			throw validationError("Reflection requires current file-only verification evidence");
+		const changed: { evidenceRef: string; previousSha256: string; observedSha256: string }[] = [];
+		const checked = new Set<string>();
+		for (const item of [...files].sort((left, right) => right.verifiedAt - left.verifiedAt)) {
+			if (checked.has(item.evidenceRef)) continue;
+			checked.add(item.evidenceRef);
+			const { fileContent: text } = this.readEvidenceFile(item.evidenceRef);
+			const observedSha256 = createHash("sha256").update(text).digest("hex");
+			if (
+				observedSha256 === item.evidenceVersion ||
+				normalizeMemoryText(text).includes(normalizeMemoryText(record.content))
+			)
+				return record;
+			changed.push({ evidenceRef: item.evidenceRef, previousSha256: item.evidenceVersion, observedSha256 });
+		}
+		return this.provider.setStatus({
+			id: record.id,
+			status: "stale",
+			expectedRevision,
+			now: Date.now(),
+			reflection: changed,
+		});
+	}
+
+	private readEvidenceFile(relativePath: string): { pathFromRoot: string; fileContent: string } {
+		if (isAbsolute(relativePath)) throw validationError("Evidence path must be relative to the current project");
+		try {
+			const target = realpathSync.native(resolve(this.scope.rootPath, relativePath));
+			const pathFromRoot = relative(this.scope.rootPath, target);
+			if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot))
+				throw validationError("Evidence path is outside the current project");
+			const info = statSync(target);
+			if (!info.isFile() || info.size > 1024 * 1024)
+				throw validationError("Evidence must be a project file of at most 1 MiB");
+			return { pathFromRoot, fileContent: readFileSync(target, "utf8") };
+		} catch (error) {
+			if (error instanceof MemoryError) throw error;
+			throw validationError("File evidence could not be read");
+		}
 	}
 
 	async review(id: string, action: MemoryReviewAction, expectedRevision: number): Promise<MemoryRecord> {
@@ -397,8 +435,11 @@ export function normalizeMemoryText(content: string): string {
 	return content.normalize("NFKC").replace(/\s+/gu, " ").trim();
 }
 
-export function hashNormalizedContent(content: string): string {
-	return createHash("sha256").update(normalizeMemoryText(content)).digest("hex");
+export function hashNormalizedContent(content: string, taskId?: string): string {
+	const normalized = normalizeMemoryText(content);
+	return createHash("sha256")
+		.update(taskId ? JSON.stringify([taskId, normalized]) : normalized)
+		.digest("hex");
 }
 
 function validateContent(content: string): string {

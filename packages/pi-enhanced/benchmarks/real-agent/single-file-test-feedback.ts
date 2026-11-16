@@ -10,7 +10,7 @@ export function createJsTestFeedback(taskId: "single-file-off-by-one" | "config-
 	const configDefault = taskId === "config-default";
 	const file = configDefault ? "config.js" : "math.js";
 	return createSandboxExtension(undefined, undefined, undefined, false, (pi, config, isActive) => {
-		let calls = 0;
+		let calls = configDefault && process.env.PI_ENHANCED_V3_PRIOR_TEST_CALLS === "1" ? 1 : 0;
 		let running = false;
 		const reply = (details: { status: string; stdout: string; stderr: string; exitCode: number | null }) => {
 			const { status, exitCode, stdout, stderr } = details;

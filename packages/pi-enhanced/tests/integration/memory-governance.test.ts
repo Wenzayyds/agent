@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import type { MemoryKind, MemoryRecord, ProjectScope } from "../../src/memory/contracts.ts";
+import { classifyMemory, type MemoryKind, type MemoryRecord, type ProjectScope } from "../../src/memory/contracts.ts";
 import type { MemoryGovernanceConfig } from "../../src/memory/governance.ts";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { LocalMemoryProvider, rollbackMemoryGovernanceMigration, runCoreMigrations } from "../../src/memory/provider.ts";
@@ -90,6 +90,56 @@ describe("Memory Governance schema and lifecycle", () => {
 		const reopened = new MemoryService(scope, reopenedProvider);
 		services.push(reopened);
 		expect(await reopened.get(original.id)).toMatchObject({ category: "other", lifecycle: "active", useCount: 0 });
+	});
+
+	it("keeps task duplicates within their source task and honors an explicit forget", async () => {
+		const { service } = createStore();
+		const input = { kind: "experience" as const, content: "The fixture is versioned", source: { type: "user" as const, ref: "task:a:experience:first" } };
+		const first = await service.saveCandidate(input);
+		expect((await service.saveCandidate(input)).id).toBe(first.id);
+		const second = await service.saveCandidate({ ...input, source: { ...input.source, ref: "task:b:experience:first" } });
+		expect(second.id).not.toBe(first.id);
+		expect(classifyMemory(second)).toBe("task");
+		await service.delete(first.id, first.revision);
+		await expect(service.saveCandidate(input)).rejects.toThrow("explicitly forgotten");
+		expect((await service.saveCandidate({ ...input, source: second.sources[0] })).id).toBe(second.id);
+		const profile = await service.saveCandidate({
+			kind: "fact", content: "Maintains the test fixtures", source: { type: "user", ref: "manual" }, metadata: { subjectKey: "profile:role" },
+		});
+		const preference = await service.saveCandidate({
+			kind: "decision", content: "Show focused output first", source: { type: "user", ref: "manual" }, metadata: { category: "preference" },
+		});
+		expect(classifyMemory(profile)).toBe("profile");
+		expect(classifyMemory(preference)).toBe("preference");
+	});
+
+	it("withdraws a disproved file fact and preserves versioned evidence of the correction", async () => {
+		const { scope, service } = createStore();
+		const file = join(scope.rootPath, "facts.txt");
+		const old = "fixture uses version one";
+		writeFileSync(file, old);
+		const input = { kind: "fact" as const, content: old, source: { type: "file" as const, ref: "facts.txt" } };
+		const candidate = await service.saveCandidate(input);
+		const record = await service.verifyFileFact(candidate.id, { relativePath: "facts.txt", exactExcerpt: old }, candidate.revision);
+		expect(classifyMemory(record)).toBe("long-term");
+		expect(await service.reflectFileEvidence(record.id, record.revision)).toEqual(record);
+		const updated = "fixture uses version two";
+		writeFileSync(file, updated);
+		const reflected = await service.reflectFileEvidence(record.id, record.revision);
+		expect(reflected.status).toBe("stale");
+		expect(reflected.verifications).toEqual(record.verifications);
+		expect(await service.search({ text: old })).toEqual([]);
+		expect((await service.saveCandidate(input)).status).toBe("stale");
+		const other = new DatabaseSync(scope.databasePath);
+		try {
+			const audit = other.prepare("SELECT after_json FROM memory_governance_audit WHERE action='file_evidence_changed'").get() as { after_json: string };
+			expect(JSON.parse(audit.after_json)).toEqual([{
+				evidenceRef: "facts.txt", previousSha256: createHash("sha256").update(old).digest("hex"),
+				observedSha256: createHash("sha256").update(updated).digest("hex"),
+			}]);
+		} finally {
+			other.close();
+		}
 	});
 
 	it("archives reversibly, excludes archived records from default search/snapshots, and tracks usage without revision churn", async () => {

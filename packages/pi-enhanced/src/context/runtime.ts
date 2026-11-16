@@ -4,6 +4,7 @@ import type { ScopedTaskReader } from "../task-manager/contracts.ts";
 import { estimateContextMessages } from "./budget.ts";
 import type { ContextDiagnostics, ContextMessage, ContextModuleConfig, ContextRuntimeState } from "./contracts.ts";
 import { injectVerifiedMemory } from "./memory-source.ts";
+import { offloadProjection } from "./offload.ts";
 import { selectContextMessages } from "./selector.ts";
 import { injectActiveTask } from "./task-source.ts";
 
@@ -29,6 +30,7 @@ export class ContextRuntime {
 	private reader?: ScopedMemoryReader;
 	private taskReader?: ScopedTaskReader;
 	private closed = false;
+	private epoch = 0;
 	private lastValue: ContextDiagnostics;
 
 	constructor(options: ContextRuntimeOptions) {
@@ -45,7 +47,11 @@ export class ContextRuntime {
 		return { ...this.lastValue, injectedMemoryIds: [...this.lastValue.injectedMemoryIds] };
 	}
 
-	async transform(messages: readonly ContextMessage[], ctx: ExtensionContext): Promise<ContextMessage[] | undefined> {
+	async transform(
+		messages: readonly ContextMessage[],
+		ctx: ExtensionContext,
+		canRestore = this.offloadEnabled,
+	): Promise<ContextMessage[] | undefined> {
 		const before = estimateContextMessages(messages);
 		if (this.closed || this.state !== "ready") {
 			this.lastValue = { ...this.emptyDiagnostics(), beforeEstimatedTokens: before, afterEstimatedTokens: before };
@@ -64,9 +70,32 @@ export class ContextRuntime {
 			};
 			return undefined;
 		}
-		const generation = this.generation;
+		const epoch = this.epoch;
 		try {
-			const selection = selectContextMessages(messages, {
+			let view = messages;
+			let activeTaskId: string | undefined;
+			let offloaded: ReadonlySet<string> | undefined;
+			if (this.offloadEnabled && canRestore) {
+				try {
+					activeTaskId = await this.activeTaskId(ctx);
+					if (activeTaskId) {
+						const projected = offloadProjection(
+							messages,
+							ctx,
+							activeTaskId,
+							this.config.toolOutput.maximumTextCharacters,
+						);
+						view = projected.messages;
+						offloaded = projected.offloaded;
+					}
+				} catch {
+					// A missing scope or original keeps the ordinary Context view available.
+				}
+			}
+			if (this.closed || epoch !== this.epoch) return undefined;
+			const selection = selectContextMessages(view, {
+				compact: this.config.compaction?.enabled,
+				offloaded,
 				budget: this.config.budget,
 				...(contextWindow === undefined ? {} : { contextWindow }),
 				toolOutput: this.config.toolOutput,
@@ -77,29 +106,10 @@ export class ContextRuntime {
 			let taskState: ContextDiagnostics["taskState"] = "disabled";
 			let injectedTaskId: string | undefined;
 			let fallbackReason: string | undefined;
-			if (this.config.memoryInjection.enabled) {
-				try {
-					const reader = this.reader ?? (await this.acquireReader(ctx));
-					if (this.closed || generation !== this.generation) return undefined;
-					const injection = await injectVerifiedMemory({
-						messages: output,
-						reader,
-						config: this.config.memoryInjection,
-						projectRoot: ctx.cwd,
-					});
-					output = injection.messages;
-					injectedMemoryIds = injection.injectedMemoryIds;
-					memoryState = injection.state;
-				} catch {
-					this.reader = undefined;
-					memoryState = "unavailable";
-					fallbackReason = "memory-reader-unavailable";
-				}
-			}
 			if (this.config.taskInjection.enabled) {
 				try {
 					const reader = this.taskReader ?? (await this.acquireTaskReader(ctx));
-					if (this.closed || generation !== this.generation) return undefined;
+					if (this.closed || epoch !== this.epoch) return undefined;
 					const injection = await injectActiveTask({
 						messages: output,
 						reader,
@@ -107,8 +117,11 @@ export class ContextRuntime {
 						projectRoot: ctx.cwd,
 						sessionId: ctx.sessionManager.getSessionId(),
 						branchLeafId: ctx.sessionManager.getLeafId(),
+						branchEntryIds: new Set(ctx.sessionManager.getBranch().map(({ id }) => id)),
+						showContextReferences: canRestore,
 					});
 					const exceedsBudget =
+						!this.config.compaction?.enabled &&
 						injection.injectedTaskId !== undefined &&
 						selection.targetEstimatedTokens !== null &&
 						estimateContextMessages(injection.messages) > selection.targetEstimatedTokens;
@@ -124,16 +137,48 @@ export class ContextRuntime {
 					fallbackReason ??= "task-reader-unavailable";
 				}
 			}
+			if (this.config.memoryInjection.enabled) {
+				try {
+					const reader = this.reader ?? (await this.acquireReader(ctx));
+					if (this.closed || epoch !== this.epoch) return undefined;
+					const injection = await injectVerifiedMemory({
+						messages: output,
+						reader,
+						config: this.config.memoryInjection,
+						projectRoot: ctx.cwd,
+						...(activeTaskId ? { taskId: activeTaskId } : {}),
+					});
+					if (
+						this.config.compaction?.enabled &&
+						selection.targetEstimatedTokens !== null &&
+						estimateContextMessages(injection.messages) > selection.targetEstimatedTokens
+					) {
+						memoryState = "skipped";
+					} else {
+						output = injection.messages;
+						injectedMemoryIds = injection.injectedMemoryIds;
+						memoryState = injection.state;
+					}
+				} catch {
+					this.reader = undefined;
+					memoryState = "unavailable";
+					fallbackReason = "memory-reader-unavailable";
+				}
+			}
+			if (this.closed || epoch !== this.epoch) return undefined;
 			this.lastValue = {
 				runtimeState: this.state,
 				mode: this.config.mode,
 				estimated: true,
 				contextWindow: contextWindow ?? null,
 				targetEstimatedTokens: selection.targetEstimatedTokens,
-				beforeEstimatedTokens: selection.beforeEstimatedTokens,
+				beforeEstimatedTokens: before,
 				afterEstimatedTokens: estimateContextMessages(output),
 				removedMessages: selection.removedMessages,
 				truncatedToolResults: selection.truncatedToolResults,
+				offloadedToolResults: output.filter(
+					(message) => message.role === "toolResult" && offloaded?.has(message.toolCallId),
+				).length,
 				preservedUnsafeGroups: selection.preservedUnsafeGroups,
 				injectedMemoryIds,
 				memoryState,
@@ -156,7 +201,31 @@ export class ContextRuntime {
 		}
 	}
 
+	get offloadEnabled(): boolean {
+		return (
+			!this.closed &&
+			this.state === "ready" &&
+			this.config.mode === "select" &&
+			this.config.toolOutput.enabled &&
+			this.config.toolOutput.offload === true
+		);
+	}
+
+	async activeTaskId(ctx: ExtensionContext): Promise<string | undefined> {
+		if (!this.offloadEnabled || !ctx.isProjectTrusted()) return undefined;
+		const epoch = this.epoch;
+		const reader = this.taskReader ?? (await this.acquireTaskReader(ctx));
+		const task = await reader.getActive();
+		return !this.closed &&
+			epoch === this.epoch &&
+			task?.sessionId === ctx.sessionManager.getSessionId() &&
+			(task.branchLeafId === null || ctx.sessionManager.getBranch().some(({ id }) => id === task.branchLeafId))
+			? task.taskId
+			: undefined;
+	}
+
 	invalidate(): void {
+		this.epoch += 1;
 		this.reader = undefined;
 		this.taskReader = undefined;
 		this.lastValue = this.emptyDiagnostics();
@@ -195,6 +264,7 @@ export class ContextRuntime {
 			afterEstimatedTokens: 0,
 			removedMessages: 0,
 			truncatedToolResults: 0,
+			offloadedToolResults: 0,
 			preservedUnsafeGroups: 0,
 			injectedMemoryIds: [],
 			memoryState: this.config.memoryInjection.enabled ? "unavailable" : "disabled",

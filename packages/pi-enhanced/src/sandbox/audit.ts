@@ -29,7 +29,7 @@ interface AuditBody {
 	schemaVersion: 2;
 	runId: string;
 	workspaceSha256: string;
-	state: "running" | "completed" | "limit_reached";
+	state: "running" | "completed" | "limit_reached" | "interrupted";
 	updatedAt: number;
 	evidence: SandboxContainerEvidence | null;
 	pending: PendingOperation[];
@@ -95,6 +95,7 @@ export class SandboxAuditJournal {
 		this.persist();
 	}
 	complete(): void {
+		if (this.body.state === "completed" && !this.failed) return;
 		if (this.failed || this.body.pending.length || this.body.state !== "running")
 			throw new Error("SANDBOX_AUDIT_INCOMPLETE");
 		this.body.state = "completed";
@@ -113,8 +114,19 @@ export class SandboxAuditJournal {
 	}
 }
 
-/** Does not repair history or invent a terminal event after a crash. */
-export function readSandboxAuditSnapshot(path: string): Record<string, unknown> {
+/** Only the host Runner calls this after the sole writer is confirmed absent. */
+export function interruptSandboxAudit(path: string, expectedRunId: string): void {
+	const { body } = readAuditBody(path);
+	if (body.runId !== expectedRunId) throw new Error("SANDBOX_AUDIT_RUN_MISMATCH");
+	if (body.state !== "running") return;
+	body.state = "interrupted";
+	body.updatedAt = Date.now();
+	const payload = JSON.stringify(body);
+	atomicPrivateJson(path, { ...body, sha256: createHash("sha256").update(payload).digest("hex") });
+}
+
+/** Reads verified evidence without changing its terminal state. */
+function readAuditBody(path: string): { body: AuditBody; sha256: string } {
 	if (lstatSync(path).isSymbolicLink() || lstatSync(path).size > AUDIT_MAX_BYTES)
 		throw new Error("SANDBOX_AUDIT_INVALID");
 	const { sha256, ...body } = JSON.parse(readFileSync(path, "utf8")) as AuditBody & { sha256: string };
@@ -124,7 +136,7 @@ export function readSandboxAuditSnapshot(path: string): Record<string, unknown> 
 		!Array.isArray(body.audit) ||
 		!Array.isArray(body.pending) ||
 		body.audit.length + body.pending.length > AUDIT_MAX_RECORDS ||
-		!["running", "completed", "limit_reached"].includes(body.state)
+		!["running", "completed", "limit_reached", "interrupted"].includes(body.state)
 	)
 		throw new Error("SANDBOX_AUDIT_INTEGRITY_FAILED");
 	const ids = [...body.audit, ...body.pending].map((r) => r.requestId);
@@ -134,6 +146,11 @@ export function readSandboxAuditSnapshot(path: string): Record<string, unknown> 
 		(body.state === "completed" && body.pending.length)
 	)
 		throw new Error("SANDBOX_AUDIT_SEQUENCE_INVALID");
+	return { body, sha256 };
+}
+
+export function readSandboxAuditSnapshot(path: string): Record<string, unknown> {
+	const { body, sha256 } = readAuditBody(path);
 	return {
 		...body,
 		sha256,

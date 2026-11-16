@@ -47,6 +47,22 @@ describe("P3 Context selector", () => {
 		expect(selected.afterEstimatedTokens).toBeLessThan(selected.beforeEstimatedTokens);
 	});
 
+	it("deterministically compacts old assistant output and keeps user constraints and diagnostic pairs", () => {
+		const constraints = user("Keep network disabled and edit only fixture.txt.", 1);
+		const diagnostic = { ...toolResult("failed", "diagnostic " + "x".repeat(2_000)), isError: true };
+		const history = [
+			constraints, assistantText("unverified guess ".repeat(1_000), 2), user("verify", 3),
+			toolAssistant(["failed"]), diagnostic, user("continue", 4),
+		];
+		const options = { budget, compact: true, toolOutput: { enabled: true, maximumTextCharacters: 500 } };
+		const selected = selectContextMessages(history, options);
+		expect(selected.messages).toEqual(expect.arrayContaining([constraints, diagnostic, history.at(-1)]));
+		expect(JSON.stringify(selected.messages)).not.toContain("unverified guess");
+		expect(hasValidToolPairing(selected.messages)).toBe(true);
+		expect(selected.removedMessages).toBe(1);
+		expect(selectContextMessages(selected.messages, options).messages).toEqual(selected.messages);
+	});
+
 	it("keeps compaction summaries even when the estimated target cannot be reached", () => {
 		const summary: ContextMessage = { role: "compactionSummary", summary: "important ".repeat(1_000), tokensBefore: 9_000, timestamp: 1 };
 		const selected = selectContextMessages([summary, user("latest", 2)], { budget, toolOutput: { enabled: false, maximumTextCharacters: 1_000 } });

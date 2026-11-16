@@ -50,6 +50,8 @@ export interface RunnerContext {
 	readonlyModuleTools: boolean;
 	testFeedback?: boolean;
 	telemetryEnabled: boolean;
+	v3Evaluation?: boolean;
+	stubRecovery?: "pause" | "resume";
 	localStubUrl?: string;
 	authorization?: BatchLAuthorization;
 	taskPairAuthorization?: TaskPairAuthorization;
@@ -118,6 +120,10 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 					mode: "select",
 					memoryInjection: { enabled: switches.memory },
 					taskInjection: { enabled: switches.task },
+					...(context.v3Evaluation ? {
+						compaction: { enabled: true },
+						toolOutput: { enabled: true, maximumTextCharacters: 2_000 },
+					} : {}),
 					...(cell?.module === "context"
 						? { toolOutput: { enabled: cell.treatment, maximumTextCharacters: 2_000 } }
 						: {}),
@@ -143,7 +149,12 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 				batchL ? batchLPrompt(cell!) : task.prompt,
 				cell
 					? TASK_STEPS
-					: [
+					: context.stubRecovery
+						? [
+							{ stepId: "reproduce", title: "复现失败", expectedOutcome: "隔离测试报告失败且有退出码" },
+							{ stepId: "repair", title: "修复并验证", expectedOutcome: "独立验证通过", dependsOn: ["reproduce"] },
+						]
+						: [
 							{ title: "阅读实现并定位缺陷", expectedOutcome: "说明缺陷来源" },
 							{ title: "最小修改", expectedOutcome: "公开 API 保持一致，不修改测试", dependsOn: [] },
 						],
@@ -151,6 +162,10 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 				null,
 			).task.taskId;
 			taskStateBefore = service.get(seededTaskId);
+			if (context.stubRecovery) {
+				const queued = service.transitionTask(seededTaskId, taskStateBefore!.task.revision, "queued", "runner:approved-fixture");
+				taskStateBefore = service.transitionTask(seededTaskId, queued.task.revision, "running", "runner:pause-phase");
+			}
 		} finally {
 			service.close();
 		}
@@ -177,7 +192,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 					: "") +
 				(cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") +
 				(cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") +
-				(moduleTools.includes("enhanced_memory_search")
+				(!context.v3Evaluation && moduleTools.includes("enhanced_memory_search")
 					? " 可使用只读项目记忆搜索查阅 normalizeKey 项目约定。"
 					: "") +
 				(seededTaskId ? ` 任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : "");

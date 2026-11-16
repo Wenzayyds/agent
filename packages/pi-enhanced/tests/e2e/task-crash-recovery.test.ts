@@ -74,6 +74,8 @@ describe("P4 real process interruption recovery", () => {
 			expect(snapshot.steps.find(({ stepId }) => stepId === "mutate")?.status).toBe("needs_reconciliation");
 			const preflight = recoveryPreflight(runtime.service.provider, taskId, "crash-session", "crash-leaf");
 			expect(preflight.unknownStepIds).toEqual(["mutate"]);
+			expect(preflight.verifyBeforeWriteStepIds).toEqual(["mutate"]);
+			expect(preflight.safeContinueStepIds).toEqual([]);
 			expect(preflight.automaticReplayAllowed).toBe(false);
 			expect(preflight.driftReasons).toContain("git-worktree-changed");
 			expect(readFileSync(join(project, "fixture.txt"), "utf8")).toBe("changed-once\n");

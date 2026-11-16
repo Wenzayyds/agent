@@ -16,6 +16,8 @@
 		"tests/e2e/real-agent-runner-e2e.test.ts",
 		"tests/unit/docker-ci-evidence.test.ts",
 		"tests/fixtures/sandbox-audit-child.ts",
+		"tests/e2e/budget-recovery.test.ts",
+		"tests/fixtures/budget-recovery-child.ts",
 		"../coding-agent/src/utils/highlight-js.d.ts"
 	],
 	"exclude": ["**/dist/**"]

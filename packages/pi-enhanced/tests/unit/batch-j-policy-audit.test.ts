@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadOfflineDenialPolicy, ordinaryReadonlyOutside } from "../../benchmarks/real-agent/offline-denial-policy.ts";
 import { classifyTermination } from "../../benchmarks/real-agent/result-classification.ts";
-import { AUDIT_MAX_RECORDS, readSandboxAuditSnapshot, SandboxAuditJournal } from "../../src/sandbox/audit.ts";
+import { AUDIT_MAX_RECORDS, interruptSandboxAudit, readSandboxAuditSnapshot, SandboxAuditJournal } from "../../src/sandbox/audit.ts";
 import { assertSandboxWorkspaceIdentity } from "../../src/sandbox/config.ts";
 import { createSandboxFixture } from "../fixtures/runner-support.ts";
 
@@ -66,6 +66,9 @@ describe("Batch J trusted policy and durable audit", () => {
 		});
 		expect(readSandboxAuditSnapshot(path)).toMatchObject({ complete: false, missingOperationResults: [] });
 		journal.complete();
+		const finished = readFileSync(path);
+		journal.complete();
+		expect(readFileSync(path)).toEqual(finished);
 		expect(readSandboxAuditSnapshot(path)).toMatchObject({ complete: true, recoveryState: "normal_shutdown" });
 		expect(readFileSync(path, "utf8")).not.toContain(config.workspace);
 	});
@@ -78,6 +81,22 @@ describe("Batch J trusted policy and durable audit", () => {
 		writeFileSync(path, before.slice(0, -5));
 		expect(() => readSandboxAuditSnapshot(path)).toThrow();
 	});
+	it("records a dead writer as interrupted while preserving the pending write and idempotence", () => {
+		const { path, config } = fixture();
+		const journal = new SandboxAuditJournal(path, config);
+		const operation = { runId: config.runId, requestId: "pending-write", operation: "write_file",
+			toolName: "edit", containerId: "a".repeat(64), startedAt: Date.now() };
+		journal.begin(operation);
+		expect(() => interruptSandboxAudit(path, "another-run")).toThrow("SANDBOX_AUDIT_RUN_MISMATCH");
+		interruptSandboxAudit(path, config.runId);
+		const interrupted = readFileSync(path);
+		interruptSandboxAudit(path, config.runId);
+		expect(readFileSync(path)).toEqual(interrupted);
+		expect(readSandboxAuditSnapshot(path)).toMatchObject({
+			state: "interrupted", complete: false, pending: [operation], missingOperationResults: ["pending-write"],
+		});
+	});
+
 	it("fails closed on journal write errors and cannot subsequently declare a complete audit", () => {
 		const { path, config } = fixture();
 		const journal = new SandboxAuditJournal(path, config);

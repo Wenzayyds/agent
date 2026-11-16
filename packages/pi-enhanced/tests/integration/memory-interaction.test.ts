@@ -134,6 +134,28 @@ describe("P2-6 Memory commands and read-only model tool", () => {
 		expect(existsSync(join(agentDir, "pi-enhanced", "memory"))).toBe(false);
 	});
 
+	it("classifies a user preference and verifies then withdraws project-file evidence through commands", async () => {
+		const { harness, fixture, service } = await setupReady();
+		fixture.selects.push("decision");
+		fixture.inputs.push("Show test failures first", "user:preference");
+		await invoke(harness, "enhanced-memory-save", "preference");
+		const saved = (await service.list({ categories: ["preference"] }))[0];
+		expect(saved?.content).toBe("Show test failures first");
+		const path = join(harness.tempDir, "fixture facts.txt");
+		const content = "Fixture uses an explicit mode";
+		writeFileSync(path, content);
+		const fact = await service.saveCandidate({
+			kind: "fact", content, source: { type: "file", ref: "fixture facts.txt" },
+		});
+		fixture.confirms.push(true);
+		await invoke(harness, "enhanced-memory-reflect", `${fact.id} fixture facts.txt`);
+		expect((await service.get(fact.id))?.status).toBe("verified");
+		writeFileSync(path, "Fixture mode was removed");
+		fixture.confirms.push(true);
+		await invoke(harness, "enhanced-memory-reflect", fact.id);
+		expect((await service.get(fact.id))?.status).toBe("stale");
+	});
+
 	it("runs save, confirm, search, review, Recall, and Core operations through existing services", async () => {
 		const { harness, fixture, service } = await setupReady();
 		const commandNames = [

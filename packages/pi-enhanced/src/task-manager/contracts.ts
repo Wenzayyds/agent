@@ -8,6 +8,7 @@ export const TASK_STATUSES = [
 	"completed",
 	"failed",
 	"cancelled",
+	"budget_exhausted",
 	"needs_reconciliation",
 ] as const;
 export const STEP_STATUSES = [
@@ -134,6 +135,23 @@ export interface WorkspaceObservation {
 	observationLimited: boolean;
 }
 
+export interface CheckpointObservation {
+	contextReferences: readonly string[];
+	sessionUsage: { responses: number; tokens: number; reportedCostUsd: number };
+	budgetTermination?: {
+		runId: string;
+		code: string;
+		requestsStarted: number;
+		confirmedInputTokens: number;
+		confirmedOutputTokens: number;
+		estimatedConfirmedCostUsd: number;
+		unconfirmedTokens: number;
+		unconfirmedCostUsd: number;
+		auditComplete: boolean;
+		verifierPassed: boolean;
+	};
+}
+
 export interface TaskCheckpoint {
 	checkpointId: string;
 	taskId: string;
@@ -145,6 +163,7 @@ export interface TaskCheckpoint {
 	workspaceObservation: WorkspaceObservation;
 	pendingStepIds: readonly string[];
 	lastCommittedEventSeq: number;
+	observation?: CheckpointObservation;
 	createdAt: number;
 }
 
@@ -169,6 +188,9 @@ export interface RecoveryPreflight {
 	branchChanged: boolean;
 	workspaceChanged: boolean;
 	checkpointRevisionMatches: boolean;
+	checkpointIntegrity: "verified" | "legacy" | "invalid" | "missing";
+	readOnlyRetryStepIds: readonly string[];
+	verifyBeforeWriteStepIds: readonly string[];
 	completedStepIds: readonly string[];
 	failedStepIds: readonly string[];
 	unknownStepIds: readonly string[];
@@ -193,6 +215,7 @@ export interface ScopedTaskSummary {
 	planRevision: number;
 	checkpointId?: string;
 	checkpointRevision?: number;
+	checkpointContextReferences?: readonly string[];
 	reconciliationCount: number;
 	observedAt: number;
 	steps: readonly Pick<TaskStep, "stepId" | "title" | "status" | "expectedOutcome" | "dependsOn">[];

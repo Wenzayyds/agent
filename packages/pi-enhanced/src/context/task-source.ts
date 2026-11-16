@@ -18,6 +18,8 @@ export async function injectActiveTask(options: {
 	projectRoot: string;
 	sessionId: string;
 	branchLeafId: string | null;
+	branchEntryIds?: ReadonlySet<string>;
+	showContextReferences?: boolean;
 }): Promise<TaskInjectionResult> {
 	if (options.messages.some((message) => message.role === "custom" && message.customType === TASK_CUSTOM_TYPE)) {
 		return { messages: [...options.messages], state: "skipped" };
@@ -27,7 +29,10 @@ export async function injectActiveTask(options: {
 	const observed = await options.reader.getActive();
 	if (!observed || !ACTIVE_STATUSES.has(observed.status)) return { messages: [...options.messages], state: "skipped" };
 	const current = await options.reader.get(observed.taskId);
-	if (!current || !sameInjectableTask(observed, current, options.sessionId, options.branchLeafId)) {
+	if (
+		!current ||
+		!sameInjectableTask(observed, current, options.sessionId, options.branchLeafId, options.branchEntryIds)
+	) {
 		return { messages: [...options.messages], state: "skipped" };
 	}
 	const pending = current.steps
@@ -41,6 +46,9 @@ export async function injectActiveTask(options: {
 				`goal=${current.goal}`,
 				`checkpoint=${current.checkpointId ?? "none"} checkpointRevision=${current.checkpointRevision ?? "none"}`,
 				`needsReconciliation=${current.reconciliationCount}`,
+				...(options.showContextReferences
+					? (current.checkpointContextReferences ?? []).slice(-5).map((ref) => `contextReference=${ref}`)
+					: []),
 				...pending.map(
 					(step) =>
 						`stepId=${step.stepId} status=${step.status} dependsOn=${step.dependsOn.join(",") || "none"} title=${step.title} expected=${step.expectedOutcome}`,
@@ -74,6 +82,7 @@ function sameInjectableTask(
 	current: ScopedTaskSummary,
 	sessionId: string,
 	branchLeafId: string | null,
+	branchEntryIds?: ReadonlySet<string>,
 ): boolean {
 	return (
 		observed.taskId === current.taskId &&
@@ -81,7 +90,8 @@ function sameInjectableTask(
 		observed.revision === current.revision &&
 		observed.planRevision === current.planRevision &&
 		current.sessionId === sessionId &&
-		current.branchLeafId === branchLeafId &&
+		(current.branchLeafId === branchLeafId ||
+			(branchEntryIds && (current.branchLeafId === null || branchEntryIds.has(current.branchLeafId))) === true) &&
 		ACTIVE_STATUSES.has(current.status)
 	);
 }

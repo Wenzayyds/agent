@@ -56,7 +56,6 @@ createCheckpoint(service.provider, snapshot, "crash-session", "crash-leaf");
 service.bind(snapshot.task.taskId, "mutate", "crash-session", "crash-leaf");
 const second = service.get(snapshot.task.taskId)!.steps.find(({ stepId }) => stepId === "mutate")!;
 snapshot = service.transitionStep(snapshot.task.taskId, second.stepId, second.revision, "running");
-writeFileSync(join(projectRoot, "fixture.txt"), "changed-once\n");
 service.provider.startAttempt({
 	attemptId: "crashed-attempt",
 	taskId: snapshot.task.taskId,
@@ -70,5 +69,6 @@ service.provider.startAttempt({
 	inputDigest: "c".repeat(64),
 	startedAt: Date.now(),
 });
+writeFileSync(join(projectRoot, "fixture.txt"), "changed-once\n");
 process.send({ type: "ready", taskId: snapshot.task.taskId });
 setInterval(() => undefined, 1_000);

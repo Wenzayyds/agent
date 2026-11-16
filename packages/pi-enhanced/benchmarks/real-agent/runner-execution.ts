@@ -4,6 +4,9 @@ import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { interruptSandboxAudit } from "../../src/sandbox/audit.ts";
+import { createProjectScope } from "../../src/memory/project-scope.ts";
+import { createTaskStorageScope } from "../../src/task-manager/provider.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { assertSandboxWorkspaceIdentity, loadSandboxConfig } from "../../src/sandbox/config.ts";
 import { TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
@@ -15,6 +18,7 @@ import { createInputAdmission } from "./input-admission.ts";
 import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { finalizeAgentExecution, removeRunContainers } from "./runner-cleanup.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
+import { beginResumedRun, resumeSessionPath } from "./runner-resume.ts";
 import { resolveSweProfile } from "./swe-profile.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -103,6 +107,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		tempDir: root,
 		evaluation: {
 			PI_ENHANCED_EVAL_RUN_ID: plan!.runId,
+			...(context.stubRecovery === "resume" ? { PI_ENHANCED_V3_PRIOR_TEST_CALLS: "1" } : {}),
 			...(telemetryEnabled ? { PI_ENHANCED_EVALUATION_TELEMETRY: "1" } : {}),
 			PI_ENHANCED_MAX_TOKENS_PER_TASK: String(plan!.maxTokensPerTask),
 			PI_ENHANCED_MAX_CALLS_PER_TASK: String(plan!.maxCallsPerTask),
@@ -136,16 +141,17 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			throw new Error("SANDBOX_TASK_PAIR_INITIAL_VERIFICATION_UNEXPECTED");
 	}
 	let telemetry: EvaluationTelemetry | undefined;
-	if (telemetryEnabled) {
+	const startTelemetry = () => {
+		if (!telemetryEnabled) return;
 		const directory = join(runOutput!, task.id);
 		mkdirSync(directory, { recursive: true });
 		telemetry = new EvaluationTelemetry(
 			plan!.runId,
-			join(directory, "evaluation-telemetry.json"),
+			join(directory, context.stubRecovery === "resume" ? "evaluation-telemetry-resumed.json" : "evaluation-telemetry.json"),
 			cwd,
 			verifierScope.runId,
 		);
-	}
+	};
 	let handshakePath: string | undefined;
 	if (pidHandshake) {
 		const output = realpathSync(runOutput);
@@ -163,6 +169,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			throw new Error("SWE_STUB_PID_HANDSHAKE_PATH_INVALID");
 		handshakePath = join(evidenceDir, "agent-spawn-pid.json");
 	}
+	if (context.stubRecovery !== "resume") startTelemetry();
 	const admission = taskPair || task.swebench
 		? createInputAdmission({
 				auditPath: join(root, INPUT_AUDIT_FILE),
@@ -187,6 +194,15 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		},
 		...(admission ? { fetch: admission.fetch } : {}),
 		runId: plan!.runId,
+		...(seededTaskId && localStubUrl ? {
+			persistence: {
+				id: seededTaskId,
+				databasePath: createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir).databasePath,
+				...(context.stubRecovery === "resume" ? { mode: "resume" as const } : {
+					mode: "create" as const, deadlineAt: Date.now() + plan.timeoutMs,
+				}),
+			},
+		} : {}),
 		upstreamBaseUrl: localStubUrl ?? "https://api.deepseek.com",
 		upstreamApiKey: process.env[apiKeyEnv!]!,
 		clientToken: gatewayToken,
@@ -206,6 +222,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			? { inputUsdPerMillion: 1.32, outputUsdPerMillion: 3.96 }
 			: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
 	});
+	const gatewayAtStart = context.stubRecovery === "resume" ? gateway.status() : undefined;
 	const cli = join(repositoryRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
 	const extensionArgs = [
 		"--extension",
@@ -240,6 +257,10 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	let executionFailure: { error: unknown } | undefined;
 	let boundaryShutdownDeadline: number | undefined;
 	try {
+		if (context.stubRecovery === "resume") {
+			beginResumedRun(context);
+			startTelemetry();
+		}
 		writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));
 		if (controlled) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
 		child = await runAgentProcess(
@@ -263,15 +284,17 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 						]
 					: ["--tools", ["read", "grep", "find", "ls", "write", "edit", ...moduleTools].join(",")]),
 				...extensionArgs,
-				"--no-session",
+				...(context.stubRecovery ? ["--session", resumeSessionPath(root)] : ["--no-session"]),
 				"--no-mcp",
 				"--no-skills",
 				"--no-context-files",
-				prompt,
+				context.stubRecovery === "resume"
+					? "继续完成最初任务。使用已保存的工具结果和已完成的工作，继续尚未完成的修改和验证。"
+					: prompt,
 			],
 			{
 				cwd,
-				timeoutMs: plan!.timeoutMs,
+				timeoutMs: gateway.deadlineAt === undefined ? plan.timeoutMs : Math.max(1, gateway.deadlineAt - Date.now()),
 				...(handshakePath
 					? {
 							onSpawn: (pid: number | undefined) => {
@@ -295,7 +318,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 						}
 					: {}),
 				env: childEnvironment,
-				...(testFeedback ? { onTimeout: () => gateway.stop("GATEWAY_RUN_TIMEOUT") } : {}),
+				...(testFeedback || gateway.deadlineAt !== undefined ? { onTimeout: () => gateway.stop("GATEWAY_RUN_TIMEOUT") } : {}),
 				...(controlled || testFeedback
 					? {
 							stopOnBoundaryFailure: () => {
@@ -324,7 +347,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		({ gatewayStatus, containersRemoved } = await finalizeAgentExecution(
 			gateway,
 			controlled && !admission?.denied ? join(runOutput!, task.id) : undefined,
-			controlled || testFeedback ? () => removeRunContainers(containerOwner) : undefined,
+			controlled || testFeedback || context.v3Evaluation ? () => removeRunContainers(containerOwner) : undefined,
 			executionFailure,
 		));
 	}
@@ -335,6 +358,14 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			process.kill(child.pid, 0);
 		} catch (error) {
 			childAbsent = (error as NodeJS.ErrnoException).code === "ESRCH";
+		}
+	}
+	let auditTerminationError: string | undefined;
+	if (gateway.deadlineAt !== undefined && child.closed && childAbsent) {
+		try { interruptSandboxAudit(sandboxAuditPath, verifierScope.runId); }
+		catch (error) {
+			auditTerminationError = (error as NodeJS.ErrnoException).code === "ENOENT" ? "SANDBOX_AUDIT_MISSING" :
+				error instanceof Error ? error.message : "SANDBOX_AUDIT_TERMINATION_FAILED";
 		}
 	}
 	let workspaceIdentityValid = false;
@@ -348,6 +379,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		containersRemoved,
 		workspaceIdentityValid,
 		gatewayClosed: true,
+		...(auditTerminationError ? { auditTerminationError } : {}),
 		gatewayActiveRequests: gatewayStatus.activeRequests,
 		reservedTokens: gatewayStatus.reservedTokens,
 		reservedCostUsd: gatewayStatus.reservedCostUsd,
@@ -357,10 +389,12 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		child,
 		hostLifecycle,
 		gatewayStatus,
+		gatewayAtStart,
 		verification,
 		telemetry,
 		sandboxAuditPath,
 		contextReportPath,
+		deadlineAt: gateway.deadlineAt,
 		started,
 		workspaceScope: verifierScope,
 	};

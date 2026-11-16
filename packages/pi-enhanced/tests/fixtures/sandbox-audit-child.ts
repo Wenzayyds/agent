@@ -12,7 +12,15 @@ const broker = new DockerSandboxBroker(
 );
 await broker.request("read", "read_file", { path: "fixture.txt" });
 process.on("message", () => {
-	void broker.request("write", "write_file", { path: "uncertain.txt", content: "x".repeat(512 * 1024) });
+	// Hold the real worker response before request() can commit the operation result.
+	const instance = broker as unknown as { executeWorker: (...args: unknown[]) => Promise<unknown> };
+	const execute = instance.executeWorker.bind(broker);
+	instance.executeWorker = async (...args) => {
+		await execute(...args);
+		process.send?.({ completedWorkerWrite: true });
+		return new Promise<never>(() => {});
+	};
+	void broker.request("write", "write_file", { path: "uncertain.txt", content: "durable write before audit completion" });
 });
 process.send?.({ ready: true, containerId: broker.getEvidence()!.containerId });
 setInterval(() => {}, 1000);

@@ -400,21 +400,19 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 					});
 				});
 				if (phase === "operation-in-flight") {
-					child.send("start-next-operation");
-					await new Promise<void>((done, reject) => {
-						const timer = setTimeout(() => {
-							clearInterval(poll);
-							reject(new Error("pending operation was not observed"));
-						}, 10_000);
-						const poll = setInterval(() => {
-							const snapshot = readSandboxAuditSnapshot(join(root, "audit.json"));
-							if ((snapshot.pending as unknown[]).length) {
-								clearTimeout(timer);
-								clearInterval(poll);
-								done();
-							}
-						}, 2);
+					const dispatched = new Promise<void>((done, reject) => {
+						const timer = setTimeout(() => reject(new Error("worker write was not observed")), 10_000);
+						child.once("message", (event) => {
+							clearTimeout(timer);
+							if (!(event as { completedWorkerWrite?: boolean }).completedWorkerWrite)
+								return reject(new Error("unexpected audit worker message"));
+							done();
+						});
 					});
+					child.send("start-next-operation");
+					await dispatched;
+					expect(readFileSync(join(root, "project/uncertain.txt"), "utf8")).toBe("durable write before audit completion");
+					expect(readSandboxAuditSnapshot(join(root, "audit.json")).pending).toHaveLength(1);
 				}
 				const exit = new Promise<void>((done) => child.once("exit", () => done()));
 				child.kill("SIGKILL");

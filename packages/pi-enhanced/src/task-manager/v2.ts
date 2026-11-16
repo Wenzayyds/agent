@@ -87,16 +87,23 @@ export function progressLedger(service: TaskService, snapshot: TaskSnapshot) {
 	const active = snapshot.steps.find((s) => s.status === "running" || s.status === "verifying");
 	const ready = snapshot.steps.find((s) => s.status === "pending" && dependenciesComplete(s, snapshot.steps));
 	const dependencyBlocked = !active && !ready && snapshot.steps.some((s) => s.status === "pending");
+	const checkpoint = snapshot.lastCheckpoint;
+	const invalidCheckpoint = checkpoint && service.provider.checkpointIntegrity(checkpoint) === "invalid";
 	const reason = unknown
 		? "unknown_attempt"
-		: knownStall
-			? "repeated_operation"
-			: dependencyBlocked
-				? "dependencies_unavailable"
-				: null;
+		: invalidCheckpoint
+			? "invalid_checkpoint"
+			: knownStall
+				? "repeated_operation"
+				: dependencyBlocked
+					? "dependencies_unavailable"
+					: null;
 	const state =
-		unknown || (reason && replans.length >= MAX_REPLANS) ? "blocked" : reason ? "replan_requested" : "observing";
-	const checkpoint = snapshot.lastCheckpoint;
+		unknown || invalidCheckpoint || (reason && replans.length >= MAX_REPLANS)
+			? "blocked"
+			: reason
+				? "replan_requested"
+				: "observing";
 	let workspaceChanged: boolean | "unknown" = "unknown";
 	let trackedChanges: number | "unknown" = "unknown";
 	if (checkpoint?.workspaceObservation.gitStatusDigest || latest?.riskClass === "mutating") {

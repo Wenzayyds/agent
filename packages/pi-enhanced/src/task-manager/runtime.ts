@@ -171,6 +171,11 @@ export class TaskRuntime {
 				? {
 						checkpointId: value.lastCheckpoint.checkpointId,
 						checkpointRevision: value.lastCheckpoint.taskRevision,
+						...(binding.sessionId === value.lastCheckpoint.sessionId &&
+						value.lastCheckpoint.observation &&
+						this.service.provider.checkpointIntegrity(value.lastCheckpoint) === "verified"
+							? { checkpointContextReferences: value.lastCheckpoint.observation.contextReferences }
+							: {}),
 					}
 				: {}),
 			reconciliationCount: this.service.provider

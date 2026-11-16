@@ -114,6 +114,7 @@ export function createCheckpoint(
 	sessionId: string,
 	branchLeafId: string | null,
 	controlledFiles: readonly string[] = [],
+	observation?: TaskCheckpoint["observation"],
 ): TaskCheckpoint {
 	const workspaceObservation = observeWorkspace(provider.scope.rootPath, controlledFiles);
 	const value: TaskCheckpoint = {
@@ -130,6 +131,7 @@ export function createCheckpoint(
 			.map(({ stepId }) => stepId),
 		lastCommittedEventSeq: provider.getLastEventSeq(snapshot.task.taskId),
 		createdAt: Date.now(),
+		...(observation ? { observation } : {}),
 	};
 	return provider.createCheckpoint(value);
 }
@@ -145,17 +147,27 @@ export function recoveryPreflight(
 	if (!snapshot) throw new TaskError("TASK_NOT_FOUND", "Task does not exist in the current project");
 	const checkpoint = snapshot.lastCheckpoint;
 	const attempts = provider.getAttempts(taskId);
-	const unknown = new Set(
-		attempts
-			.filter((attempt) => attempt.state === "needs_reconciliation" || attempt.state === "started")
-			.map(({ stepId }) => stepId),
+	const checkpointIntegrity = checkpoint ? provider.checkpointIntegrity(checkpoint) : "missing";
+	const interrupted = attempts.filter(
+		(attempt) => attempt.state === "needs_reconciliation" || attempt.state === "started",
 	);
+	const verifyBeforeWrite = new Set(
+		interrupted.filter((attempt) => attempt.riskClass !== "read_only").map(({ stepId }) => stepId),
+	);
+	const readOnlyRetryStepIds = [
+		...new Set(
+			interrupted
+				.filter((attempt) => attempt.riskClass === "read_only" && !verifyBeforeWrite.has(attempt.stepId))
+				.map(({ stepId }) => stepId),
+		),
+	];
+	const unknown = new Set(interrupted.map(({ stepId }) => stepId));
 	const currentWorkspace = observeWorkspace(provider.scope.rootPath, controlledFiles);
 	const currentFingerprint = createHash("sha256").update(JSON.stringify(currentWorkspace)).digest("hex");
 	const workspaceChanged = checkpoint ? checkpoint.workspaceFingerprint !== currentFingerprint : true;
 	const driftReasons: string[] = [];
-	if (!checkpoint) driftReasons.push("checkpoint-missing");
-	else {
+	if (checkpointIntegrity !== "verified") driftReasons.push(`checkpoint-${checkpointIntegrity}`);
+	if (checkpoint) {
 		if (checkpoint.workspaceObservation.realRoot !== currentWorkspace.realRoot)
 			driftReasons.push("project-realpath-changed");
 		if (checkpoint.workspaceObservation.gitHead !== currentWorkspace.gitHead) driftReasons.push("git-head-changed");
@@ -170,7 +182,7 @@ export function recoveryPreflight(
 	}
 	const bindingMatches = provider.hasSessionBinding(taskId, sessionId, branchLeafId);
 	if (!bindingMatches) driftReasons.push("session-binding-missing");
-	const consistencyValid = provider.verifyConsistency(taskId);
+	const consistencyValid = checkpointIntegrity !== "invalid" && provider.verifyConsistency(taskId);
 	if (!consistencyValid) driftReasons.push("event-snapshot-inconsistent");
 	const recommendations = ["恢复仅生成计划建议，不会自动重放任何工具。"];
 	if (unknown.size > 0) recommendations.push("先人工核对结果不确定的工具调用，再决定失败、完成或重新执行。");
@@ -190,11 +202,15 @@ export function recoveryPreflight(
 		sessionChanged: checkpoint ? checkpoint.sessionId !== sessionId : true,
 		branchChanged: checkpoint ? checkpoint.branchLeafId !== branchLeafId : true,
 		workspaceChanged,
-		checkpointRevisionMatches: checkpoint
-			? checkpoint.taskRevision === snapshot.task.revision &&
-				checkpoint.planRevision === snapshot.task.planRevision &&
-				checkpoint.lastCommittedEventSeq <= provider.getLastEventSeq(taskId)
-			: false,
+		checkpointIntegrity,
+		readOnlyRetryStepIds,
+		verifyBeforeWriteStepIds: [...verifyBeforeWrite],
+		checkpointRevisionMatches:
+			checkpoint && checkpointIntegrity !== "invalid"
+				? checkpoint.taskRevision === snapshot.task.revision &&
+					checkpoint.planRevision === snapshot.task.planRevision &&
+					checkpoint.lastCommittedEventSeq <= provider.getLastEventSeq(taskId)
+				: false,
 		completedStepIds: snapshot.steps.filter((step) => step.status === "completed").map(({ stepId }) => stepId),
 		failedStepIds: snapshot.steps.filter((step) => step.status === "failed").map(({ stepId }) => stepId),
 		unknownStepIds: [...unknown],
@@ -205,7 +221,10 @@ export function recoveryPreflight(
 		consistencyValid,
 		bindingMatches,
 		driftReasons,
-		safeContinueStepIds,
+		safeContinueStepIds:
+			snapshot.task.status !== "budget_exhausted" && consistencyValid && !workspaceChanged && unknown.size === 0
+				? safeContinueStepIds
+				: [],
 		automaticReplayAllowed: false,
 		recommendations,
 	};

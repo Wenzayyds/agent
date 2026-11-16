@@ -11,6 +11,7 @@ export interface ToolOutputResult {
 export function truncatePairedToolOutputs(
 	messages: readonly ContextMessage[],
 	maximumTextCharacters: number,
+	preserveDiagnostics = false,
 ): ToolOutputResult {
 	const callIds = collectToolCallIds(messages);
 	const resultCounts = new Map<string, number>();
@@ -23,6 +24,7 @@ export function truncatePairedToolOutputs(
 	const next = messages.map((message): ContextMessage => {
 		if (
 			message.role !== "toolResult" ||
+			(preserveDiagnostics && isDiagnostic(message)) ||
 			!callIds.has(message.toolCallId) ||
 			resultCounts.get(message.toolCallId) !== 1 ||
 			message.content.some((block) => block.type !== "text")
@@ -42,6 +44,12 @@ export function truncatePairedToolOutputs(
 		return { ...message, content: [{ type: "text", text: shortened }] };
 	});
 	return { messages: next, truncated };
+}
+
+export function isDiagnostic(message: Extract<ContextMessage, { role: "toolResult" }>): boolean {
+	if (message.isError || message.toolName === "run_tests") return true;
+	const details = message.details as { exitCode?: unknown } | undefined;
+	return typeof details?.exitCode === "number" && details.exitCode !== 0;
 }
 
 export function hasValidToolPairing(messages: readonly ContextMessage[]): boolean {

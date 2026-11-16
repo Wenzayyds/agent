@@ -23,6 +23,7 @@ const TASK_TRANSITIONS: Readonly<Record<TaskRecord["status"], readonly TaskRecor
 	completed: [],
 	failed: [],
 	cancelled: [],
+	budget_exhausted: [],
 	needs_reconciliation: ["paused", "queued", "failed", "cancelled"],
 };
 const STEP_TRANSITIONS: Readonly<Record<TaskStep["status"], readonly TaskStep["status"][]>> = {
@@ -208,6 +209,10 @@ export class TaskService {
 
 	bind(taskId: string, stepId: string, sessionId: string, branchLeafId: string | null): TaskRuntimeBinding {
 		const snapshot = this.require(taskId);
+		if (snapshot.task.status === "budget_exhausted")
+			throw new TaskError("TASK_INVALID_TRANSITION", "The run exhausted its budget");
+		if (snapshot.lastCheckpoint && this.provider.checkpointIntegrity(snapshot.lastCheckpoint) === "invalid")
+			throw new TaskError("TASK_INVALID_TRANSITION", "Inspect the invalid checkpoint before binding another step");
 		if (!snapshot.steps.some((step) => step.stepId === stepId))
 			throw new TaskError("TASK_NOT_FOUND", "Task step does not exist");
 		this.provider.bindSession(taskId, sessionId, branchLeafId, "explicit-execution-binding", Date.now());

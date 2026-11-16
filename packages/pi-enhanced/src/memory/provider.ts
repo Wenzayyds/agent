@@ -146,6 +146,7 @@ export class LocalMemoryProvider {
 		this.assertOpen();
 		this.storageOperation(() =>
 			this.transaction(() => {
+				this.assertNotForgotten(input.kind, input.contentHash);
 				const existing = this.database
 					.prepare("SELECT id, content_hash FROM memories WHERE project_id=? AND kind=? AND content_hash=?")
 					.get(this.projectId, input.kind, input.contentHash) as { id: string; content_hash: string } | undefined;
@@ -360,6 +361,7 @@ export class LocalMemoryProvider {
 		verification?: Omit<MemoryVerification, "verifiedContentRevision">;
 		expectedRevision: number;
 		now: number;
+		reflection?: readonly { evidenceRef: string; previousSha256: string; observedSha256: string }[];
 	}): Promise<MemoryRecord> {
 		this.assertOpen();
 		this.storageOperation(() =>
@@ -374,6 +376,15 @@ export class LocalMemoryProvider {
 					)
 					.run(options.status, options.now, options.id, this.projectId, options.expectedRevision);
 				if (Number(result.changes) !== 1) this.throwMissingOrRevision(options.id);
+				if (options.reflection)
+					this.writeAudit(
+						options.id,
+						null,
+						"file_evidence_changed",
+						{ revision: options.expectedRevision },
+						options.reflection,
+						options.now,
+					);
 				if (options.verification) {
 					this.database
 						.prepare(
@@ -399,9 +410,9 @@ export class LocalMemoryProvider {
 		this.storageOperation(() =>
 			this.transaction(() => {
 				const current = this.database
-					.prepare("SELECT id, revision, content_hash, status FROM memories WHERE id=? AND project_id=?")
+					.prepare("SELECT id, revision, kind, content_hash, status FROM memories WHERE id=? AND project_id=?")
 					.get(id, this.projectId) as
-					| { id: string; revision: number; content_hash: string; status: string }
+					| { id: string; revision: number; kind: MemoryKind; content_hash: string; status: string }
 					| undefined;
 				if (!current || current.revision !== expectedRevision) this.throwMissingOrRevision(id);
 				this.writeAudit(id, null, "deleted", current, null, Date.now());
@@ -516,6 +527,7 @@ export class LocalMemoryProvider {
 						throw new MemoryError("MEMORY_VALIDATION_ERROR", "Consolidation proposal is incomplete");
 					const normalized = proposal.proposedContent.normalize("NFKC").replace(/\s+/gu, " ").trim();
 					const hash = createContentHash(normalized);
+					this.assertNotForgotten("experience", hash);
 					const targetId = randomUUID();
 					this.database
 						.prepare(
@@ -594,6 +606,17 @@ export class LocalMemoryProvider {
 			.prepare("UPDATE memories SET revision=revision+1, updated_at=? WHERE id=? AND project_id=? AND revision=?")
 			.run(now, record.id, this.projectId, record.revision);
 		this.writeAudit(record.id, null, "retagged", record, { category }, now);
+	}
+
+	private assertNotForgotten(kind: MemoryKind, hash: string): void {
+		const deleted = this.database
+			.prepare(
+				`SELECT 1 FROM memory_governance_audit WHERE project_id=? AND action='deleted'
+			 AND json_extract(before_json, '$.content_hash')=?
+			 AND (json_extract(before_json, '$.kind')=? OR json_extract(before_json, '$.kind') IS NULL) LIMIT 1`,
+			)
+			.get(this.projectId, hash, kind);
+		if (deleted) throw new MemoryError("MEMORY_VALIDATION_ERROR", "This exact memory was explicitly forgotten");
 	}
 
 	private writeAudit(

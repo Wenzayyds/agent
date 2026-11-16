@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
@@ -21,6 +21,7 @@ import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
+import { loadSuspendedRun, saveSuspendedRun } from "./runner-resume.ts";
 import { resolveSweProfile, SWE_TASK_LIMITS } from "./swe-profile.ts";
 import { collectSweResult } from "./swe-results.ts";
 import { loadSweTask } from "./swe-workspace.ts";
@@ -38,6 +39,10 @@ const repositoryRoot = resolve(packageRoot, "../..");
 async function main(): Promise<void> {
 	const manifest = JSON.parse(readFileSync(join(here, "task-manifest.json"), "utf8")) as { tasks: ExperimentTask[] };
 	const execute = process.argv.includes("--execute");
+	const v3Evaluation = process.argv.includes("--v3-evaluation");
+	const stubRecovery = argument("--v3-stub-recovery");
+	if (stubRecovery !== undefined && stubRecovery !== "pause" && stubRecovery !== "resume")
+		throw new Error("EVAL_V3_RECOVERY_MODE_INVALID");
 	const localStubUrl = argument("--local-stub-url");
 	const cell = controlledCell(argument("--controlled-cell"));
 	const sweId = argument("--swebench-id");
@@ -90,7 +95,7 @@ async function main(): Promise<void> {
 		throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
 	if (taskPair && cell?.module !== "task") throw new Error("TASK_PAIR_INVALID_CELL");
 	const batchL = taskPair || comparisonProfile === BATCH_L_PROFILE || comparisonProfile === NEXT_EVALUATION_PROFILE;
-	const telemetryEnabled = Boolean(sweId) || taskPair || process.argv.includes("--evaluation-telemetry");
+	const telemetryEnabled = v3Evaluation || Boolean(sweId) || taskPair || process.argv.includes("--evaluation-telemetry");
 	const experimentalLimits = taskPair ? TASK_PAIR_LIMITS : batchL ? BATCH_L_LIMITS : CONTROLLED_LIMITS;
 	if (batchL && !cell) throw new Error("BATCH_L_REAL_AUTHORIZATION_REQUIRED");
 	const authorizationBatchId = argument("--authorization-batch-id");
@@ -117,16 +122,22 @@ async function main(): Promise<void> {
 	const offlinePolicy = loadOfflineDenialPolicy(argument("--offline-denial-policy"), localStubUrl, repositoryRoot);
 	if (offlinePolicy && !cell) throw new Error("OFFLINE_DENIAL_POLICY_REQUIRES_CONTROLLED_CELL");
 	const readonlyModuleTools =
-		batchL || (cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools"));
+		v3Evaluation || batchL || (cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools"));
 	const taskId = cell?.taskId ?? argument("--task-id");
 	const singleFileTestFeedback = process.argv.includes("--single-file-test-feedback");
 	const configDefaultTestFeedback = process.argv.includes("--config-default-test-feedback");
-	const baselineFixture = !cell && !sweId && !comparisonProfile && (argument("--variant") ?? "baseline") === "baseline";
+	const baselineFixture = !cell && !sweId && !comparisonProfile &&
+		(v3Evaluation || (argument("--variant") ?? "baseline") === "baseline");
+	if (v3Evaluation && (!baselineFixture || !localStubUrl || !taskId || !["controlled-long-report", "memory-guided-regression", "config-default"].includes(taskId)))
+		throw new Error("EVAL_V3_LOCAL_STUB_SCOPE_REQUIRED");
 	if (singleFileTestFeedback && (taskId !== "single-file-off-by-one" || !baselineFixture))
 		throw new Error("EVAL_SINGLE_FILE_TEST_SCOPE_INVALID");
 	if (configDefaultTestFeedback && (taskId !== "config-default" || !baselineFixture))
 		throw new Error("EVAL_CONFIG_DEFAULT_TEST_SCOPE_INVALID");
 	const testFeedback = singleFileTestFeedback || configDefaultTestFeedback;
+	if (stubRecovery && (!v3Evaluation || !configDefaultTestFeedback ||
+		!["task-only", "full"].includes(argument("--variant") ?? "")))
+		throw new Error("EVAL_V3_RECOVERY_SCOPE_REQUIRED");
 	const swebench = sweId && sweMirror ? loadSweTask(sweId, sweMirror) : undefined;
 	const selectedTasks: ExperimentTask[] = swebench
 		? [
@@ -217,6 +228,11 @@ async function main(): Promise<void> {
 		if (existsSync(projectEnv)) loadEnvFile(projectEnv);
 	}
 	const plan = execute ? buildEvaluationPlan(input, process.env) : undefined;
+	if (v3Evaluation && (!plan || plan.maxTasks !== 1 || plan.apiKeyEnv !== "MOCK_PROVIDER_KEY" ||
+		plan.sandboxImage !== CONTROLLED_IMAGE || plan.budgetEnforcement !== "local_hard_gateway" ||
+		plan.maxCallsPerTask > CONTROLLED_LIMITS.maxRequests || plan.maxTokensPerTask > CONTROLLED_LIMITS.maxTokens ||
+		plan.maxTotalCostUsd > CONTROLLED_LIMITS.maxCostUsd || plan.timeoutMs > CONTROLLED_LIMITS.timeoutMs))
+		throw new Error("EVAL_V3_LIMIT_INVALID");
 	if (
 		swebench &&
 		(!plan ||
@@ -267,9 +283,14 @@ async function main(): Promise<void> {
 	if (!variants[variant]) throw new Error(`Unknown ablation variant: ${variant}`);
 
 	const runOutput = plan ? resolve(plan.outputDir, plan.runId) : undefined;
-	if (runOutput && existsSync(runOutput)) throw new Error("EVAL_GATE_RUN_ID_ALREADY_EXISTS");
-	if (runOutput) mkdirSync(runOutput, { recursive: true });
-	const root = mkdtempSync(join(tmpdir(), "pi-enhanced-real-agent-"));
+	if (runOutput && existsSync(runOutput) && stubRecovery !== "resume")
+		throw new Error("EVAL_GATE_RUN_ID_ALREADY_EXISTS");
+	if (runOutput && stubRecovery !== "resume") mkdirSync(runOutput, { recursive: true });
+	const root = stubRecovery ? join(runOutput!, "private") : mkdtempSync(join(tmpdir(), "pi-enhanced-real-agent-"));
+	if (stubRecovery === "pause") mkdirSync(root, { mode: 0o700 });
+	if (stubRecovery === "resume" &&
+		(lstatSync(runOutput!).isSymbolicLink() || lstatSync(root).isSymbolicLink() || existsSync(join(runOutput!, "run.json"))))
+		throw new Error("EVAL_V3_RESUME_ROOT_INVALID");
 	if (offlinePolicy)
 		writeFileSync(join(root, "offline-denial-policy.json"), JSON.stringify(offlinePolicy), {
 			flag: "wx",
@@ -280,14 +301,14 @@ async function main(): Promise<void> {
 			flag: "wx",
 			mode: 0o600,
 		});
-	mkdirSync(join(root, "temp"));
+	if (stubRecovery !== "resume") mkdirSync(join(root, "temp"));
 	const results: Array<Record<string, unknown>> = [];
 	let sweCleanup: Record<string, unknown> | undefined;
 	try {
 		let observedCost = 0;
 		for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
-			const workspace = prepareWorkspace(task, root, cell, batchL, comparisonProfile);
-			const { repositoryCommit } = workspace;
+			const workspace = stubRecovery === "resume" ? undefined : prepareWorkspace(task, root, cell, batchL, comparisonProfile);
+			const repositoryCommit = workspace?.repositoryCommit;
 			if (!execute) {
 				results.push({
 					taskId: task.id,
@@ -317,6 +338,8 @@ async function main(): Promise<void> {
 				readonlyModuleTools,
 				testFeedback,
 				telemetryEnabled,
+				v3Evaluation,
+				stubRecovery,
 				localStubUrl,
 				authorization,
 				offlinePolicy,
@@ -336,8 +359,20 @@ async function main(): Promise<void> {
 				observedCost,
 				taskMode: swebench ? ((taskMode as "off" | "v1" | "v2" | undefined) ?? "off") : undefined,
 			};
-			const prepared = await prepareAgent(context, workspace);
+			const prepared = workspace ? await prepareAgent(context, workspace) : loadSuspendedRun(context);
 			const execution = await executeAgent(context, prepared);
+			if (stubRecovery === "pause" && execution.child.status === 0 && execution.child.closed &&
+				execution.hostLifecycle.childAbsent && execution.hostLifecycle.containersRemoved &&
+				execution.gatewayStatus.state === "ready" && execution.gatewayStatus.requestsRejected === 0) {
+				saveSuspendedRun(context, prepared, execution);
+				process.stdout.write(JSON.stringify({
+					state: "paused", budgetDeadlineAt: execution.deadlineAt,
+					requests: execution.gatewayStatus.requestsStarted,
+					inputTokens: execution.gatewayStatus.actualInputTokens, outputTokens: execution.gatewayStatus.actualOutputTokens,
+					estimatedCostUsd: execution.gatewayStatus.actualCostUsd,
+				}) + "\n");
+				return;
+			}
 			if (task.swebench) {
 				const result = collectSweResult(context, prepared, execution);
 				sweCleanup = result.cleanup;
@@ -369,7 +404,7 @@ async function main(): Promise<void> {
 		);
 		process.stdout.write(`${JSON.stringify(summary)}\n`);
 	} finally {
-		rmSync(root, { recursive: true, force: true });
+		if (!stubRecovery) rmSync(root, { recursive: true, force: true });
 		if (sweCleanup && runOutput)
 			atomicPrivateJson(join(runOutput, "host-cleanup.json"), {
 				...sweCleanup,

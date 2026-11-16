@@ -13,6 +13,7 @@ export interface ContextBudgetConfig {
 export interface ContextToolOutputConfig {
 	enabled: boolean;
 	maximumTextCharacters: number;
+	offload?: boolean;
 }
 
 export interface ContextMemoryInjectionConfig {
@@ -37,6 +38,7 @@ export interface ContextModuleConfig {
 	mode: ContextMode;
 	budget: ContextBudgetConfig;
 	toolOutput: ContextToolOutputConfig;
+	compaction?: { enabled: boolean };
 	memoryInjection: ContextMemoryInjectionConfig;
 	taskInjection: ContextTaskInjectionConfig;
 	pythonScoring: ContextPythonScoringConfig;
@@ -52,6 +54,7 @@ export interface ContextDiagnostics {
 	afterEstimatedTokens: number;
 	removedMessages: number;
 	truncatedToolResults: number;
+	offloadedToolResults: number;
 	preservedUnsafeGroups: number;
 	injectedMemoryIds: readonly string[];
 	memoryState: "disabled" | "ready" | "unavailable" | "skipped";

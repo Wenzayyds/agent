@@ -1,4 +1,4 @@
-import type { MemoryRecord, ScopedMemoryReader } from "../memory/contracts.ts";
+import { classifyMemory, memoryTaskId, type MemoryRecord, type ScopedMemoryReader } from "../memory/contracts.ts";
 import { redactMemoryOutput, truncateMemoryOutput } from "../memory/output-safety.ts";
 import { searchMemoryReferences } from "../memory/reference-search.ts";
 import type { ContextMemoryInjectionConfig, ContextMessage } from "./contracts.ts";
@@ -17,6 +17,7 @@ export async function injectVerifiedMemory(options: {
 	reader: ScopedMemoryReader;
 	config: ContextMemoryInjectionConfig;
 	projectRoot: string;
+	taskId?: string;
 }): Promise<MemoryInjectionResult> {
 	const existing = findExistingInjection(options.messages);
 	if (existing) return { messages: [...options.messages], injectedMemoryIds: existing, state: "skipped" };
@@ -34,6 +35,8 @@ export async function injectVerifiedMemory(options: {
 		// authoritative record at the injection boundary and reject stale snapshots.
 		const current = await options.reader.get(observed.id);
 		if (!current || !sameInjectableRevision(observed, current)) continue;
+		if (classifyMemory(current) === "task" && (!options.taskId || memoryTaskId(current.sources) !== options.taskId))
+			continue;
 		if (visibleText.includes(normalize(current.content))) continue;
 		selected.push(current);
 	}

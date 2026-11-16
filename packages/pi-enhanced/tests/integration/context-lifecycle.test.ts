@@ -1,3 +1,4 @@
+import { fauxAssistantMessage, fauxToolCall, Type } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import { convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, createTestUiContext, type Harness } from "../../../coding-agent/test/suite/harness.ts";
 import { createContextExtension } from "../../src/context/extension.ts";
+import { CONTEXT_RESTORE } from "../../src/context/offload.ts";
 import { hasValidToolPairing } from "../../src/context/tool-output.ts";
 import type { ContextMessage } from "../../src/context/contracts.ts";
 import { createMemoryExtension } from "../../src/memory/extension.ts";
@@ -188,6 +190,150 @@ describe("P3 Context Extension lifecycle", () => {
 });
 
 describe("P3 verified Memory integration", () => {
+	it("restores a bounded page after reopening the task and continues through verified memory", async () => {
+		const project = tempDir();
+		const agentDir = join(tempDir(), "agent");
+		const sessionDir = tempDir();
+		const config = selectConfig(true, true);
+		writeConfig(agentDir, {
+			context: { ...config, compaction: { enabled: true }, toolOutput: { enabled: true, offload: true, maximumTextCharacters: 600 } },
+			memory: { enabled: true },
+			"task-manager": { enabled: true, contextSummary: true },
+		});
+		const source = "x".repeat(1_000) + "middle-evidence" + "y".repeat(2_000);
+		writeFileSync(join(project, "fixture.txt"), source);
+		let reads = 0;
+		let memory: MemoryService | undefined;
+		const notifications: string[] = [];
+		const open = async (sessionManager: SessionManager) => {
+			const harness = await createHarness({
+				sessionManager,
+				provider: "context-task-recovery-stub",
+				extensionFactories: [
+					createTaskManagerExtension({ agentDir }),
+					createMemoryExtension({ agentDir, openBackend: async (scope) => (memory = await openMemoryService(scope)) }),
+					createContextExtension({ agentDir }),
+					(pi) => pi.registerTool({
+						name: "read_fixture", label: "Read fixture", description: "Read the fixed test fixture",
+						parameters: Type.Object({}),
+						async execute() {
+							reads += 1;
+							return { content: [{ type: "text", text: readFileSync(join(project, "fixture.txt"), "utf8") }], details: {} };
+						},
+					}),
+				],
+			});
+			harnesses.push(harness);
+			(harness.session as unknown as { _cwd: string })._cwd = project;
+			(harness.session.extensionRunner as unknown as { cwd: string }).cwd = project;
+			harness.settingsManager.setProjectTrusted(true);
+			const ui = createTestUiContext({ confirm: async () => true, notify: (message) => notifications.push(message) });
+			await harness.session.bindExtensions({ mode: "tui", uiContext: ui });
+			const ctx = Object.create(harness.session.extensionRunner.createCommandContext()) as ExtensionCommandContext;
+			Object.defineProperties(ctx, { hasUI: { value: true }, ui: { value: ui } });
+			const invoke = async (name: string, args: string) => {
+				const command = harness.session.extensionRunner.getCommand(name);
+				if (!command) throw new Error(`Missing ${name}`);
+				await command.handler(args, ctx);
+				return notifications.at(-1)!;
+			};
+			return { harness, invoke, ctx };
+		};
+
+		const first = await open(SessionManager.create(project, sessionDir));
+		const task = JSON.parse(await first.invoke("enhanced-task-create", JSON.stringify({
+			goal: "Inspect file then validate its version",
+			steps: [
+				{ stepId: "inspect", title: "Inspect", expectedOutcome: "Read the fixture once" },
+				{ stepId: "verify", title: "Verify", expectedOutcome: "Validate the observed fixture", dependsOn: ["inspect"],
+					validation: { kind: "file_sha256", relativePath: "fixture.txt", expectedSha256: createHash("sha256").update(source).digest("hex") } },
+			],
+		})));
+		const taskId: string = task.task.taskId;
+		await first.invoke("enhanced-task-approve", `${taskId} ${task.task.revision}`);
+		await first.invoke("enhanced-task-step", `${taskId} inspect bind`);
+		await first.invoke("enhanced-task-step", `${taskId} inspect start 1`);
+		const candidate = await memory!.saveCandidate({
+			kind: "fact", content: "retained marker documents the fixture version", source: { type: "user", ref: "fixture" },
+		});
+		await memory!.confirmByUser(candidate.id, candidate.revision, first.ctx);
+		let reference: string | undefined;
+		first.harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("read_fixture", {})], { stopReason: "toolUse" }),
+			(context) => {
+				const projected = context.messages.find((message) => message.role === "toolResult");
+				const serialized = JSON.stringify(projected);
+				reference = /v1:[a-f0-9]{64}/u.exec(serialized)?.[0];
+				expect(reference).toBeDefined();
+				expect(serialized).not.toContain("middle-evidence");
+				return fauxAssistantMessage("Inspection finished");
+			},
+		]);
+		await first.harness.session.prompt("Inspect the file. Preserve the original fixture.");
+		expect(first.harness.getPendingResponseCount()).toBe(0);
+		expect(reference).toBeDefined();
+		const sessionFile = first.harness.sessionManager.getSessionFile()!;
+		expect(readFileSync(sessionFile, "utf8")).toContain(source);
+		await first.invoke("enhanced-task-evidence", `${taskId} inspect attest observed file content`);
+		await first.invoke("enhanced-task-step", `${taskId} inspect verify 2`);
+		await first.invoke("enhanced-task-step", `${taskId} inspect complete 3`);
+		const checkpoint = JSON.parse(await first.invoke("enhanced-task-checkpoint", taskId));
+		expect(checkpoint.observation.contextReferences).toEqual([reference]);
+		expect(checkpoint.observation.sessionUsage.responses).toBe(2);
+		const firstKeptEntryId = first.harness.sessionManager.getLeafId()!;
+		first.harness.sessionManager.appendCompaction("The fixture was inspected.", firstKeptEntryId, 1_000);
+		await first.harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		harnesses.splice(harnesses.indexOf(first.harness), 1);
+		first.harness.cleanup();
+
+		const second = await open(SessionManager.open(sessionFile, sessionDir));
+		const preflight = JSON.parse(await second.invoke("enhanced-task-recover", taskId));
+		expect(preflight).toMatchObject({
+			checkpointIntegrity: "verified", completedStepIds: ["inspect"], safeContinueStepIds: ["verify"], automaticReplayAllowed: false,
+		});
+		await second.invoke("enhanced-task-rebind", `${taskId} verify`);
+		await second.invoke("enhanced-task-step", `${taskId} verify start 1`);
+		let sawRestoredPage = false;
+		second.harness.setResponses([
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain(candidate.id);
+				expect(JSON.stringify(context.messages)).toContain(`contextReference=${reference}`);
+				return fauxAssistantMessage([fauxToolCall(CONTEXT_RESTORE, { reference: reference!, offset: 995, limit: 25 })], { stopReason: "toolUse" });
+			},
+			(context) => {
+				const restored = context.messages.findLast((message) => message.role === "toolResult" && message.toolName === CONTEXT_RESTORE);
+				expect(JSON.stringify(restored)).toContain("xxxxxmiddle-evidenceyyyyy");
+				sawRestoredPage = true;
+				return fauxAssistantMessage("Ready for independent validation");
+			},
+		]);
+		await second.harness.session.prompt("retained marker");
+		expect(second.harness.session.messages.findLast((message) => message.role === "assistant")).toMatchObject({ stopReason: "stop" });
+		expect(sawRestoredPage).toBe(true);
+		expect(reads).toBe(1);
+		const continued = JSON.parse(await second.invoke("enhanced-task-checkpoint", taskId));
+		expect(continued.observation.sessionUsage.responses).toBe(checkpoint.observation.sessionUsage.responses + 2);
+		await second.invoke("enhanced-task-evidence", `${taskId} verify validate`);
+		await second.invoke("enhanced-task-step", `${taskId} verify verify 2`);
+		await second.invoke("enhanced-task-step", `${taskId} verify complete 3`);
+		const inspected = JSON.parse(await second.invoke("enhanced-task-inspect", taskId));
+		const completed = JSON.parse(await second.invoke("enhanced-task-complete", `${taskId} ${inspected.task.revision}`));
+		expect(completed.task.status).toBe("completed");
+		expect(completed.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ outcome: "succeeded", stepId: "verify" })]));
+
+		const other = JSON.parse(await second.invoke("enhanced-task-create", JSON.stringify({
+			goal: "Different task", steps: [{ stepId: "other", title: "Other", expectedOutcome: "No cross-task restore" }],
+		})));
+		await second.invoke("enhanced-task-approve", `${other.task.taskId} ${other.task.revision}`);
+		await second.invoke("enhanced-task-step", `${other.task.taskId} other bind`);
+		second.harness.setResponses([
+			fauxAssistantMessage([fauxToolCall(CONTEXT_RESTORE, { reference: reference! })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("Done"),
+		]);
+		await second.harness.session.prompt("Check task isolation.");
+		expect(second.harness.session.messages.findLast((item) => item.role === "toolResult")).toMatchObject({ isError: true });
+	});
+
 	it("optionally injects the current bound Task without changing the user message structure", async () => {
 		const agentDir = join(tempDir(), "agent");
 		writeConfig(agentDir, {

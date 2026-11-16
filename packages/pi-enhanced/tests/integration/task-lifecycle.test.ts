@@ -35,5 +35,13 @@ describe("P4 Task Extension lifecycle", () => {
 		const preflight = JSON.parse(notifications.at(-1)!) as { automaticReplayAllowed: boolean; completedStepIds: string[] }; expect(preflight.automaticReplayAllowed).toBe(false); expect(preflight.completedStepIds).toEqual(["test"]); expect(approved.task.revision).toBeGreaterThan(created.task.revision);
 		expect(existsSync(join(agentDir, "pi-enhanced", "tasks"))).toBe(true);
 		await harness.session.extensionRunner.emit({ type: "agent_settled", aborted: false }); await invoke("enhanced-task-inspect", created.task.taskId); expect(notifications.at(-1)).toContain('"status": "running"'); expect((JSON.parse(notifications.at(-1)!) as { evidence: unknown[] }).evidence).toHaveLength(1);
+		await harness.session.extensionRunner.emit({ type: "agent_settled", aborted: true });
+		await invoke("enhanced-task-inspect", created.task.taskId);
+		const paused = JSON.parse(notifications.at(-1)!);
+		expect(paused.task.status).toBe("paused");
+		expect(paused.lastCheckpoint.checkpointId).toBeDefined();
+		await invoke("enhanced-task-resume", `${created.task.taskId} ${paused.task.revision}`);
+		expect(JSON.parse(notifications.at(-1)!).task.status).toBe("queued");
+		expect(harness.eventsOfType("tool_execution_start")).toEqual([]);
 	});
 });

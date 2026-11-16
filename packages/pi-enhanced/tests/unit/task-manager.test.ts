@@ -96,6 +96,28 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 		expect(() => new TaskProvider(storage)).toThrowError(expect.objectContaining({ code: "TASK_STORAGE_ERROR" }));
 	});
 
+	it("rejects tampered checkpoints without replay and preserves measured observations across reopen", () => {
+		const { service } = fixture();
+		const created = service.create("recover", [{ stepId: "checkpoint-test", title: "Inspect", expectedOutcome: "Verify" }], "s", null);
+		const taskId = created.task.taskId;
+		const observation = { contextReferences: ["v1:" + "a".repeat(64)], sessionUsage: { responses: 2, tokens: 100, reportedCostUsd: 0.001 } };
+		createCheckpoint(service.provider, created, "s", null, [], observation);
+		const reopened = new TaskProvider(service.provider.scope);
+		try {
+			expect(reopened.get(taskId)?.lastCheckpoint?.observation).toEqual(observation);
+			expect(recoveryPreflight(reopened, taskId, "s", null).checkpointIntegrity).toBe("verified");
+		} finally {
+			reopened.close();
+		}
+		const database = new DatabaseSync(service.provider.scope.databasePath);
+		database.prepare("UPDATE task_checkpoints SET pending_ids_json=? WHERE task_id=?").run('[]', taskId);
+		database.close();
+		expect(recoveryPreflight(service.provider, taskId, "s", null)).toMatchObject({
+			checkpointIntegrity: "invalid", consistencyValid: false, safeContinueStepIds: [], automaticReplayAllowed: false,
+		});
+		expect(() => service.bind(taskId, "checkpoint-test", "s", null)).toThrow("invalid checkpoint");
+	});
+
 	it("upgrades an existing schema v1 database to v2 without losing tasks", () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-task-v1-upgrade-")); roots.push(root);
 		const project = join(root, "project"); const agentDir = join(root, "agent"); mkdirSync(project);

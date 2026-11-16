@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { DurableBudget, type DurableBudgetOptions, type PendingBudgetRequest } from "./budget-persistence.ts";
 import type { EvaluationTelemetry, ReservationDiagnostics, ReservationSettlement } from "./evaluation-telemetry.ts";
 
 export interface BudgetGatewayLimits {
@@ -28,6 +29,7 @@ export interface BudgetGatewayOptions {
 	pricing: BudgetGatewayPricing;
 	fetch?: typeof globalThis.fetch;
 	telemetry?: EvaluationTelemetry;
+	persistence?: DurableBudgetOptions;
 }
 
 export interface GatewayDenialRecord {
@@ -52,6 +54,7 @@ interface ProviderUsage {
 }
 
 interface Reservation {
+	requestSequence: number;
 	diagnostics: ReservationDiagnostics;
 	inputTokenUpperBound: number;
 	outputTokenLimit: number;
@@ -94,16 +97,22 @@ export interface BudgetGatewayStatus {
 
 class BudgetLedger {
 	private state: BudgetGatewayStatus;
+	private accepting = true;
 	private readonly limits: BudgetGatewayLimits;
 	private readonly pricing: BudgetGatewayPricing;
 	private readonly runId: string;
 	private readonly telemetry?: EvaluationTelemetry;
+	private readonly durable?: DurableBudget;
+	private readonly settlements = new WeakMap<Reservation, ReservationSettlement>();
+	private readonly monotonicDeadline?: number;
 
 	constructor(
 		runId: string,
 		limits: BudgetGatewayLimits,
 		pricing: BudgetGatewayPricing,
 		telemetry?: EvaluationTelemetry,
+		persistence?: DurableBudgetOptions,
+		policy?: string,
 	) {
 		this.telemetry = telemetry;
 		this.runId = runId;
@@ -129,6 +138,38 @@ class BudgetLedger {
 			requestOutcomes: [],
 			limits: { ...limits },
 		};
+		if (persistence) {
+			this.durable = new DurableBudget(persistence, policy!, this.state);
+			this.state = this.durable.snapshot();
+			this.monotonicDeadline = performance.now() + this.durable.deadlineAt - Date.now();
+		}
+	}
+
+	remainingTime(): number {
+		if (!this.durable || this.monotonicDeadline === undefined) return Infinity;
+		if (Date.now() < this.durable.updatedAt) return 0;
+		return Math.max(0, Math.min(this.durable.deadlineAt - Date.now(), this.monotonicDeadline - performance.now()));
+	}
+
+	get deadlineAt(): number | undefined { return this.durable?.deadlineAt; }
+
+	dispatch(reservation: Reservation): void {
+		if (this.remainingTime() <= 0) throw new GatewayRejection("GATEWAY_RUN_TIMEOUT");
+		this.persistReservation(reservation, "dispatched");
+	}
+
+	private persistReservation(reservation: Reservation, phase: PendingBudgetRequest["phase"]): void {
+		this.durable?.save(this.state, {
+			requestSequence: reservation.requestSequence,
+			tokens: reservation.reservedTokens,
+			costUsd: reservation.reservedCostUsd,
+			phase,
+			updatedAt: Date.now(),
+		});
+	}
+
+	abortPersistence(): void {
+		this.failClosed("GATEWAY_BUDGET_STORAGE_FAILURE");
 	}
 
 	nextRequestSequence(): number {
@@ -139,9 +180,15 @@ class BudgetLedger {
 	recordOutcome(value: BudgetGatewayStatus["requestOutcomes"][number]): void {
 		this.state.requestOutcomes.push(value);
 		if (this.state.requestOutcomes.length > 64) this.state.requestOutcomes.shift();
+		this.durable?.save(this.state);
 	}
 
 	reserve(bodyBytes: number, outboundBytes: number, requestedOutputTokens: number, defaultOutputTokenLimit: number, requestSequence: number): Reservation {
+		if (!this.accepting) return this.reject("GATEWAY_CLOSING", requestSequence);
+		if (this.remainingTime() <= 0) {
+			this.stop("GATEWAY_RUN_TIMEOUT");
+			return this.reject("GATEWAY_RUN_TIMEOUT", requestSequence);
+		}
 		if (this.state.state !== "ready") return this.reject("GATEWAY_FAILED_CLOSED", requestSequence);
 		if (this.state.activeRequests >= this.limits.maxConcurrency)
 			return this.reject("GATEWAY_CONCURRENCY_LIMIT", requestSequence);
@@ -192,10 +239,14 @@ class BudgetLedger {
 		this.state.activeRequests += 1;
 		this.state.reservedTokens += reservedTokens;
 		this.state.reservedCostUsd += reservedCostUsd;
-		return { diagnostics, inputTokenUpperBound, outputTokenLimit, reservedTokens, reservedCostUsd };
+		const reservation = { requestSequence, diagnostics, inputTokenUpperBound, outputTokenLimit, reservedTokens, reservedCostUsd };
+		this.persistReservation(reservation, "reserved");
+		return reservation;
 	}
 
 	complete(reservation: Reservation, usage: ProviderUsage | null): ReservationSettlement {
+		const previous = this.settlements.get(reservation);
+		if (previous) return previous;
 		this.state.requestsCompleted += 1;
 		if (!usage) return this.fail(reservation, "GATEWAY_USAGE_MISSING");
 
@@ -217,6 +268,8 @@ class BudgetLedger {
 	}
 
 	fail(reservation: Reservation, reason: string): ReservationSettlement {
+		const previous = this.settlements.get(reservation);
+		if (previous) return previous;
 		this.failClosed(reason);
 		return this.settle(reservation, reservation.reservedTokens, reservation.reservedCostUsd);
 	}
@@ -231,12 +284,15 @@ class BudgetLedger {
 		this.state.reservedCostUsd = Math.max(0, this.state.reservedCostUsd - reservation.reservedCostUsd);
 		this.state.committedTokenUpperBound += committedTokens;
 		this.state.committedCostUpperBoundUsd += committedCostUsd;
-		return {
+		this.durable?.save(this.state, { settled: reservation.requestSequence });
+		const settlement = {
 			committedTokens,
 			committedCostUsd,
 			releasedTokens: Math.max(0, reservation.reservedTokens - committedTokens),
 			releasedCostUsd: Math.max(0, reservation.reservedCostUsd - committedCostUsd),
 		};
+		this.settlements.set(reservation, settlement);
+		return settlement;
 	}
 
 	deny(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null): void {
@@ -285,15 +341,23 @@ class BudgetLedger {
 
 	reject(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null): never {
 		this.deny(reason, requestSequence, diagnostics);
+		if (this.durable && isHardBudgetStop(reason)) {
+			this.failClosed(reason);
+			this.durable.save(this.state);
+		}
 		throw new GatewayRejection(reason);
 	}
 
+	suspendAdmission(): void { this.accepting = false; }
+
 	close(): void {
+		this.durable?.close();
 		this.state.state = "closed";
 	}
 
 	stop(reason: string): void {
 		this.failClosed(reason);
+		this.durable?.save(this.state);
 	}
 
 	snapshot(): BudgetGatewayStatus {
@@ -304,6 +368,10 @@ class BudgetLedger {
 		this.state.state = "failed_closed";
 		this.state.lastError = reason;
 	}
+}
+
+export function isHardBudgetStop(reason: string): boolean {
+	return ["GATEWAY_REQUEST_LIMIT", "GATEWAY_TOKEN_BUDGET", "GATEWAY_COST_BUDGET", "GATEWAY_RUN_TIMEOUT"].includes(reason);
 }
 
 class GatewayRejection extends Error {
@@ -317,35 +385,58 @@ class GatewayRejection extends Error {
 
 export interface RunningBudgetGateway {
 	url: string;
+	deadlineAt?: number;
 	status(): BudgetGatewayStatus;
+	finalStatus?(): BudgetGatewayStatus | undefined;
 	stop(reason: "GATEWAY_RUN_TIMEOUT"): void;
 	close(): Promise<void>;
 }
 
 export async function startBudgetGateway(options: BudgetGatewayOptions): Promise<RunningBudgetGateway> {
 	validateOptions(options);
-	const ledger = new BudgetLedger(options.runId, options.limits, options.pricing, options.telemetry);
+	const policy = JSON.stringify(["utf8_max_in_out_plus4096_v2", options.runId, options.allowedModel, options.upstreamBaseUrl,
+		Object.entries(options.limits).sort(), Object.entries(options.pricing).sort()]);
+	const ledger = new BudgetLedger(options.runId, options.limits, options.pricing, options.telemetry, options.persistence, policy);
 	const active = new Set<AbortController>();
+	const inFlight = new Set<Promise<void>>();
+	let finalStatus: BudgetGatewayStatus | undefined;
+	let closing: Promise<void> | undefined;
 	const server = createServer((request, response) => {
-		void handleRequest(request, response, options, ledger, active);
+		if (closing) return sendJson(response, 503, { error: "GATEWAY_CLOSING" });
+		const work = handleRequest(request, response, options, ledger, active).catch(() => {
+			ledger.abortPersistence();
+			for (const controller of active) controller.abort(new Error("GATEWAY_BUDGET_STORAGE_FAILURE"));
+			if (!response.headersSent) sendJson(response, 503, { error: "GATEWAY_BUDGET_STORAGE_FAILURE" });
+			else response.destroy();
+		}).finally(() => { inFlight.delete(work); });
+		inFlight.add(work);
 	});
 	server.requestTimeout = options.limits.requestTimeoutMs + 5_000;
 	server.headersTimeout = Math.min(server.requestTimeout, 30_000);
 	server.maxRequestsPerSocket = options.limits.maxRequests + 4;
-	await listen(server);
+	try { await listen(server); } catch (error) { ledger.close(); throw error; }
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("GATEWAY_LISTEN_FAILED");
 	return {
 		url: `http://127.0.0.1:${address.port}`,
+		deadlineAt: ledger.deadlineAt,
 		status: () => ledger.snapshot(),
+		finalStatus: () => finalStatus && structuredClone(finalStatus),
 		stop: (reason) => {
 			ledger.stop(reason);
 			for (const controller of active) controller.abort(new Error(reason));
 		},
-		close: async () => {
-			ledger.close();
-			await closeServer(server);
-		},
+		close: () => closing ??= (async () => {
+			ledger.suspendAdmission();
+			for (const controller of active) controller.abort(new Error("GATEWAY_RUN_EXIT"));
+			try {
+				await closeServer(server);
+				await Promise.allSettled(inFlight);
+			} finally {
+				finalStatus = ledger.snapshot();
+				ledger.close();
+			}
+		})(),
 	};
 }
 
@@ -390,6 +481,7 @@ async function handleRequest(
 	let body: Record<string, unknown>;
 	try {
 		body = JSON.parse(bodyBytes.toString("utf8")) as Record<string, unknown>;
+		if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid body");
 	} catch {
 		ledger.deny("GATEWAY_INVALID_JSON", requestSequence);
 		return sendJson(response, 400, { error: "GATEWAY_INVALID_JSON" });
@@ -427,7 +519,8 @@ async function handleRequest(
 			bodyBytes.byteLength, Buffer.byteLength(JSON.stringify(body)), requestedOutputTokens, requestedOutput, requestSequence,
 		);
 	} catch (error) {
-		const code = error instanceof GatewayRejection ? error.code : "GATEWAY_REJECTED";
+		if (!(error instanceof GatewayRejection)) throw error;
+		const code = error.code;
 		return sendJson(response, 429, { error: code });
 	}
 	body.max_tokens = reservation.outputTokenLimit;
@@ -441,10 +534,11 @@ async function handleRequest(
 	const startedAt = Date.now();
 	let usageAccounted = false;
 	let invalidUsage = false;
-	let settlement: ReservationSettlement;
+	let settlement: ReservationSettlement | undefined;
 	const responseIds = new Set<string>();
 	const started = performance.now();
 	const recordOutcome = (outcome: string) => {
+		if (!settlement) throw new Error("GATEWAY_SETTLEMENT_MISSING");
 		const inputTokens = usageAccounted ? usage!.promptTokens : null;
 		const outputTokens = usageAccounted ? usage!.completionTokens : null;
 		const actualCostUsd = inputTokens !== null && outputTokens !== null
@@ -485,13 +579,14 @@ async function handleRequest(
 		});
 	};
 	const timeout = setTimeout(
-		() => controller.abort(new Error("GATEWAY_UPSTREAM_TIMEOUT")),
-		options.limits.requestTimeoutMs,
+		() => controller.abort(new Error(ledger.remainingTime() <= 0 ? "GATEWAY_RUN_TIMEOUT" : "GATEWAY_UPSTREAM_TIMEOUT")),
+		Math.min(options.limits.requestTimeoutMs, ledger.remainingTime()),
 	);
 	response.on("close", () => {
 		if (!settled && !response.writableEnded) controller.abort(new Error("GATEWAY_CLIENT_DISCONNECTED"));
 	});
 	try {
+		ledger.dispatch(reservation);
 		const upstream = await (options.fetch ?? globalThis.fetch)(
 			`${options.upstreamBaseUrl.replace(/\/$/u, "")}/chat/completions`,
 			{
@@ -509,8 +604,8 @@ async function handleRequest(
 		response.setHeader("Content-Type", upstream.headers.get("content-type") ?? "text/event-stream; charset=utf-8");
 		response.setHeader("Cache-Control", "no-store");
 		if (!upstream.body) {
-			settlement = ledger.fail(reservation, "GATEWAY_UPSTREAM_BODY_MISSING");
 			settled = true;
+			settlement = ledger.fail(reservation, "GATEWAY_UPSTREAM_BODY_MISSING");
 			recordOutcome("GATEWAY_UPSTREAM_BODY_MISSING");
 			response.end();
 			return;
@@ -528,10 +623,10 @@ async function handleRequest(
 			doneSeen ||= parsed.done;
 			// Settle before exposing DONE: Pi may close the downstream immediately.
 			if (doneSeen) {
+				settled = true;
 				if (upstream.ok) settlement = ledger.complete(reservation, invalidUsage ? null : usage);
 				else settlement = ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
 				usageAccounted = upstream.ok && !invalidUsage && usage !== null;
-				settled = true;
 				recordOutcome(ledger.snapshot().lastError ?? "completed_done");
 			}
 			response.write(bytes);
@@ -542,14 +637,15 @@ async function handleRequest(
 		if (final.hasUsage) usage = final.usage;
 		invalidUsage ||= final.invalidUsage;
 		if (!settled) {
+			settled = true;
 			if (upstream.ok) settlement = ledger.complete(reservation, invalidUsage ? null : usage);
 			else settlement = ledger.fail(reservation, `GATEWAY_UPSTREAM_HTTP_${upstream.status}`);
 			usageAccounted = upstream.ok && !invalidUsage && usage !== null;
-			settled = true;
 			recordOutcome(ledger.snapshot().lastError ?? "completed_eof");
 		}
 		response.end();
 	} catch (error) {
+		if (settled && !settlement) throw error;
 		if (!settled) {
 			const reason = controller.signal.reason;
 			const code = controller.signal.aborted && reason instanceof Error ? reason.message : "GATEWAY_UPSTREAM_ERROR";

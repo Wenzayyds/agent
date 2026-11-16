@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
 import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
+import { createCheckpoint } from "../../src/task-manager/recovery.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
+import { isHardBudgetStop } from "./budget-gateway.ts";
 import { batchLGroup, batchLReferences } from "./batch-l-profile.ts";
 import { longReport, MEMORY_RULE, TASK_STEPS } from "./controlled-cases.ts";
 import type { SafetyEvent } from "./controlled-stop.ts";
@@ -24,6 +26,7 @@ import { gatewayEvidence } from "./gateway-integration.ts";
 import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { classifyTermination } from "./result-classification.ts";
 import type { AgentExecution } from "./runner-execution.ts";
+import { finishResumedRun } from "./runner-resume.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 /** Interprets completed evidence and persists results; never starts an Agent, model request or container. */
 export function collectTaskResult(context: RunnerContext, prepared: PreparedAgent, execution: AgentExecution) {
@@ -40,7 +43,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		moduleTools,
 		prompt,
 	} = prepared;
-	const { child, gatewayStatus, verification, telemetry, sandboxAuditPath, contextReportPath, started, hostLifecycle } = execution;
+	const { child, gatewayStatus, gatewayAtStart, verification, telemetry, sandboxAuditPath, contextReportPath, started, hostLifecycle, deadlineAt } = execution;
 	if (!verification) throw new Error("SYNTHETIC_VERIFIER_REQUIRED");
 	const apiKeyEnv = plan.apiKeyEnv;
 	const events = parseAgentEvents(child.stdout ?? "");
@@ -82,8 +85,10 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 	const contextAudit = existsSync(contextReportPath)
 		? (JSON.parse(readFileSync(contextReportPath, "utf8")) as Record<string, unknown>)
 		: { state: switches.context ? "missing" : "disabled", diagnostics: [] };
+	const budgetReason = gatewayStatus.denials.find(({ code }) => isHardBudgetStop(code))?.code ??
+		(gatewayStatus.lastError && isHardBudgetStop(gatewayStatus.lastError) ? gatewayStatus.lastError : null);
 	const overBudget = budgetExceeded(usage, observedCost, plan!) || gatewayStatus.requestsRejected > 0;
-	const timedOut = child.timedOut || (testFeedback === true && gatewayStatus.lastError === "GATEWAY_UPSTREAM_TIMEOUT");
+	const timedOut = child.timedOut || budgetReason === "GATEWAY_RUN_TIMEOUT" || (testFeedback === true && gatewayStatus.lastError === "GATEWAY_UPSTREAM_TIMEOUT");
 	const agentFailed = testFeedback && (gatewayStatus.state === "failed_closed" || events.some((event) => {
 		const message = event.message as { role?: string; stopReason?: string } | undefined;
 		return event.type === "message_end" && message?.role === "assistant" &&
@@ -93,8 +98,8 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 	const status = classifyExecution({ overBudget, timedOut, exitCode, verifierPassed });
 	const outcome = executionOutcome({
 		overBudget: budgetExceeded(usage, observedCost, plan!),
-		budgetRejected: gatewayStatus.requestsRejected > 0,
-		gatewayFailed: gatewayStatus.state === "failed_closed",
+		budgetRejected: budgetReason !== null,
+		gatewayFailed: budgetReason === null && gatewayStatus.state === "failed_closed",
 		timedOut,
 		exitCode,
 		verifierPassed,
@@ -115,6 +120,31 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 	)
 		terminationClassification = "sandbox_runtime_error";
 	const taskOutput = join(runOutput!, task.id);
+	const budgetTermination = seededTaskId && budgetReason ? (() => {
+		const store = new TaskProvider(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir));
+		try {
+			const termination = {
+				runId: plan.runId, code: budgetReason, requestsStarted: gatewayStatus.requestsStarted,
+				confirmedInputTokens: gatewayStatus.actualInputTokens, confirmedOutputTokens: gatewayStatus.actualOutputTokens,
+				estimatedConfirmedCostUsd: gatewayStatus.actualCostUsd,
+				unconfirmedTokens: Math.max(0, gatewayStatus.committedTokenUpperBound - gatewayStatus.actualTotalTokens) + gatewayStatus.reservedTokens,
+				unconfirmedCostUsd: Math.max(0, gatewayStatus.committedCostUpperBoundUsd - gatewayStatus.actualCostUsd) + gatewayStatus.reservedCostUsd,
+				auditComplete, verifierPassed,
+			};
+			const checkpoint = store.finishBudgetRun(seededTaskId, `budget:${plan.runId}:${budgetReason}`, (snapshot) =>
+				createCheckpoint(store, snapshot, "controlled-pilot-host", null, [], {
+					contextReferences: snapshot.lastCheckpoint?.observation?.contextReferences ?? [],
+					sessionUsage: { responses: agentReportedUsage.calls, tokens: agentReportedUsage.tokens,
+						reportedCostUsd: agentReportedUsage.costUsd ?? 0 },
+					budgetTermination: termination,
+				}),
+			);
+			return { status: "budget_exhausted", checkpoint, attemptStates: store.getAttempts(seededTaskId).map(({ stepId, state, riskClass }) =>
+				({ stepId, state, riskClass })) };
+		} finally { store.close(); }
+	})() : undefined;	const resumedTask = context.stubRecovery === "resume" && !budgetTermination
+		? finishResumedRun(prepared, verifierPassed, outcome.runStatus === "completed", auditComplete)
+		: undefined;
 	mkdirSync(taskOutput, { recursive: true });
 	writeFileSync(join(taskOutput, "patch.diff"), patch);
 	writeFileSync(
@@ -128,13 +158,36 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		repositoryCommit,
 		status,
 		verifierPassed,
+		...(budgetTermination ? { taskTermination: budgetTermination } : {}),
+		...(resumedTask ? { resumedTask } : {}),
 		agentExitCode: child.status,
 		timedOut,
 		usage,
 		agentReportedUsage,
 		gateway: gatewayEvidence(gatewayStatus),
 		sandboxAudit,
-		...(testFeedback ? { hostLifecycle } : {}),
+		...(testFeedback || context.v3Evaluation ? { hostLifecycle } : {}),
+		...(deadlineAt === undefined ? {} : { budgetDeadlineAt: deadlineAt }),
+		...(context.v3Evaluation ? {
+			v3Evaluation: {
+				mode: "stub",
+				modules: switches,
+				costType: "gateway_rate_estimate",
+				model: {
+					requests: usage.calls, inputTokens: gatewayStatus.actualInputTokens, outputTokens: gatewayStatus.actualOutputTokens,
+					totalTokens: usage.tokens, estimatedCostUsd: usage.costUsd,
+					providerBilledCostUsd: null,
+					unconfirmedTokens: Math.max(0, gatewayStatus.committedTokenUpperBound - usage.tokens) + gatewayStatus.reservedTokens,
+				},
+				tools: events.filter(({ type }) => type === "tool_execution_end").map(({ toolName, isError }) => ({ toolName, isError })),
+				context: contextAudit,
+				memorySeeded: Boolean(memorySeed),
+				checkpointId: budgetTermination?.checkpoint?.checkpointId ?? null,
+				agentCompleted: outcome.runStatus === "completed",
+				auditComplete,
+				budgetReason,
+			},
+		} : {}),
 		patchSha256: createHash("sha256").update(patch).digest("hex"),
 		durationMs: Number((performance.now() - started).toFixed(3)),
 	};
@@ -278,7 +331,13 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		});
 	}
 	if (telemetry) {
-		const trace = telemetry.finish(gatewayStatus, sandboxAudit);
+		const trace = telemetry.finish(gatewayAtStart ? {
+			actualInputTokens: gatewayStatus.actualInputTokens - gatewayAtStart.actualInputTokens,
+			actualOutputTokens: gatewayStatus.actualOutputTokens - gatewayAtStart.actualOutputTokens,
+			actualTotalTokens: gatewayStatus.actualTotalTokens - gatewayAtStart.actualTotalTokens,
+			actualCostUsd: gatewayStatus.actualCostUsd - gatewayAtStart.actualCostUsd,
+			requestsStarted: gatewayStatus.requestsStarted - gatewayAtStart.requestsStarted,
+		} : gatewayStatus, sandboxAudit);
 		const returnedIds = new Set(
 			trace.tools.filter((t) => t.phase === "end" && t.status === "returned").map((t) => t.toolCallId),
 		);

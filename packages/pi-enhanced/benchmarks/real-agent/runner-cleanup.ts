@@ -5,9 +5,9 @@ import { assertSandboxContainerOwner, SANDBOX_CONTAINER_OWNER_LABEL } from "../.
 import type { BudgetGatewayStatus, RunningBudgetGateway } from "./budget-gateway.ts";
 import { gatewayEvidence } from "./gateway-integration.ts";
 
-/** Preserve the pre-close ledger and attempt each cleanup even if evidence cannot be written. */
+/** Drain the gateway before writing its final ledger, and attempt container cleanup independently. */
 export async function finalizeAgentExecution(
-	gateway: Pick<RunningBudgetGateway, "status" | "close">,
+	gateway: Pick<RunningBudgetGateway, "status" | "close" | "finalStatus">,
 	evidenceDir: string | undefined,
 	removeContainers?: () => boolean,
 	executionFailure?: { error: unknown },
@@ -15,20 +15,20 @@ export async function finalizeAgentExecution(
 	const errors: unknown[] = [];
 	let gatewayStatus: BudgetGatewayStatus | undefined;
 	let containersRemoved = false;
+	let closeFailure: { error: unknown } | undefined;
+	let before: BudgetGatewayStatus | undefined;
+	try { before = gateway.status(); } catch (error) { errors.push(error); }
+	try { await gateway.close(); } catch (error) { closeFailure = { error }; }
 	try {
-		gatewayStatus = gateway.status();
-		if (evidenceDir) {
+		gatewayStatus = gateway.finalStatus?.() ?? before;
+		if (evidenceDir && gatewayStatus) {
 			mkdirSync(evidenceDir, { recursive: true });
 			writeFileSync(join(evidenceDir, "gateway-final.json"), JSON.stringify(gatewayEvidence(gatewayStatus), null, 2));
 		}
 	} catch (error) {
 		errors.push(error);
 	}
-	try {
-		await gateway.close();
-	} catch (error) {
-		errors.push(error);
-	}
+	if (closeFailure) errors.push(closeFailure.error);
 	try {
 		containersRemoved = removeContainers?.() ?? false;
 	} catch (error) {

@@ -5,11 +5,12 @@ import {
 	type ExtensionContext,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { contextReferences } from "../context/offload.ts";
 import { requestMemoryCandidateWrite } from "../memory/candidate-writer.ts";
 import type { ProjectScope } from "../memory/contracts.ts";
 import { createProjectScope } from "../memory/project-scope.ts";
 import { loadTaskManagerConfig } from "./config.ts";
-import type { TaskSnapshot, TaskStepInput } from "./contracts.ts";
+import type { CheckpointObservation, TaskSnapshot, TaskStepInput } from "./contracts.ts";
 import { TaskError } from "./errors.ts";
 import { registerScopedTaskReaderBroker } from "./reader.ts";
 import { createCheckpoint, recoveryPreflight } from "./recovery.ts";
@@ -109,8 +110,39 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 		}
 	});
 	registerV2 = registerTaskV2(pi, () => runtime);
-	pi.on("agent_settled", () => {
-		/* settlement is deliberately not completion evidence */
+	pi.on("agent_settled", (event, ctx) => {
+		const current = runtime;
+		const service = current?.service;
+		const binding = service?.activeBinding;
+		if (!current || !service || !binding || binding.sessionId !== ctx.sessionManager.getSessionId()) return;
+		const lastAssistant = ctx.sessionManager
+			.getBranch()
+			.findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+		const modelError =
+			lastAssistant?.type === "message" &&
+			lastAssistant.message.role === "assistant" &&
+			lastAssistant.message.stopReason === "error";
+		if (!event.aborted && !modelError) return;
+		try {
+			const task = service.get(binding.taskId)?.task;
+			if (task?.status !== "running") return;
+			const paused = service.transitionTask(
+				task.taskId,
+				task.revision,
+				"paused",
+				event.aborted ? "session:aborted" : "session:model-error",
+			);
+			createCheckpoint(
+				service.provider,
+				paused,
+				binding.sessionId,
+				branchLeaf(ctx),
+				current.config.controlledFiles,
+				observeCheckpoint(ctx, task.taskId),
+			);
+		} catch {
+			ctx.ui.notify("任务中断后的检查点未完整保存，请检查任务状态。", "warning");
+		}
 	});
 	pi.registerCommand("enhanced-task-manager-status", {
 		description: "Show Task Manager runtime and safety state",
@@ -119,6 +151,25 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 			ctx.ui.notify(formatStatus(runtime), runtime?.state === "error" ? "warning" : "info");
 		},
 	});
+}
+
+function observeCheckpoint(ctx: ExtensionContext, taskId: string): CheckpointObservation {
+	const sessionUsage = { responses: 0, tokens: 0, reportedCostUsd: 0 };
+	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const usage = entry.message.usage;
+		if (
+			!Number.isSafeInteger(usage?.totalTokens) ||
+			usage.totalTokens < 0 ||
+			!Number.isFinite(usage.cost?.total) ||
+			usage.cost.total < 0
+		)
+			continue;
+		sessionUsage.responses += 1;
+		sessionUsage.tokens += usage.totalTokens;
+		sessionUsage.reportedCostUsd += usage.cost.total;
+	}
+	return { contextReferences: contextReferences(ctx, taskId), sessionUsage };
 }
 
 type RuntimeGetter = () => TaskRuntime | undefined;
@@ -188,7 +239,17 @@ function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void
 			command(ctx, async () => {
 				const [taskId, revision] = pair(args);
 				if (!ctx.hasUI || !(await ctx.ui.confirm("暂停任务", `taskId=${taskId}`))) return;
-				notify(ctx, ready(getRuntime()).transitionTask(taskId, revision, "paused"));
+				const service = ready(getRuntime());
+				const paused = service.transitionTask(taskId, revision, "paused");
+				createCheckpoint(
+					service.provider,
+					paused,
+					ctx.sessionManager.getSessionId(),
+					branchLeaf(ctx),
+					getRuntime()?.config.controlledFiles,
+					observeCheckpoint(ctx, taskId),
+				);
+				notify(ctx, requireTask(service.get(taskId)));
 			}),
 	});
 	pi.registerCommand("enhanced-task-resume", {
@@ -198,8 +259,22 @@ function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void
 				const service = ready(getRuntime());
 				const [taskId, revision] = pair(args);
 				const snapshot = requireTask(service.get(taskId));
-				if (snapshot.task.status === "needs_reconciliation")
-					throw new TaskError("TASK_INVALID_TRANSITION", "Resolve unknown attempts before resuming");
+				const preflight = recoveryPreflight(
+					service.provider,
+					taskId,
+					ctx.sessionManager.getSessionId(),
+					branchLeaf(ctx),
+					getRuntime()?.config.controlledFiles,
+				);
+				if (
+					snapshot.task.status === "needs_reconciliation" ||
+					preflight.unknownStepIds.length > 0 ||
+					!preflight.consistencyValid
+				)
+					throw new TaskError(
+						"TASK_INVALID_TRANSITION",
+						"Resolve checkpoint integrity and unknown attempts before resuming",
+					);
 				if (!ctx.hasUI || !(await ctx.ui.confirm("恢复任务计划", "只恢复计划状态，不重放任何工具。"))) return;
 				notify(ctx, service.transitionTask(taskId, revision, "queued"));
 			}),
@@ -222,6 +297,7 @@ function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void
 							ctx.sessionManager.getSessionId(),
 							branchLeaf(ctx),
 							getRuntime()?.config.controlledFiles,
+							observeCheckpoint(ctx, snapshot.task.taskId),
 						),
 						null,
 						2,
@@ -256,7 +332,9 @@ function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void
 		handler: async (_args, ctx) =>
 			command(ctx, async () => {
 				const service = ready(getRuntime());
-				const active = service.list().filter((task) => !["completed", "failed", "cancelled"].includes(task.status));
+				const active = service
+					.list()
+					.filter((task) => !["completed", "failed", "cancelled", "budget_exhausted"].includes(task.status));
 				notify(
 					ctx,
 					active.map((task) => ({
@@ -282,7 +360,7 @@ function registerInteractions(pi: ExtensionAPI, getRuntime: RuntimeGetter): void
 				const service = ready(getRuntime());
 				const snapshot = requireTask(service.get(taskId));
 				if (
-					["completed", "failed", "cancelled"].includes(snapshot.task.status) ||
+					["completed", "failed", "cancelled", "budget_exhausted"].includes(snapshot.task.status) ||
 					!snapshot.steps.some((step) => step.stepId === stepId)
 				)
 					throw new TaskError("TASK_INVALID_TRANSITION", "Task or step cannot be rebound");

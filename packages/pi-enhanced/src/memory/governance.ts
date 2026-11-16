@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { classifyMemory, memoryTaskId } from "./contracts.ts";
 import type {
 	CoreMemoryName,
 	MaintenanceProposal,
@@ -28,16 +29,17 @@ export function planMemoryGovernance(options: {
 }): GovernancePlan {
 	const now = options.now ?? Date.now();
 	const records = options.records.slice(0, options.config.maximumScanRecords);
-	const exactDuplicateGroups = groupBy(records, (record) => record.contentHash)
+	const exactDuplicateGroups = groupBy(records, (record) => `${governanceScope(record)}:${record.contentHash}`)
 		.filter((group) => group.length > 1)
 		.map(ids);
 	const conflictGroups = groupBy(
 		records.filter((record) => record.status === "verified" && record.lifecycle === "active" && record.subjectKey),
-		(record) => record.subjectKey ?? "",
+		(record) => `${governanceScope(record)}:${record.subjectKey ?? ""}`,
 	)
 		.filter((group) => group.length > 1 && overlapsValidity(group))
 		.map(ids);
-	const nearDuplicateGroups = collectNearDuplicates(records, options.config.nearDuplicatePercent / 100)
+	const nearDuplicateGroups = groupBy(records, governanceScope)
+		.flatMap((scope) => collectNearDuplicates(scope, options.config.nearDuplicatePercent / 100))
 		.map(ids)
 		.filter(
 			(group) =>
@@ -184,6 +186,11 @@ export function planMemoryGovernance(options: {
 		},
 		proposals,
 	};
+}
+
+function governanceScope(record: MemoryRecord): string {
+	const classification = classifyMemory(record);
+	return classification === "task" ? `task:${memoryTaskId(record.sources) ?? record.id}` : classification;
 }
 
 function proposal(

@@ -145,13 +145,13 @@ export class TaskProvider {
 				.all(taskId) as unknown as EvidenceRow[]
 		).map(evidenceFromRow);
 		const checkpoint = this.database
-			.prepare("SELECT * FROM task_checkpoints WHERE task_id=? ORDER BY created_at DESC LIMIT 1")
+			.prepare("SELECT * FROM task_checkpoints WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1")
 			.get(taskId) as CheckpointRow | undefined;
 		return {
 			task: taskFromRow(row),
 			steps,
 			evidence,
-			lastCheckpoint: checkpoint ? checkpointFromRow(checkpoint) : null,
+			lastCheckpoint: checkpoint ? this.readCheckpoint(checkpoint) : null,
 		};
 	}
 
@@ -335,11 +335,11 @@ export class TaskProvider {
 		});
 	}
 
-	markOpenAttemptsForReconciliation(now: number): number {
+	markOpenAttemptsForReconciliation(now: number, taskId?: string): number {
 		return this.transaction(() => {
 			const rows = this.database
-				.prepare("SELECT * FROM task_attempts WHERE state='started'")
-				.all() as unknown as AttemptRow[];
+				.prepare("SELECT * FROM task_attempts WHERE state='started' AND (? IS NULL OR task_id=?)")
+				.all(taskId ?? null, taskId ?? null) as unknown as AttemptRow[];
 			for (const row of rows) {
 				this.database
 					.prepare("UPDATE task_attempts SET state='needs_reconciliation', ended_at=? WHERE attempt_id=?")
@@ -351,7 +351,7 @@ export class TaskProvider {
 					.run(row.step_id);
 				this.database
 					.prepare(
-						"UPDATE tasks SET status='needs_reconciliation', revision=revision+1, updated_at=? WHERE task_id=? AND status NOT IN ('completed','failed','cancelled')",
+						"UPDATE tasks SET status='needs_reconciliation', revision=revision+1, updated_at=? WHERE task_id=? AND status NOT IN ('completed','failed','cancelled','budget_exhausted')",
 					)
 					.run(now, row.task_id);
 				this.appendEvent(
@@ -401,10 +401,32 @@ export class TaskProvider {
 		});
 	}
 
+	finishBudgetRun(
+		taskId: string,
+		sourceRef: string,
+		checkpoint: (state: TaskSnapshot) => TaskCheckpoint,
+	): TaskCheckpoint | null {
+		return this.transaction(() => {
+			const current = this.require(taskId);
+			if (current.task.status === "budget_exhausted") return current.lastCheckpoint;
+			if (["completed", "failed", "cancelled"].includes(current.task.status))
+				throw new TaskError("TASK_INVALID_TRANSITION", "A terminated task cannot be assigned a second outcome");
+			const now = Date.now();
+			this.markOpenAttemptsForReconciliation(now, taskId);
+			const reconciled = this.require(taskId);
+			const ended = this.setTaskStatus(taskId, reconciled.task.revision, "budget_exhausted", sourceRef, now);
+			return checkpoint(ended);
+		});
+	}
+
 	createCheckpoint(value: TaskCheckpoint): TaskCheckpoint {
 		return this.transaction(() => {
 			const current = this.require(value.taskId);
-			if (current.task.revision !== value.taskRevision)
+			if (
+				current.task.revision !== value.taskRevision ||
+				current.task.planRevision !== value.planRevision ||
+				this.getLastEventSeq(value.taskId) !== value.lastCommittedEventSeq
+			)
 				throw new TaskError("TASK_REVISION_CONFLICT", "Checkpoint task revision is stale");
 			this.database
 				.prepare(
@@ -427,11 +449,57 @@ export class TaskProvider {
 				value.taskId,
 				"checkpoint_created",
 				`session:${value.sessionId}`,
-				{ checkpointId: value.checkpointId, taskRevision: value.taskRevision },
+				{
+					version: 1,
+					checkpointId: value.checkpointId,
+					taskRevision: value.taskRevision,
+					checksum: checkpointChecksum(value),
+					...(value.observation ? { observation: value.observation } : {}),
+				},
 				value.createdAt,
 			);
 			return value;
 		});
+	}
+
+	checkpointIntegrity(checkpoint: TaskCheckpoint): "verified" | "legacy" | "invalid" {
+		const event = this.checkpointEvent(checkpoint);
+		if (!event || event.checkpointId !== checkpoint.checkpointId || event.taskRevision !== checkpoint.taskRevision)
+			return "invalid";
+		if (event.version === undefined && event.checksum === undefined) return "legacy";
+		return event.version === 1 && event.checksum === checkpointChecksum(checkpoint) ? "verified" : "invalid";
+	}
+
+	private readCheckpoint(row: CheckpointRow): TaskCheckpoint {
+		const value = checkpointFromRow(row);
+		const event = this.checkpointEvent(value);
+		if (event?.version === 1 && event.observation) value.observation = event.observation;
+		return value;
+	}
+
+	private checkpointEvent(value: TaskCheckpoint):
+		| Partial<{
+				version: number;
+				checkpointId: string;
+				taskRevision: number;
+				checksum: string;
+				observation: TaskCheckpoint["observation"];
+		  }>
+		| undefined {
+		const row = this.database
+			.prepare(
+				"SELECT payload_json, payload_hash FROM task_events WHERE task_id=? AND seq=? AND type='checkpoint_created'",
+			)
+			.get(value.taskId, value.lastCommittedEventSeq + 1) as
+			| { payload_json: string; payload_hash: string }
+			| undefined;
+		if (!row || createHash("sha256").update(row.payload_json).digest("hex") !== row.payload_hash) return undefined;
+		try {
+			const event: unknown = JSON.parse(row.payload_json);
+			return event && typeof event === "object" && !Array.isArray(event) ? event : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	bindSession(taskId: string, sessionId: string, branchLeafId: string | null, reason: string, now: number): void {
@@ -857,6 +925,35 @@ function checkpointFromRow(row: CheckpointRow): TaskCheckpoint {
 		lastCommittedEventSeq: row.last_event_seq,
 		createdAt: row.created_at,
 	};
+}
+
+function checkpointChecksum(value: TaskCheckpoint): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				1,
+				value.checkpointId,
+				value.taskId,
+				value.taskRevision,
+				value.planRevision,
+				value.sessionId,
+				value.branchLeafId,
+				value.workspaceFingerprint,
+				[
+					value.workspaceObservation.realRoot,
+					value.workspaceObservation.gitHead,
+					value.workspaceObservation.gitStatusDigest,
+					value.workspaceObservation.gitStatusEntries,
+					value.workspaceObservation.trackedFiles,
+					value.workspaceObservation.observationLimited,
+				],
+				value.pendingStepIds,
+				value.lastCommittedEventSeq,
+				value.createdAt,
+				value.observation ?? null,
+			]),
+		)
+		.digest("hex");
 }
 
 function parseValidation(value: string): TaskStep["validation"] {

@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	classifyMemory,
 	CORE_MEMORY_NAMES,
 	type CoreMemoryName,
 	MEMORY_CATEGORIES,
@@ -31,6 +32,7 @@ const INTERACTION_COMMANDS = [
 	"enhanced-memory-save",
 	"enhanced-memory-confirm",
 	"enhanced-memory-review",
+	"enhanced-memory-reflect",
 	"enhanced-memory-core",
 	"enhanced-memory-list",
 	"enhanced-memory-inspect",
@@ -94,6 +96,33 @@ function registerGovernanceCommands(pi: ExtensionAPI, getRuntime: RuntimeGetter)
 				);
 			} catch (error) {
 				notifyFailure(ctx, "详情查询失败", error);
+			}
+		},
+	});
+
+	pi.registerCommand("enhanced-memory-reflect", {
+		description: "Verify a candidate against a project file or recheck its recorded evidence",
+		handler: async (args, ctx) => {
+			const [, id, path] = /^(\S+)(?:\s+(.+))?$/u.exec(args.trim()) ?? [];
+			if (!id) return notifyUsage(ctx, "/enhanced-memory-reflect <id> [relative-file]");
+			try {
+				const { service } = readyService(getRuntime());
+				const record = await service.get(id);
+				if (!record) throw new MemoryError("MEMORY_NOT_FOUND", "Memory does not exist");
+				const question = path
+					? "核对该文件是否包含记忆原文，通过后将记录文件版本。"
+					: "如果已记录的文件发生变更且证据不再成立，将标记这条记忆为已失效。";
+				if (!ctx.hasUI || !(await ctx.ui.confirm("核对记忆证据", question))) return;
+				const result = path
+					? await service.verifyFileFact(
+							record.id,
+							{ relativePath: path, exactExcerpt: record.content },
+							record.revision,
+						)
+					: await service.reflectFileEvidence(record.id, record.revision);
+				ctx.ui.notify(`id=${result.id} status=${result.status} revision=${result.revision}`, "info");
+			} catch (error) {
+				notifyFailure(ctx, "记忆证据复核失败", error);
 			}
 		},
 	});
@@ -286,7 +315,9 @@ function registerSaveCommand(pi: ExtensionAPI, getRuntime: RuntimeGetter): void 
 	pi.registerCommand("enhanced-memory-save", {
 		description: "Interactively save a candidate Episodic Memory with a user source",
 		handler: async (args, ctx) => {
-			if (args.trim()) return notifyUsage(ctx, "/enhanced-memory-save（不接受参数，通过交互界面填写）");
+			const classification = args.trim();
+			if (classification && classification !== "profile" && classification !== "preference")
+				return notifyUsage(ctx, "/enhanced-memory-save [profile|preference]");
 			if (!ctx.hasUI) {
 				ctx.ui.notify("当前模式没有交互界面，不能创建候选记忆。", "warning");
 				return;
@@ -299,10 +330,14 @@ function registerSaveCommand(pi: ExtensionAPI, getRuntime: RuntimeGetter): void 
 				if (content === undefined) return;
 				const sourceRef = await ctx.ui.input("可靠来源", "例如：用户明确说明、会议记录编号或文件位置");
 				if (sourceRef === undefined) return;
+				const subject = classification === "profile" ? (await ctx.ui.input("背景信息主题"))?.trim() : undefined;
+				if (classification === "profile" && !subject) return;
 				const record = await service.saveCandidate({
 					kind: selected,
 					content,
 					source: { type: "user", ref: sourceRef },
+					...(subject ? { metadata: { subjectKey: `profile:${subject}` } } : {}),
+					...(classification === "preference" ? { metadata: { category: "preference" } } : {}),
 				});
 				ctx.ui.notify(
 					`已保存 candidate：id=${record.id} revision=${record.revision}。需要人工确认后才会成为 verified。`,
@@ -524,7 +559,7 @@ function formatRecords(records: readonly MemoryRecord[], projectRoot: string | u
 			.map((source) => `${source.type}:${truncateMemoryOutput(redactMemoryOutput(source.ref, projectRoot), 300)}`)
 			.join(", ");
 		return [
-			`id=${record.id} kind=${record.kind} category=${record.category} status=${record.status} lifecycle=${record.lifecycle} revision=${record.revision} contentRevision=${record.contentRevision}`,
+			`id=${record.id} kind=${record.kind} class=${classifyMemory(record)} category=${record.category} status=${record.status} lifecycle=${record.lifecycle} revision=${record.revision} contentRevision=${record.contentRevision}`,
 			`subjectKey=${record.subjectKey ?? "none"} importance=${record.importance} useCount=${record.useCount}`,
 			`source=${sources || "none"}`,
 			content,

@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -321,23 +321,26 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 	);
 
 	it("finishes the file audit when the token budget blocks the request after a passing retest", async () => {
-		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-budget-feedback-"));
-		roots.push(root);
+		const configured = process.env.PI_ENHANCED_V3_TEST_OUTPUT;
+		const root = configured ? join(configured, "terminal") : mkdtempSync(join(tmpdir(), "pi-enhanced-budget-feedback-"));
+		if (configured) mkdirSync(root, { recursive: true });
+		else roots.push(root);
 		let calls = 0;
 		const provider = await startProvider((_body, response) => {
 			calls++;
-			const reply = calls === 1
+			const reply = calls === 1 ? toolCallSse("run_tests", {}, 3500, 20) : calls === 2
 				? toolCallSse("edit", {
 					path: "config.js",
 					edits: [{ oldText: "input.timeoutMs || 1000", newText: "input.timeoutMs ?? 5000" }],
-				}, 6000, 20)
-				: toolCallSse("run_tests", {}, 6500, 20);
+				}, 4700, 20)
+				: toolCallSse("run_tests", {}, 5200, 20);
 			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(reply);
 		});
 		const runId = "config_default_budget_feedback";
-		const result = await runRunner(provider.url, root, image, runId, false, "config-default");
+		const result = await runRunner(provider.url, root, image, runId, false, "config-default", 60_000,
+			["--v3-evaluation", "--variant", "task-only"]);
 		expect(result.status, result.stderr).toBe(0);
-		expect(calls).toBe(2);
+		expect(calls).toBe(3);
 		const report = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8"));
 		expect(report.summary).toMatchObject({ passed: 0, patchPassed: 1, normallyCompleted: 0, budgetStopped: 1 });
 		const task = report.results[0];
@@ -348,15 +351,22 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 			agentTermination: "abnormal",
 			timedOut: false,
 			verifierPassed: true,
+			taskTermination: { status: "budget_exhausted", checkpoint: { observation: { budgetTermination: {
+				code: "GATEWAY_TOKEN_BUDGET", requestsStarted: 3, auditComplete: true, verifierPassed: true,
+			} } } },
 			gateway: {
-				requestAttempts: 3,
-				requestsStarted: 2,
-				requestsCompleted: 2,
+				requestAttempts: 4,
+				requestsStarted: 3,
+				requestsCompleted: 3,
 				requestsRejected: 1,
-				denials: [{ code: "GATEWAY_TOKEN_BUDGET", requestSequence: 3, upstreamForwarded: false }],
+				denials: [{ code: "GATEWAY_TOKEN_BUDGET", requestSequence: 4, upstreamForwarded: false }],
 			},
 		});
 		expect(task.toolTrace).toEqual([
+			expect.objectContaining({ phase: "start", toolName: "run_tests" }),
+			expect.objectContaining({ phase: "end", toolName: "run_tests", result: expect.objectContaining({
+				details: expect.objectContaining({ status: "verification_failed", exitCode: 1 }),
+			}) }),
 			expect.objectContaining({ phase: "start", toolName: "edit" }),
 			expect.objectContaining({ phase: "end", toolName: "edit", isError: false }),
 			expect.objectContaining({ phase: "start", toolName: "run_tests" }),
@@ -375,6 +385,80 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		const containers = spawnSync("docker", ["ps", "-a", "--no-trunc", "--format", "{{.ID}}"], { encoding: "utf8" });
 		expect(containers.status).toBe(0);
 		expect(containers.stdout.split(/\r?\n/u)).not.toContain(task.sandboxAudit.evidence.containerId);
+	}, 120_000);
+
+	it("pauses after a real failing test and resumes in a second Runner without resetting budget or replaying the first test", async () => {
+		const configured = process.env.PI_ENHANCED_V3_TEST_OUTPUT;
+		const root = configured ? join(configured, "recovery") : mkdtempSync(join(tmpdir(), "pi-v3-runner-resume-"));
+		if (configured) mkdirSync(root, { recursive: true });
+		else roots.push(root);
+		const runId = "config_v3_recovery";
+		const bodies: Record<string, unknown>[] = [];
+		const provider = await startProvider((body, response) => {
+			bodies.push(body);
+			const turns = [
+				toolCallSse("run_tests", {}, 100, 20),
+				textSse("Observed failing default check. Waiting at the explicit test boundary.", 160, 20),
+				toolCallSse("edit", { path: "config.js", edits: [{ oldText: "input.timeoutMs || 1000", newText: "input.timeoutMs ?? 5000" }] }, 200, 20),
+				toolCallSse("run_tests", {}, 240, 20),
+				textSse("Both tests passed.", 270, 20),
+			];
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(turns[bodies.length - 1] ?? textSse("unexpected", 300, 20));
+		});
+		const runPhase = (phase: string) => runRunner(provider.url, root, image, runId, false, "config-default", 90_000,
+			["--v3-evaluation", "--variant", "task-only", "--v3-stub-recovery", phase]);
+		const paused = await runPhase("pause");
+		expect(paused.status, paused.stderr).toBe(0);
+		const checkpoint = JSON.parse(paused.stdout);
+		expect(checkpoint).toMatchObject({ state: "paused", requests: 2, inputTokens: 260, outputTokens: 40 });
+		const resumed = await runPhase("resume");
+		expect(resumed.status, resumed.stderr).toBe(0);
+		const final = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		expect(final).toMatchObject({
+			verifierPassed: true, runStatus: "completed", budgetDeadlineAt: checkpoint.budgetDeadlineAt,
+			gateway: { requestsStarted: 5, requestsCompleted: 5, actualInputTokens: 970, actualOutputTokens: 100 },
+			resumedTask: { task: { status: "completed" }, steps: [
+				{ stepId: "reproduce", status: "completed", revision: 4 },
+				{ stepId: "repair", status: "completed" },
+			] },
+		});
+		expect(final.usage.costUsd).toBeGreaterThan(checkpoint.estimatedCostUsd);
+		expect(bodies).toHaveLength(5);
+		expect(JSON.stringify(bodies[2].messages)).toContain("failed");
+		expect(final.toolTrace.filter((event: { phase: string; toolName: string }) =>
+			event.phase === "start" && event.toolName === "run_tests")).toHaveLength(1);
+		expect((await runPhase("resume")).status).not.toBe(0);
+		expect(bodies).toHaveLength(5);
+	}, 120_000);
+
+	it("measures the same large-output fixture with each V3 module configuration", async () => {
+		const configured = process.env.PI_ENHANCED_V3_TEST_OUTPUT;
+		const root = configured ? join(configured, "ablation") : mkdtempSync(join(tmpdir(), "pi-v3-ablation-"));
+		if (configured) mkdirSync(root, { recursive: true });
+		else roots.push(root);
+		const reportSizes = new Map<string, number>();
+		let turn = 0;
+		let variant = "";
+		const provider = await startProvider((body, response) => {
+			turn++;
+			if (turn === 2) reportSizes.set(variant, Buffer.byteLength(JSON.stringify(body.messages)));
+			const reply = turn === 1 ? toolCallSse("read", { path: "diagnostics.txt" }, 100, 20) :
+				turn === 2 ? toolCallSse("edit", { path: "validate.js", edits: [{ oldText: "items.slice(0, 10).every", newText: "items.every" }] }, 200, 20) :
+				textSse("Validation repair done.", 300, 20);
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(reply);
+		});
+		for (const group of ["baseline", "context-only", "memory-only", "task-only", "full"]) {
+			variant = group;
+			turn = 0;
+			const result = await runRunner(provider.url, root, image, "v3_eval_" + group, false, undefined, 60_000,
+				["--v3-evaluation", "--variant", group, "--task-id", "controlled-long-report", "--condition", "memory_seeded"]);
+			expect(result.status, result.stderr).toBe(0);
+			const task = JSON.parse(readFileSync(join(root, "v3_eval_" + group, "run.json"), "utf8")).results[0];
+			expect(task).toMatchObject({ verifierPassed: true, v3Evaluation: { mode: "stub", agentCompleted: true, model: { requests: 3 } } });
+			expect(turn).toBe(3);
+		}
+		expect(reportSizes.get("context-only")).toBeLessThan(reportSizes.get("baseline")!);
+		expect(reportSizes.get("full")).toBeLessThan(reportSizes.get("task-only")!);
 	}, 120_000);
 
 	it("fails the Docker preflight before the local provider receives a request", async () => {
@@ -458,9 +542,14 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		90_000,
 	);
 
-	it("reaches verified Memory and read-only Task tools through the production pilot", async () => {
-		const root = mkdtempSync(join(tmpdir(), "pi-module-pilot-"));
-		roots.push(root);
+	it.each([
+		["reaches verified Memory and read-only Task tools through the production pilot", "legacy"],
+		["reaches verified Memory and read-only Task tools through the V3 production pilot", "v3"],
+	])("%s", async (_title, variant) => {
+		const configured = variant === "v3" ? process.env.PI_ENHANCED_V3_TEST_OUTPUT : undefined;
+		const root = configured ? join(configured, "memory") : mkdtempSync(join(tmpdir(), "pi-module-pilot-"));
+		if (configured) mkdirSync(root, { recursive: true });
+		else roots.push(root);
 		let turns = 0;
 		const provider = await startProvider((body, response) => {
 			turns += 1;
@@ -490,7 +579,9 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 			else finish(textSse("fixed", 100, 10));
 		});
 		const output = join(root, "output");
-		const result = await runRunner(provider.url, output, image, "module_pilot_stub", true);
+		const result = await runRunner(provider.url, output, image, "module_pilot_stub", true, undefined, 60_000,
+			variant === "v3" ? ["--v3-evaluation"] : []);
+
 		expect(result.status, result.stderr).toBe(0);
 		const report = JSON.parse(readFileSync(join(output, "module_pilot_stub", "run.json"), "utf8"));
 		expect(report.results[0]).toMatchObject({ patchStatus: "passed", runStatus: "completed", contextEnabled: true });
@@ -518,7 +609,7 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 			),
 		).toBe(true);
 		expect(JSON.stringify(report.results[0].moduleToolEvents)).toContain("normalizeKey");
-		if (process.env.PI_ENHANCED_OFFLINE_REPRO_EVIDENCE_PATH)
+		if (variant === "legacy" && process.env.PI_ENHANCED_OFFLINE_REPRO_EVIDENCE_PATH)
 			writeFileSync(process.env.PI_ENHANCED_OFFLINE_REPRO_EVIDENCE_PATH, JSON.stringify(report, null, 2));
 	}, 120_000);
 });
@@ -533,7 +624,9 @@ function runRunner(
 	readonlyModules = false,
 	feedbackTask?: "single-file-off-by-one" | "config-default",
 	timeoutMs = 60_000,
+	extraArgs: string[] = [],
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
+	const v3 = extraArgs.includes("--v3-evaluation");
 	const args = [
 		"--experimental-strip-types",
 		runner,
@@ -549,11 +642,11 @@ function runRunner(
 		"--api-key-env",
 		"MOCK_PROVIDER_KEY",
 		"--max-total-cost-usd",
-		feedbackTask ? "0.03" : "0.10",
+		feedbackTask || v3 ? "0.03" : "0.10",
 		"--max-tasks",
 		"1",
 		"--max-tokens-per-task",
-		feedbackTask ? "20000" : "200000",
+		feedbackTask ? "20000" : v3 ? "40000" : "200000",
 		"--max-calls-per-task",
 		"8",
 		"--timeout-ms",
@@ -580,6 +673,7 @@ function runRunner(
 					"memory-guided-regression",
 				]
 			: []),
+		...extraArgs,
 	];
 	return new Promise((resolveRun) => {
 		const child = spawn(process.execPath, args, {

@@ -1,6 +1,14 @@
 import type { RiskClass } from "./contracts.ts";
 
-const READ_ONLY = new Set(["read", "grep", "find", "ls", "enhanced_memory_search", "enhanced_task_get"]);
+const READ_ONLY = new Set([
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"enhanced_memory_search",
+	"enhanced_task_get",
+	"enhanced_context_restore",
+]);
 const MUTATING = new Set(["write", "edit"]);
 
 export function classifyToolRisk(toolName: string, args?: unknown): RiskClass {

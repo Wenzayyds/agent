@@ -119,13 +119,16 @@ export class SemanticSearchAdapter {
 		this.updateWorkerMetadata(response);
 		const candidates = parseCandidates(response.candidates);
 		const records: MemoryRecord[] = [];
+		const now = Date.now();
 		for (const candidate of candidates) {
 			const record = await this.service.get(candidate.memoryId);
 			if (
 				!record ||
 				record.projectId !== this.service.scope.projectId ||
 				record.status !== "verified" ||
-				record.lifecycle !== "active"
+				record.lifecycle !== "active" ||
+				(record.validFrom !== undefined && record.validFrom > now) ||
+				(record.validUntil !== undefined && record.validUntil <= now)
 			)
 				continue;
 			if (record.contentRevision !== candidate.contentRevision || record.contentHash !== candidate.contentHash)

@@ -16,6 +16,7 @@ const DEFAULT_CONFIG: ContextModuleConfig = Object.freeze({
 		reserveEstimatedTokens: 12_000,
 		recentMessagesToKeep: 8,
 	}),
+	compaction: Object.freeze({ enabled: false }),
 	toolOutput: Object.freeze({ enabled: false, maximumTextCharacters: 12_000 }),
 	memoryInjection: Object.freeze({
 		enabled: false,
@@ -31,6 +32,7 @@ interface ContextConfigPatch {
 	enabled?: boolean;
 	mode?: ContextMode;
 	budget?: Partial<ContextModuleConfig["budget"]>;
+	compaction?: ContextModuleConfig["compaction"];
 	toolOutput?: Partial<ContextModuleConfig["toolOutput"]>;
 	memoryInjection?: Partial<ContextModuleConfig["memoryInjection"]>;
 	taskInjection?: Partial<ContextModuleConfig["taskInjection"]>;
@@ -77,6 +79,7 @@ function readPatch(path: string, errors: string[]): ContextConfigPatch | undefin
 		"mode",
 		"budget",
 		"toolOutput",
+		"compaction",
 		"memoryInjection",
 		"taskInjection",
 		"pythonScoring",
@@ -104,9 +107,11 @@ function readPatch(path: string, errors: string[]): ContextConfigPatch | undefin
 		path,
 		"toolOutput",
 		module.toolOutput,
-		{ enabled: "boolean", maximumTextCharacters: [500, 100_000] },
+		{ enabled: "boolean", maximumTextCharacters: [500, 100_000], offload: "boolean" },
 		errors,
 	) as Partial<ContextModuleConfig["toolOutput"]> | undefined;
+	const compaction = parseObject(path, "compaction", module.compaction, { enabled: "boolean" }, errors);
+	if (typeof compaction?.enabled === "boolean") patch.compaction = { enabled: compaction.enabled };
 	patch.memoryInjection = parseObject(
 		path,
 		"memoryInjection",
@@ -166,6 +171,7 @@ function applyPatch(config: ContextModuleConfig, patch: ContextConfigPatch): voi
 	if (patch.enabled !== undefined) config.enabled = patch.enabled;
 	if (patch.mode !== undefined) config.mode = patch.mode;
 	if (patch.budget) Object.assign(config.budget, patch.budget);
+	if (patch.compaction) config.compaction = patch.compaction;
 	if (patch.toolOutput) Object.assign(config.toolOutput, patch.toolOutput);
 	if (patch.memoryInjection) Object.assign(config.memoryInjection, patch.memoryInjection);
 	if (patch.taskInjection) Object.assign(config.taskInjection, patch.taskInjection);

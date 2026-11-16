@@ -27,7 +27,6 @@ export function registerMemoryCandidateWriterBroker(
 	events: EventBus,
 	binding: { service: MemoryService; scope: ProjectScope; sessionId: string },
 ): () => void {
-	const seen = new Map<string, CandidateWriteResponse["result"]>();
 	return events.on(MEMORY_CANDIDATE_WRITE_REQUEST, async (data) => {
 		const request = parseRequest(data);
 		if (!request) return;
@@ -40,12 +39,6 @@ export function registerMemoryCandidateWriterBroker(
 			return;
 		}
 		const contentDigest = createHash("sha256").update(request.content).digest("hex");
-		const key = `${binding.scope.projectId}\0${request.taskId}\0${contentDigest}`;
-		const prior = seen.get(key);
-		if (prior) {
-			respond(events, request, { result: prior });
-			return;
-		}
 		try {
 			const record = await binding.service.saveCandidate({
 				kind: "experience",
@@ -54,7 +47,6 @@ export function registerMemoryCandidateWriterBroker(
 				metadata: { category: "procedure", tags: ["task-experience"] },
 			});
 			const result = { id: record.id, status: "candidate" as const, revision: record.revision };
-			seen.set(key, result);
 			respond(events, request, { result });
 		} catch {
 			respond(events, request, { error: "MEMORY_WRITE_REJECTED" });
