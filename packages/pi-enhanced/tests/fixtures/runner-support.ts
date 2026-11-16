@@ -36,20 +36,25 @@ export function close(server: Server): Promise<void> {
 	return new Promise((done) => server.close(() => done()));
 }
 export function toolCallSse(name: string, args: Record<string, unknown>, input: number, output: number): string {
+	return toolCallsSse([{ name, args }], input, output);
+}
+export function toolCallsSse(
+	calls: { name: string; args: Record<string, unknown> }[],
+	input: number,
+	output: number,
+): string {
 	return responseSse(
 		{
 			role: "assistant",
-			tool_calls: [
-				{
-					index: 0,
-					id: `call-${name}-${input}`,
-					type: "function",
-					function: { name, arguments: JSON.stringify(args) },
-				},
-			],
+			tool_calls: calls.map(({ name, args }, index) => ({
+				index,
+				id: `call-${name}-${input}`,
+				type: "function",
+				function: { name, arguments: JSON.stringify(args) },
+			})),
 		},
 		"tool_calls",
-		`chatcmpl-${name}-${input}`,
+		`chatcmpl-${calls[0].name}-${input}`,
 		input,
 		output,
 	);

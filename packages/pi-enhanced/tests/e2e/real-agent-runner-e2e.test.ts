@@ -18,6 +18,7 @@ import {
 	startStubProvider,
 	textSse,
 	toolCallSse,
+	toolCallsSse,
 } from "../fixtures/runner-support.ts";
 
 const image = "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293";
@@ -637,6 +638,102 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		}, null, 2));
 	}, 150_000);
 
+	it("rechecks verified Memory after resuming the read-only joint recovery checkpoint", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-v3-live-path-"));
+		roots.push(root);
+		const runId = "joint_recovery_path";
+		const requests: Record<string, unknown>[] = [];
+		const turns = [
+			toolCallSse("read", { path: "diagnostics.txt" }, 100, 20),
+			toolCallSse("enhanced_memory_search", { query: "normalizeKey" }, 120, 20),
+			toolCallSse("run_tests", {}, 140, 20),
+			textSse("Baseline failure observed. Ready for a read-only checkpoint.", 160, 20),
+			toolCallsSse([{ name: "enhanced_memory_search", args: { query: "normalizeKey" } },
+				{ name: "read", args: { path: "key.js" } }], 180, 20),
+			toolCallSse("edit", { path: "key.js", edits: [{ oldText: "value.trim()", newText: "value.trim().toLowerCase()" }] }, 200, 20),
+			toolCallSse("run_tests", {}, 220, 20),
+			textSse("The follow-up check passed.", 240, 20),
+		];
+		const provider = await startProvider((body, response) => {
+			requests.push(body);
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(turns[requests.length - 1]);
+		});
+		const phase = (mode: "pause" | "resume") => runRunner(provider.url, root, image, runId, false, undefined, 90_000,
+			["--task-id", "memory-guided-regression", "--v3-joint-recovery", mode]);
+		const first = await phase("pause");
+		expect(first.status, first.stderr).toBe(0);
+		const paused = JSON.parse(first.stdout);
+		expect(paused).toMatchObject({ state: "paused", requests: 4, inputTokens: 520, outputTokens: 80,
+			estimatedCostUsd: expect.closeTo(0.000252, 8), checkpoint: { completedWrites: 0, auditComplete: true,
+				phaseVerification: { status: "verification_failed", cleanup: "removed" } } });
+		const exposed = (request: Record<string, unknown>) => (request.tools as { function: { name: string } }[])
+			.map(({ function: tool }) => tool.name);
+		expect(exposed(requests[0])).not.toContain("edit");
+		expect(exposed(requests[0])).not.toContain("write");
+		expect(JSON.stringify(requests[1].messages)).toContain(paused.checkpoint.references[0]);
+		expect(JSON.stringify(requests[3].messages)).toContain("verification_failed");
+
+		const second = await phase("resume");
+		expect(second.status, second.stderr).toBe(0);
+		expect(second.pid).not.toBe(first.pid);
+		expect(requests).toHaveLength(8);
+		expect(exposed(requests[4])).toContain("edit");
+		expect(exposed(requests[4])).not.toContain("bash");
+		for (const index of [4, 5, 6, 7]) {
+			const history = JSON.stringify(requests[index].messages);
+			expect(history.match(/JOINT_RECOVERY_PAGE/gu)).toHaveLength(1);
+		}
+		const resultMessage = (index: number, callId: string) =>
+			(requests[index].messages as { role: string; tool_call_id?: string; content: string }[])
+				.find(({ role, tool_call_id }) => role === "tool" && tool_call_id === callId)?.content;
+		const before = resultMessage(2, "call-enhanced_memory_search-120");
+		expect(before).toContain("status=verified");
+		const after = resultMessage(5, "call-enhanced_memory_search-180");
+		expect(after).toBe(before);
+		expect(resultMessage(7, "call-run_tests-220")).toContain('"status":"passed"');
+
+		const final = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		expect(final).toMatchObject({ status: "passed", verifierPassed: true, runStatus: "completed", auditComplete: true,
+			budgetDeadlineAt: paused.budgetDeadlineAt,
+			jointRecovery: { contextRestored: true, memoryRechecked: true, retestPassed: true },
+			gateway: { requestsStarted: 8, requestsCompleted: 8, requestsRejected: 0, actualInputTokens: 1360,
+				actualOutputTokens: 160, actualCostUsd: expect.closeTo(0.0006, 8) },
+			resumedTask: { task: { status: "completed" }, lastCheckpoint: { sessionId: paused.checkpoint.sessionId },
+				steps: [{ stepId: "reproduce", status: "completed" }, { stepId: "repair", status: "completed" }] },
+		});
+		expect(final.gateway.requestOutcomes).toHaveLength(8);
+		expect(final.gateway.requestOutcomes[0].reservationDiagnostics.maxTotalTokens).toBe(48_000);
+		expect(final.gateway.requestOutcomes[4].reservationDiagnostics.maxTotalTokens).toBe(48_000);
+		const writes = final.sandboxAudit.audit.filter(({ operation }: { operation: string }) => operation === "write_file");
+		expect(writes).toHaveLength(1);
+		assertIsolatedMount(final.verification.evidence, false);
+		expect((await phase("resume")).stderr).toContain("EVAL_V3_RESUME_TERMINAL_RUN");
+		expect(requests).toHaveLength(8);
+	}, 90_000);
+
+	it.each(["early-stop", "write-attempt"] as const)(
+		"does not create a joint checkpoint without a clean baseline (%s)", async (scenario) => {
+			const root = mkdtempSync(join(tmpdir(), "pi-v3-pause-rejected-"));
+			roots.push(root);
+			let requests = 0;
+			const provider = await startProvider((_body, response) => {
+				const reply = ++requests === 1 && scenario === "write-attempt"
+					? toolCallSse("edit", { path: "key.js", edits: [{ oldText: "value.trim()", newText: "value" }] }, 100, 20)
+					: textSse("I am done.", 120, 20);
+				response.writeHead(200, { "Content-Type": "text/event-stream" }).end(reply);
+			});
+			const runId = "joint_recovery_rejected";
+			const result = await runRunner(provider.url, root, image, runId, false, undefined, 60_000,
+				["--task-id", "memory-guided-regression", "--v3-joint-recovery", "pause"]);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toMatch(/EVAL_V3_(?:JOINT_PAUSE_EVIDENCE_REQUIRED|PAUSE_WRITE_UNVERIFIED)/u);
+			const state = join(root, runId, "private");
+			expect(existsSync(join(state, "pause.json"))).toBe(false);
+			expect(readFileSync(join(state, "memory-guided-regression", "key.js"), "utf8"))
+				.toBe("export const normalizeKey = value => value.trim();\n");
+			expect(requests).toBe(scenario === "write-attempt" ? 2 : 1);
+		}, 60_000);
+
 	it("measures the same large-output fixture with each V3 module configuration", async () => {
 		const root = join(v3Output(), "ablation");
 		mkdirSync(root, { recursive: true });
@@ -935,7 +1032,8 @@ function runRunner(
 	scratch?: string,
 	maxCalls = 8,
 ): Promise<{ status: number | null; stdout: string; stderr: string; pid?: number; killed: boolean }> {
-	const v3 = extraArgs.includes("--v3-evaluation");
+	const jointRecovery = extraArgs.includes("--v3-joint-recovery");
+	const v3 = jointRecovery || extraArgs.includes("--v3-evaluation");
 	const args = [
 		"--experimental-strip-types",
 		killAfterPause || extraArgs.includes("--test-interrupt-after-write")
@@ -956,7 +1054,7 @@ function runRunner(
 		"--max-tasks",
 		"1",
 		"--max-tokens-per-task",
-		feedbackTask ? "20000" : v3 ? "40000" : "200000",
+		feedbackTask ? "20000" : jointRecovery ? "48000" : v3 ? "40000" : "200000",
 		"--max-calls-per-task",
 		String(maxCalls),
 		"--timeout-ms",

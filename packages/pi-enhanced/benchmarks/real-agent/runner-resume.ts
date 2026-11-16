@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { contextReferences } from "../../src/context/offload.ts";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
@@ -11,6 +12,7 @@ import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/pro
 import { createCheckpoint, observeWorkspace, recoveryPreflight, workspaceFingerprint } from "../../src/task-manager/recovery.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
 import type { BudgetGatewayStatus } from "./budget-gateway.ts";
+import { memoryTouchMetadata } from "./evaluation-telemetry.ts";
 import type { AgentExecution } from "./runner-execution.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 
@@ -31,6 +33,7 @@ function identity(context: RunnerContext) {
 		workspace: realpathSync(context.root), task: context.task.id, prompt: context.task.prompt, plan: context.plan,
 		switches: context.switches, condition: context.condition, testFeedback: context.testFeedback,
 		upstream: context.localStubUrl,
+		...(context.jointRecovery ? { jointRecovery: true } : {}),
 	}));
 }
 
@@ -81,7 +84,7 @@ function inspectSession(root: string, cwd: string) {
 	if (realpathSync(session.getCwd()) !== realpathSync(cwd)) throw new Error("EVAL_V3_RESUME_SESSION_SCOPE");
 	const messages = session.getBranch().flatMap((entry) => entry.type === "message" ? [entry.message] : []);
 	const calls = new Map<string, string>();
-	const completed = new Map<string, { tool: string; failed: boolean }>();
+	const completed = new Map<string, ToolResultMessage>();
 	let assistantCount = 0;
 	for (const message of messages) {
 		if (message.role === "assistant") {
@@ -96,12 +99,13 @@ function inspectSession(root: string, cwd: string) {
 		} else if (message.role === "toolResult") {
 			if (completed.has(message.toolCallId) || calls.get(message.toolCallId) !== message.toolName)
 				throw new Error("EVAL_V3_RESUME_UNPAIRED_RESULT");
-			completed.set(message.toolCallId, { tool: message.toolName, failed: message.isError });
+			completed.set(message.toolCallId, message);
 		}
 	}
-	if (!assistantCount || calls.size !== completed.size || messages.at(-1)?.role !== "assistant")
+	const last = messages.at(-1);
+	if (!assistantCount || calls.size !== completed.size || last?.role !== "assistant")
 		throw new Error("EVAL_V3_RESUME_PENDING_OPERATION");
-	return { session, sessionSha256, completed, assistantCount };
+	return { session, sessionSha256, completed, assistantCount, stopReason: last.stopReason };
 }
 
 function agentConfigDigest(prepared: PreparedAgent) {
@@ -136,7 +140,7 @@ export function saveSuspendedRun(context: RunnerContext, prepared: PreparedAgent
 	const audit = readSandboxAuditSnapshot(auditPath(context));
 	execution.telemetry?.finish(execution.gatewayStatus, audit);
 	if (audit.complete !== true || !prepared.seededTaskId) throw new Error("EVAL_V3_PAUSE_UNSAFE");
-	const { session, sessionSha256, completed, assistantCount } = inspectSession(context.root, prepared.cwd);
+	const { session, sessionSha256, completed, assistantCount, stopReason } = inspectSession(context.root, prepared.cwd);
 	const budget = budgetEvidence(execution.gatewayStatus, execution.deadlineAt);
 	if (assistantCount !== budget.started || budget.started !== budget.requests)
 		throw new Error("EVAL_V3_PAUSE_SESSION_BUDGET_MISMATCH");
@@ -144,14 +148,30 @@ export function saveSuspendedRun(context: RunnerContext, prepared: PreparedAgent
 	const branchLeafId = session.getLeafId();
 	const paths = inspectWorkspace(prepared.cwd, prepared.repositoryCommit);
 	const records = audit.audit as SandboxAuditRecord[];
-	const writeCalls = [...completed].filter(([, result]) => result.tool === "write" || result.tool === "edit");
+	const writeCalls = [...completed].filter(([, result]) => result.toolName === "write" || result.toolName === "edit");
 	const written = records.filter(({ operation }) => operation === "write_file");
-	if (writeCalls.some(([id, result]) => result.failed || !written.some(({ requestId, status }) =>
+	if (writeCalls.some(([id, result]) => result.isError || !written.some(({ requestId, status }) =>
 		requestId === hash(id + ":write") && status === "ok")) || written.length !== writeCalls.length)
 		throw new Error("EVAL_V3_PAUSE_WRITE_UNVERIFIED");
+	const taskId = prepared.seededTaskId;
+	const references = contextReferences({ cwd: prepared.cwd, sessionManager: session, isProjectTrusted: () => true }, taskId);
+	if (context.jointRecovery) {
+		const results = [...completed.values()];
+		const tests = results.filter(({ toolName }) => toolName === "run_tests");
+		const test = tests[0]?.details as { status?: string; exitCode?: number } | undefined;
+		const memoryVerified = results.some((result) => result.toolName === "enhanced_memory_search" &&
+			memoryTouchMetadata(result, result.isError, prepared.memorySeed?.id ?? null).matchedSeed === true);
+		if (stopReason !== "stop" || writeCalls.length || !references.length || tests.length !== 1 ||
+			test?.status !== "verification_failed" || test.exitCode !== 1 || !memoryVerified ||
+			execution.verification?.status !== "verification_failed" || execution.verification.cleanup !== "removed" ||
+			budget.started >= context.plan.maxCallsPerTask ||
+			execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+				cwd: prepared.cwd, encoding: "utf8", timeout: 2_000, windowsHide: true,
+			}).trim())
+			throw new Error("EVAL_V3_JOINT_PAUSE_EVIDENCE_REQUIRED");
+	}
 	const service = openTask(prepared);
 	try {
-		const taskId = prepared.seededTaskId;
 		const attempts = service.provider.getAttempts(taskId);
 		if (attempts.some((attempt) => ["started", "needs_reconciliation"].includes(attempt.state)) ||
 			writeCalls.some(([id]) => !attempts.some((attempt) => attempt.sessionId === sessionId &&
@@ -161,7 +181,6 @@ export function saveSuspendedRun(context: RunnerContext, prepared: PreparedAgent
 		const task = service.get(taskId)!.task;
 		const paused = service.transitionTask(taskId, task.revision, "paused", "runner:verified-pause");
 		service.provider.bindSession(taskId, sessionId, branchLeafId, "runner:verified-pause", Date.now());
-		const references = contextReferences({ cwd: prepared.cwd, sessionManager: session, isProjectTrusted: () => true }, taskId);
 		const checkpoint = createCheckpoint(service.provider, paused, sessionId, branchLeafId, paths, {
 			contextReferences: references,
 			sessionUsage: { responses: assistantCount, tokens: execution.gatewayStatus.actualTotalTokens,
@@ -209,7 +228,7 @@ export function loadSuspendedRun(context: RunnerContext): PreparedAgent {
 	return {
 		...state.prepared,
 		recovery: {
-			priorTestCalls: [...completed.values()].filter(({ tool }) => tool === "run_tests").length,
+			priorTestCalls: [...completed.values()].filter(({ toolName }) => toolName === "run_tests").length,
 			page: references[0] ? { reference: references[0], offset: 1_000, limit: 256 } : undefined,
 			sessionId: state.sessionId,
 		},

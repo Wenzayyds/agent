@@ -52,7 +52,8 @@ export interface RunnerContext {
 	testFeedback?: boolean;
 	telemetryEnabled: boolean;
 	v3Evaluation?: boolean;
-	stubRecovery?: "pause" | "resume";
+	recoveryPhase?: "pause" | "resume";
+	jointRecovery?: boolean;
 	localStubUrl?: string;
 	authorization?: BatchLAuthorization;
 	taskPairAuthorization?: TaskPairAuthorization;
@@ -109,7 +110,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		join(agentDir, "settings.json"),
 		JSON.stringify({
 			defaultProjectTrust: "always",
-			...(cell || task.swebench || context.testFeedback || context.stubRecovery ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
+			...(cell || task.swebench || context.testFeedback || context.recoveryPhase ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
 		}),
 	);
 	writeFileSync(
@@ -130,7 +131,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 					taskInjection: { enabled: switches.task },
 					...(context.v3Evaluation ? {
 						compaction: { enabled: true },
-						toolOutput: { enabled: true, maximumTextCharacters: 2_000, ...(context.stubRecovery ? { offload: true } : {}) },
+						toolOutput: { enabled: true, maximumTextCharacters: 2_000, ...(context.recoveryPhase ? { offload: true } : {}) },
 					} : {}),
 					...(cell?.module === "context"
 						? { toolOutput: { enabled: cell.treatment, maximumTextCharacters: 2_000 } }
@@ -159,7 +160,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 				batchL ? batchLPrompt(cell!) : task.prompt,
 				cell
 					? TASK_STEPS
-					: context.stubRecovery
+					: context.recoveryPhase
 						? [
 							{ stepId: "reproduce", title: "保存第一阶段观察与操作", expectedOutcome: "会话与已完成操作可核验" },
 							{ stepId: "repair", title: "修复并验证", expectedOutcome: "独立验证通过", dependsOn: ["reproduce"] },
@@ -172,7 +173,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 				null,
 			).task.taskId;
 			taskStateBefore = service.get(seededTaskId);
-			if (context.stubRecovery) {
+			if (context.recoveryPhase) {
 				const queued = service.transitionTask(seededTaskId, taskStateBefore!.task.revision, "queued", "runner:approved-fixture");
 				taskStateBefore = service.transitionTask(seededTaskId, queued.task.revision, "running", "runner:pause-phase");
 			}
@@ -197,7 +198,9 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 						? `\n${NEXT_EVALUATION_INSTRUCTIONS}`
 						: "")
 			: task.prompt +
-				(context.testFeedback
+				(context.jointRecovery
+					? "\nThis first phase is read-only. Read diagnostics.txt without a line limit, look up normalizeKey with enhanced_memory_search, and call run_tests exactly once to capture the baseline failure. Then end normally and leave the repair for the next process."
+					: context.testFeedback
 					? `\n先用 run_tests 复现失败。只修改 ${task.id === "config-default" ? "config.js" : task.id === "single-file-off-by-one" ? "math.js" : "key.js"}，修改后复测；若失败，按测试反馈继续修复。`
 					: "") +
 				(cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") +

@@ -94,7 +94,23 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		return event.type === "message_end" && message?.role === "assistant" &&
 			["error", "aborted", "length"].includes(message.stopReason ?? "");
 	}));
-	const exitCode = agentFailed ? 1 : child.status;
+	const auditComplete = sandboxAudit.complete === true && Boolean(sandboxAudit.evidence);
+	const jointRecovery = context.jointRecovery && context.recoveryPhase === "resume" ? {
+		contextRestored: Array.isArray(contextAudit.restores) && contextAudit.restores.some((result: unknown) =>
+			(result as { status?: string } | null)?.status === "restored"),
+		memoryRechecked: events.some((event) => event.type === "tool_execution_end" &&
+			event.toolName === "enhanced_memory_search" &&
+			memoryTouchMetadata(event.result, Boolean(event.isError), memorySeed?.id ?? null).matchedSeed === true),
+		retestPassed: events.some((event) => {
+			const result = event.result as { details?: { status?: string; exitCode?: number } } | undefined;
+			return event.type === "tool_execution_end" && event.toolName === "run_tests" && !event.isError &&
+				result?.details?.status === "passed" && result.details.exitCode === 0;
+		}),
+	} : undefined;
+	const missingJointEvidence = jointRecovery && (!auditComplete || !hostLifecycle.childClosed ||
+		!hostLifecycle.childAbsent || !hostLifecycle.containersRemoved || !hostLifecycle.workspaceIdentityValid ||
+		gatewayStatus.activeRequests !== 0 || Object.values(jointRecovery).some((value) => !value));
+	const exitCode = agentFailed || missingJointEvidence ? 1 : child.status;
 	const status = classifyExecution({ overBudget, timedOut, exitCode, verifierPassed });
 	const outcome = executionOutcome({
 		overBudget: budgetExceeded(usage, observedCost, plan!),
@@ -104,7 +120,6 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		exitCode,
 		verifierPassed,
 	});
-	const auditComplete = sandboxAudit.complete === true && Boolean(sandboxAudit.evidence);
 	let terminationClassification = classifyTermination({
 		events: toolSafety.events,
 		lastError: gatewayStatus.lastError,
@@ -143,9 +158,9 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 				({ stepId, state, riskClass })) };
 		} finally { store.close(); }
 	})() : undefined;
-	const taskInterruption = context.stubRecovery && seededTaskId && !budgetTermination && !auditComplete &&
+	const taskInterruption = context.recoveryPhase && seededTaskId && !budgetTermination && !auditComplete &&
 		hostLifecycle.childClosed && hostLifecycle.childAbsent ? recordInterruptedRun(prepared) : undefined;
-	const resumedTask = context.stubRecovery === "resume" && !budgetTermination && !taskInterruption
+	const resumedTask = context.recoveryPhase === "resume" && !budgetTermination && !taskInterruption
 		? finishResumedRun(context, prepared, verifierPassed, outcome.runStatus === "completed", auditComplete, gatewayStatus)
 		: undefined;
 	mkdirSync(taskOutput, { recursive: true });
@@ -164,6 +179,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		...(budgetTermination ? { taskTermination: budgetTermination } : {}),
 		...(resumedTask ? { resumedTask } : {}),
 		...(taskInterruption ? { taskInterruption } : {}),
+		...(jointRecovery ? { jointRecovery } : {}),
 		agentExitCode: child.status,
 		timedOut,
 		usage,
@@ -174,7 +190,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		...(deadlineAt === undefined ? {} : { budgetDeadlineAt: deadlineAt }),
 		...(context.v3Evaluation ? {
 			v3Evaluation: {
-				mode: "stub",
+				mode: localStubUrl ? "stub" : "real",
 				modules: switches,
 				fixtureSha256: inputFixtureHash,
 				costType: "gateway_rate_estimate",

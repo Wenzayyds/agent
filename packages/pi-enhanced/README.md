@@ -4,6 +4,44 @@ Pi Enhanced 为 Pi 提供五个可独立启停的扩展：MCP Policy、Memory、
 
 当前 Task Manager 支持 `off`、`v1`、`v2`。SWE-bench 使用 OFF/V1/V2 三组受限源码对照，模型执行和官方判分分别启动。实验配置不代表费用授权。
 
+## V3 联合恢复 Demo
+
+Pi 已提供模型接入、工具循环和可持久化会话。Pi Enhanced 通过扩展复用这些能力，把请求上下文、项目记忆和任务进度连到同一条修复链路。受控 Runner 用本机预算网关访问模型，文件操作和测试在无网 Docker 中执行。
+
+### 一次真实修复
+
+在 `memory-guided-regression` 中，DeepSeek Flash 先读取长诊断、检索已验证的记忆，运行基线测试并观察到 `PI` 与预期 `pi` 不符。第一进程只读退出，Runner 核对基线失败、结算和审计后保存检查点。
+
+第二进程使用原会话、Task 和预算账本，恢复 **256 字符**的诊断分页，重新检索到同一条已验证记忆，只写入一次 `key.js`。模型收到复测退出码 `0`，确认通过并正常结束。独立的只读 Docker 验证也通过。
+
+这一次真实运行共 **7 次请求、25,586 Token、25.022 秒**。Gateway 费率估算为 **$0.0090393**。这些是单次运行的观测值。
+
+### 免费复现
+
+在仓库根目录使用 Node.js 24、Git 和可用的 Docker。从干净检出开始执行下列命令。依赖、模型目录元数据和镜像可提前准备。
+
+```bash
+npm ci
+npm run hydrate:model-data
+npm run build:offline
+docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+npm exec vitest -- --run packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts --exclude '**/.artifacts/**' -t 'read-only joint recovery checkpoint'
+```
+
+预期选中的用例显示 `1 passed`。用例使用本地 Stub 作答，实际启动两个 Runner 进程与 Docker。它检查分页保留、恢复后重新检索、复测反馈、独立验证与共用预算，不需要真实模型密钥。
+
+### 源码导读
+
+| 模块 | 入口、关键行为与验证 |
+| --- | --- |
+| Context | [`createContextExtension`](src/context/extension.ts) 在请求前的 `context` 事件调用 [`ContextRuntime.transform`](src/context/runtime.ts)。长工具结果在会话中保留原文，请求视图保留有界预览和引用，避免丢失未来复查所需的诊断。[分页读取](src/context/offload.ts) 核对工作区、会话与任务。[生命周期测试](tests/integration/context-lifecycle.test.ts) 覆盖工具调用配对和恢复。 |
+| Memory | [`MemoryService.search`](src/memory/service.ts) 默认走 [SQLite FTS5 与字面匹配](src/memory/provider.ts)。语义模式按当前项目的已验证快照构建本地向量索引，TypeScript 复核返回项。混合模式用 [RRF 合并两路排序](src/memory/semantic-search-adapter.ts)。Worker 异常回退词法搜索，失效文件证据会从已验证命中中排除。[检索回归](tests/integration/memory-intelligence.test.ts) · [证据回归](tests/integration/memory-governance.test.ts) |
+| Task Manager | [`createCheckpoint`](src/task-manager/recovery.ts) 保存任务与计划修订、会话分支、工作区指纹、待办步骤和事件边界。`recoveryPreflight` 核对这些证据。写入结果未知时保留待核验，避免自动重放。[崩溃恢复测试](tests/e2e/task-crash-recovery.test.ts) |
+| Gateway | [`startBudgetGateway`](benchmarks/real-agent/budget-gateway.ts) 在转发前预留输入、安全余量和输出额度，有效 usage 到达后结算并释放差额。已发出请求的 usage 无法确认时，[持久化账本](benchmarks/real-agent/budget-persistence.ts) 拒绝恢复仍有未知用量的运行。[跨进程预算测试](tests/e2e/budget-recovery.test.ts) |
+| 联合执行 | [`saveSuspendedRun` / `beginResumedRun`](benchmarks/real-agent/runner-resume.ts) 绑定同一会话、Context 引用、Memory 项目库、Task 检查点、Sandbox 审计和原预算截止时间。第二进程读取这些持久化记录，从已核验边界继续。[端到端测试](tests/e2e/real-agent-runner-e2e.test.ts) |
+
+当前真实联合恢复只开放给固定任务和 DeepSeek Flash，需要单独授权。自动接续要求可核验的暂停点，未知写入需要先核验。Gateway 的保守输入预留可能在实际用量达到上限前拒绝请求。Stub 验证工程链路，单次真实案例不代表跨任务成功率。
+
 ## 代码导航
 
 | 目录 | 职责 |

@@ -107,9 +107,10 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		tempDir: root,
 		evaluation: {
 			PI_ENHANCED_EVAL_RUN_ID: plan!.runId,
-			...(context.stubRecovery && seededTaskId ? {
+			...(context.recoveryPhase && seededTaskId ? {
 				PI_ENHANCED_V3_TASK_ID: seededTaskId,
-				PI_ENHANCED_V3_RECOVERY_PHASE: context.stubRecovery,
+				PI_ENHANCED_V3_RECOVERY_PHASE: context.recoveryPhase,
+				...(context.jointRecovery && context.recoveryPhase === "pause" ? { PI_ENHANCED_V3_READONLY_PHASE: "1" } : {}),
 				PI_ENHANCED_V3_MODULE_TOOLS: moduleTools.join(","),
 				...(task.id === "memory-guided-regression" ? { PI_ENHANCED_V3_JOINT_FIXTURE: "1" } : {}),
 			} : {}),
@@ -154,12 +155,12 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		mkdirSync(directory, { recursive: true });
 		telemetry = new EvaluationTelemetry(
 			plan!.runId,
-			join(directory, context.stubRecovery === "resume" ? "evaluation-telemetry-resumed.json" : "evaluation-telemetry.json"),
+			join(directory, context.recoveryPhase === "resume" ? "evaluation-telemetry-resumed.json" : "evaluation-telemetry.json"),
 			cwd,
 			verifierScope.runId,
 		);
 	};
-	if (context.stubRecovery !== "resume") startTelemetry();
+	if (context.recoveryPhase !== "resume") startTelemetry();
 	let handshakePath: string | undefined;
 	if (pidHandshake) {
 		const output = realpathSync(runOutput);
@@ -201,11 +202,11 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		},
 		...(admission ? { fetch: admission.fetch } : {}),
 		runId: plan!.runId,
-		...(seededTaskId && localStubUrl ? {
+		...(seededTaskId && (localStubUrl || context.jointRecovery) ? {
 			persistence: {
 				id: seededTaskId,
 				databasePath: createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir).databasePath,
-				...(context.stubRecovery === "resume" ? { mode: "resume" as const } : {
+				...(context.recoveryPhase === "resume" ? { mode: "resume" as const } : {
 					mode: "create" as const, deadlineAt: Date.now() + plan.timeoutMs,
 				}),
 			},
@@ -229,7 +230,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			? { inputUsdPerMillion: 1.32, outputUsdPerMillion: 3.96 }
 			: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
 	});
-	const gatewayAtStart = context.stubRecovery === "resume" ? gateway.status() : undefined;
+	const gatewayAtStart = context.recoveryPhase === "resume" ? gateway.status() : undefined;
 	const cli = join(repositoryRoot, "packages", "coding-agent", "dist", "bundle", "cli.js");
 	const extensionArgs = [
 		"--extension",
@@ -254,7 +255,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	if (switches.memory) extensionArgs.push("--extension", join(packageRoot, "extensions", "memory.ts"));
 	if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
 	if (batchL) extensionArgs.push("--extension", join(here, "batch-l-tools.ts"));
-	else if (switches.task) extensionArgs.push("--extension", context.stubRecovery
+	else if (switches.task) extensionArgs.push("--extension", context.recoveryPhase
 		? join(here, "recovery-task.ts") : join(packageRoot, "extensions", "task-manager.ts"));
 	if (task.swebench) extensionArgs.push("--extension", join(here, "swe-tools.ts"));
 	const started = performance.now();
@@ -265,7 +266,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	let executionFailure: { error: unknown } | undefined;
 	let boundaryShutdownDeadline: number | undefined;
 	try {
-		if (context.stubRecovery === "resume") {
+		if (context.recoveryPhase === "resume") {
 			beginResumedRun(context, gatewayAtStart!, gateway.deadlineAt);
 			startTelemetry();
 		}
@@ -292,12 +293,14 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 						]
 					: ["--tools", ["read", "grep", "find", "ls", "write", "edit", ...moduleTools].join(",")]),
 				...extensionArgs,
-				...(context.stubRecovery ? ["--session", resumeSessionPath(root)] : ["--no-session"]),
+				...(context.recoveryPhase ? ["--session", resumeSessionPath(root)] : ["--no-session"]),
 				"--no-mcp",
 				"--no-skills",
 				"--no-context-files",
-				context.stubRecovery === "resume"
-					? "继续完成最初任务。使用已保存的工具结果和已完成的工作，继续尚未完成的修改和验证。"
+				context.recoveryPhase === "resume"
+					? context.jointRecovery
+						? "继续最初任务。先重新调用 enhanced_memory_search 查找 normalizeKey，并读取 key.js。可以在一轮内调用这两个只读工具。结合已保存的基线失败，只修改 key.js。修复后调用 run_tests，看到复测结果后正常结束。"
+						: "继续完成最初任务。使用已保存的工具结果和已完成的工作，继续尚未完成的修改和验证。"
 					: prompt,
 			],
 			{

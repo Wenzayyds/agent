@@ -39,9 +39,13 @@ const repositoryRoot = resolve(packageRoot, "../..");
 export async function main(): Promise<void> {
 	const manifest = JSON.parse(readFileSync(join(here, "task-manifest.json"), "utf8")) as { tasks: ExperimentTask[] };
 	const execute = process.argv.includes("--execute");
-	const v3Evaluation = process.argv.includes("--v3-evaluation");
-	const stubRecovery = argument("--v3-stub-recovery");
-	if (stubRecovery !== undefined && stubRecovery !== "pause" && stubRecovery !== "resume")
+	const jointRecovery = process.argv.includes("--v3-joint-recovery");
+	const stubRecovery = process.argv.includes("--v3-stub-recovery");
+	const v3Evaluation = jointRecovery || process.argv.includes("--v3-evaluation");
+	const recoveryPhase = argument(jointRecovery ? "--v3-joint-recovery" : "--v3-stub-recovery");
+	if (recoveryPhase !== undefined && recoveryPhase !== "pause" && recoveryPhase !== "resume")
+		throw new Error("EVAL_V3_RECOVERY_MODE_INVALID");
+	if ((jointRecovery && stubRecovery) || ((jointRecovery || stubRecovery) && recoveryPhase === undefined))
 		throw new Error("EVAL_V3_RECOVERY_MODE_INVALID");
 	const localStubUrl = argument("--local-stub-url");
 	const cell = controlledCell(argument("--controlled-cell"));
@@ -128,14 +132,18 @@ export async function main(): Promise<void> {
 	const configDefaultTestFeedback = process.argv.includes("--config-default-test-feedback");
 	const baselineFixture = !cell && !sweId && !comparisonProfile &&
 		(v3Evaluation || (argument("--variant") ?? "baseline") === "baseline");
-	if (v3Evaluation && (!baselineFixture || !localStubUrl || !taskId || !["controlled-long-report", ...manifest.tasks.map(({ id }) => id)].includes(taskId)))
+	if (v3Evaluation && !jointRecovery && (!baselineFixture || !localStubUrl || !taskId || !["controlled-long-report", ...manifest.tasks.map(({ id }) => id)].includes(taskId)))
 		throw new Error("EVAL_V3_LOCAL_STUB_SCOPE_REQUIRED");
 	if (singleFileTestFeedback && (taskId !== "single-file-off-by-one" || !baselineFixture))
 		throw new Error("EVAL_SINGLE_FILE_TEST_SCOPE_INVALID");
 	if (configDefaultTestFeedback && (taskId !== "config-default" || !baselineFixture))
 		throw new Error("EVAL_CONFIG_DEFAULT_TEST_SCOPE_INVALID");
-	const jointTestFeedback = Boolean(stubRecovery && taskId === "memory-guided-regression");
-	const testFeedback = singleFileTestFeedback || configDefaultTestFeedback || jointTestFeedback;
+	if (jointRecovery && (!baselineFixture || sweMirror || taskId !== "memory-guided-regression" ||
+		singleFileTestFeedback || configDefaultTestFeedback ||
+		(argument("--variant") ?? "full") !== "full" || (argument("--condition") ?? "memory_seeded") !== "memory_seeded"))
+		throw new Error("EVAL_V3_JOINT_RECOVERY_SCOPE_REQUIRED");
+	const testFeedback = singleFileTestFeedback || configDefaultTestFeedback ||
+		Boolean(recoveryPhase && taskId === "memory-guided-regression");
 	if (stubRecovery && (!v3Evaluation || !taskId ||
 		!["task-only", "full"].includes(argument("--variant") ?? "")))
 		throw new Error("EVAL_V3_RECOVERY_SCOPE_REQUIRED");
@@ -196,6 +204,9 @@ export async function main(): Promise<void> {
 		throw new Error("TASK_PAIR_CONFIGURATION_MISMATCH");
 	if (input.model === "deepseek-v4-pro" && swe?.configuration.model !== input.model)
 		throw new Error("SWE_PRO_PROFILE_REQUIRED");
+	if (jointRecovery && (input.provider !== "deepseek" || input.model !== "deepseek-flash" ||
+		input.apiKeyEnv !== (localStubUrl ? "MOCK_PROVIDER_KEY" : "DEEPSEEK_API_KEY")))
+		throw new Error("EVAL_V3_JOINT_PROVIDER_INVALID");
 	if (process.argv.includes("--preflight")) {
 		const repositoryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: repositoryRoot,
@@ -224,14 +235,17 @@ export async function main(): Promise<void> {
 			throw new Error("TASK_PAIR_RUN_SCOPE_INVALID");
 		claimTaskPairCell(taskPairPath!, taskPairAuthorization, swe ? taskMode! : cell!.id, input.outputDir);
 	}
+	if (jointRecovery && (!execute || process.env.PI_ENHANCED_REAL_MODEL_EVAL !== "1"))
+		throw new Error("EVAL_V3_JOINT_RECOVERY_UNAUTHORIZED");
 	if (execute && !localStubUrl) {
 		const projectEnv = join(repositoryRoot, ".env");
 		if (existsSync(projectEnv)) loadEnvFile(projectEnv);
 	}
 	const plan = execute ? buildEvaluationPlan(input, process.env) : undefined;
-	if (v3Evaluation && (!plan || plan.maxTasks !== 1 || plan.apiKeyEnv !== "MOCK_PROVIDER_KEY" ||
+	if (v3Evaluation && (!plan || plan.maxTasks !== 1 || plan.apiKeyEnv !== (jointRecovery && !localStubUrl ? "DEEPSEEK_API_KEY" : "MOCK_PROVIDER_KEY") ||
 		plan.sandboxImage !== CONTROLLED_IMAGE || plan.budgetEnforcement !== "local_hard_gateway" ||
-		plan.maxCallsPerTask > CONTROLLED_LIMITS.maxRequests || plan.maxTokensPerTask > CONTROLLED_LIMITS.maxTokens ||
+		plan.maxCallsPerTask > CONTROLLED_LIMITS.maxRequests ||
+		plan.maxTokensPerTask > (jointRecovery ? 48_000 : CONTROLLED_LIMITS.maxTokens) ||
 		plan.maxTotalCostUsd > CONTROLLED_LIMITS.maxCostUsd || plan.timeoutMs > CONTROLLED_LIMITS.timeoutMs))
 		throw new Error("EVAL_V3_LIMIT_INVALID");
 	if (
@@ -266,12 +280,12 @@ export async function main(): Promise<void> {
 			plan.timeoutMs > experimentalLimits.timeoutMs)
 	)
 		throw new Error("EVAL_CONTROLLED_LIMIT_EXCEEDED");
-	const variant = cell?.variant ?? argument("--variant") ?? "baseline";
+	const variant = cell?.variant ?? argument("--variant") ?? (jointRecovery ? "full" : "baseline");
 	const condition = cell
 		? (batchL && cell.module === "memory") || cell.id === "m_memory"
 			? "memory_seeded"
 			: "cold"
-		: (argument("--condition") ?? "cold");
+		: (argument("--condition") ?? (jointRecovery ? "memory_seeded" : "cold"));
 	if (condition !== "cold" && condition !== "memory_seeded") throw new Error(`Unknown condition: ${condition}`);
 	const variants: Record<string, { memory: boolean; context: boolean; task: boolean }> = {
 		baseline: { memory: false, context: false, task: false },
@@ -284,15 +298,15 @@ export async function main(): Promise<void> {
 	if (!variants[variant]) throw new Error(`Unknown ablation variant: ${variant}`);
 
 	const runOutput = plan ? resolve(plan.outputDir, plan.runId) : undefined;
-	if (runOutput && existsSync(runOutput) && stubRecovery !== "resume")
+	if (runOutput && existsSync(runOutput) && recoveryPhase !== "resume")
 		throw new Error("EVAL_GATE_RUN_ID_ALREADY_EXISTS");
-	if (runOutput && stubRecovery !== "resume") mkdirSync(runOutput, { recursive: true });
-	const root = stubRecovery ? join(runOutput!, "private") : mkdtempSync(join(tmpdir(), "pi-enhanced-real-agent-"));
-	if (stubRecovery === "pause") mkdirSync(root, { mode: 0o700 });
-	if (stubRecovery === "resume" &&
+	if (runOutput && recoveryPhase !== "resume") mkdirSync(runOutput, { recursive: true });
+	const root = recoveryPhase ? join(runOutput!, "private") : mkdtempSync(join(tmpdir(), "pi-enhanced-real-agent-"));
+	if (recoveryPhase === "pause") mkdirSync(root, { mode: 0o700 });
+	if (recoveryPhase === "resume" &&
 		(lstatSync(runOutput!).isSymbolicLink() || lstatSync(root).isSymbolicLink()))
 		throw new Error("EVAL_V3_RESUME_ROOT_INVALID");
-	if (stubRecovery === "resume" && existsSync(join(runOutput!, "run.json")))
+	if (recoveryPhase === "resume" && existsSync(join(runOutput!, "run.json")))
 		throw new Error("EVAL_V3_RESUME_TERMINAL_RUN");
 	if (offlinePolicy)
 		writeFileSync(join(root, "offline-denial-policy.json"), JSON.stringify(offlinePolicy), {
@@ -304,13 +318,13 @@ export async function main(): Promise<void> {
 			flag: "wx",
 			mode: 0o600,
 		});
-	if (stubRecovery !== "resume") mkdirSync(join(root, "temp"));
+	if (recoveryPhase !== "resume") mkdirSync(join(root, "temp"));
 	const results: Array<Record<string, unknown>> = [];
 	let sweCleanup: Record<string, unknown> | undefined;
 	try {
 		let observedCost = 0;
 		for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
-			const workspace = stubRecovery === "resume" ? undefined : prepareWorkspace(task, root, cell, batchL, comparisonProfile, v3Evaluation);
+			const workspace = recoveryPhase === "resume" ? undefined : prepareWorkspace(task, root, cell, batchL, comparisonProfile, v3Evaluation);
 			const repositoryCommit = workspace?.repositoryCommit;
 			if (!execute) {
 				results.push({
@@ -342,7 +356,8 @@ export async function main(): Promise<void> {
 				testFeedback,
 				telemetryEnabled,
 				v3Evaluation,
-				stubRecovery,
+				recoveryPhase,
+				jointRecovery,
 				localStubUrl,
 				authorization,
 				offlinePolicy,
@@ -364,7 +379,7 @@ export async function main(): Promise<void> {
 			};
 			const prepared = workspace ? await prepareAgent(context, workspace) : loadSuspendedRun(context);
 			const execution = await executeAgent(context, prepared);
-			if (stubRecovery === "pause" && execution.child.status === 0 && execution.child.closed &&
+			if (recoveryPhase === "pause" && execution.child.status === 0 && execution.child.closed &&
 				execution.hostLifecycle.childAbsent && execution.hostLifecycle.containersRemoved &&
 				execution.gatewayStatus.state === "ready" && execution.gatewayStatus.requestsRejected === 0) {
 				const checkpoint = saveSuspendedRun(context, prepared, execution);
@@ -407,7 +422,7 @@ export async function main(): Promise<void> {
 		);
 		process.stdout.write(`${JSON.stringify(summary)}\n`);
 	} finally {
-		if (!stubRecovery) rmSync(root, { recursive: true, force: true });
+		if (!recoveryPhase) rmSync(root, { recursive: true, force: true });
 		if (sweCleanup && runOutput)
 			atomicPrivateJson(join(runOutput, "host-cleanup.json"), {
 				...sweCleanup,

@@ -27,6 +27,47 @@ const valid = {
 };
 
 describe("Batch F real model authorization and budget gate", () => {
+	it("admits joint recovery only for the approved task and provider shape, and requires explicit execution authorization", () => {
+		const runner = resolve(import.meta.dirname, "../../benchmarks/real-agent/run-real-agent.ts");
+		const base = ["--v3-joint-recovery", "pause", "--provider", "deepseek", "--model", "deepseek-flash",
+			"--api-key-env", "DEEPSEEK_API_KEY"];
+		// No valid budget or credentials are given to any child.
+		const run = (...args: string[]) => spawnSync(process.execPath, ["--experimental-strip-types", runner, ...base, ...args], {
+			env: { ...process.env, PI_ENHANCED_REAL_MODEL_EVAL: "", DEEPSEEK_API_KEY: "" },
+			encoding: "utf8", timeout: 10_000, windowsHide: true,
+		});
+		const task = ["--task-id", "memory-guided-regression"];
+		const plan = run("--preflight", ...task);
+		expect(plan.status, plan.stderr).toBe(0);
+		expect(JSON.parse(plan.stdout)).toMatchObject({ authorized: false, model: "deepseek-flash" });
+		expect(run("--execute", ...task).stderr).toContain("EVAL_V3_JOINT_RECOVERY_UNAUTHORIZED");
+		expect(run("--preflight", "--task-id", "config-default").stderr).toContain("EVAL_V3_JOINT_RECOVERY_SCOPE_REQUIRED");
+		expect(run("--preflight", ...task, "--variant", "task-only").stderr).toContain("EVAL_V3_JOINT_RECOVERY_SCOPE_REQUIRED");
+		expect(run("--preflight", ...task, "--v3-stub-recovery", "pause").stderr).toContain("EVAL_V3_RECOVERY_MODE_INVALID");
+		expect(run("--preflight", ...task, "--local-stub-url", "http://127.0.0.1:1234/").stderr).toContain("EVAL_V3_JOINT_PROVIDER_INVALID");
+	}, 30_000);
+
+	it.each([
+		[["--v3-joint-recovery", "pause"], "48001"],
+		[["--v3-evaluation"], "40001"],
+	] as const)("rejects Token limits above the selected V3 ceiling (%j, %s)", (mode, tokens) => {
+		const runner = resolve(import.meta.dirname, "../../benchmarks/real-agent/run-real-agent.ts");
+		const child = spawnSync(process.execPath, ["--experimental-strip-types", runner, ...mode,
+			"--execute", "--local-stub-url", "http://127.0.0.1:1/",
+			"--task-id", "memory-guided-regression", "--run-id", "v3_limit_probe",
+			"--provider", "deepseek", "--model", "deepseek-flash", "--api-key-env", "MOCK_PROVIDER_KEY",
+			"--max-tasks", "1", "--max-calls-per-task", "8", "--max-tokens-per-task", tokens,
+			"--timeout-ms", "180000", "--max-total-cost-usd", "0.03", "--concurrency", "1",
+			"--budget-enforcement", "local_hard_gateway", "--output-dir", import.meta.dirname,
+			"--sandbox-image", valid.sandboxImage], {
+			env: { ...process.env, PI_ENHANCED_REAL_MODEL_EVAL: "1", PI_ENHANCED_LOCAL_STUB_EVAL: "1",
+				MOCK_PROVIDER_KEY: "fixture" },
+			encoding: "utf8", timeout: 10_000, windowsHide: true,
+		});
+		expect(child.status).not.toBe(0);
+		expect(child.stderr).toContain("EVAL_V3_LIMIT_INVALID");
+	}, 30_000);
+
 	it("imports all Runner stages without starting tasks or reading a provider key", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "pi-runner-import-"));
 		try {
