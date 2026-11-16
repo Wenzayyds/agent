@@ -1,10 +1,15 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { createProjectScope } from "../../src/memory/project-scope.ts";
+import { openMemoryService } from "../../src/memory/service.ts";
+import { createTaskStorageScope } from "../../src/task-manager/provider.ts";
+import { writeV3Matrix } from "../fixtures/v3-matrix.ts";
 import {
 	assertIsolatedMount,
 	close,
@@ -22,6 +27,16 @@ const cli = join(repositoryRoot, "packages", "coding-agent", "dist", "bundle", "
 const dockerAvailable = dockerImageAvailable(image);
 const roots: string[] = [];
 const servers: Server[] = [];
+const v3Groups = ["baseline", "context-only", "memory-only", "task-only", "full"] as const;
+let temporaryV3Output: string | undefined;
+
+function v3Output() {
+	return process.env.PI_ENHANCED_V3_TEST_OUTPUT ?? (temporaryV3Output ??= mkdtempSync(join(tmpdir(), "v3-matrix-")));
+}
+
+afterAll(() => {
+	if (temporaryV3Output) rmSync(temporaryV3Output, { recursive: true, force: true });
+});
 
 afterEach(async () => {
 	await Promise.allSettled(servers.splice(0).map((server) => close(server)));
@@ -431,24 +446,214 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		expect(bodies).toHaveLength(5);
 	}, 120_000);
 
+	it.each(["model-only", "read-only", "exhausted"])("recovers a generic session boundary (%s)", async (scenario) => {
+		const root = mkdtempSync(join(tmpdir(), "pi-v3-boundary-"));
+		roots.push(root);
+		const runId = "v3_boundary_" + scenario;
+		const turns = [
+			...(scenario === "read-only" ? [toolCallSse("read", { path: "math.js" }, 100, 20)] : []),
+			textSse("Initial observation is persisted.", 140, 20),
+			toolCallSse("edit", { path: "math.js", edits: [{ oldText: "n * (n - 1) / 2", newText: "n * (n + 1) / 2" }] }, 160, 20),
+			textSse("Finished.", 180, 20),
+		];
+		const requests: Record<string, unknown>[] = [];
+		const provider = await startProvider((body, response) => {
+			requests.push(body);
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(turns[requests.length - 1]);
+		});
+		const phase = (mode: string) => runRunner(provider.url, root, image, runId, false, undefined, 60_000,
+			["--v3-evaluation", "--task-id", "single-file-off-by-one", "--variant", "task-only", "--v3-stub-recovery", mode],
+			mode === "pause", undefined, scenario === "exhausted" ? 1 : 8);
+		const first = await phase("pause");
+		expect(first.killed, first.stderr).toBe(true);
+		const boundary = JSON.parse(first.stdout);
+		const consumed = scenario === "read-only" ? 2 : 1;
+		expect(boundary).toMatchObject({ state: "paused", requests: consumed, checkpoint: { completedWrites: 0, auditComplete: true } });
+		const second = await phase("resume");
+		expect(second.status, second.stderr).toBe(0);
+		expect(second.pid).not.toBe(first.pid);
+		const final = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		if (scenario === "exhausted") {
+			expect(requests).toHaveLength(consumed);
+			expect(final).toMatchObject({ budgetDeadlineAt: boundary.budgetDeadlineAt, runStatus: "budget_stopped",
+				auditComplete: true, taskTermination: { status: "budget_exhausted" },
+				gateway: { requestsStarted: consumed, denials: [{ code: "GATEWAY_REQUEST_LIMIT", upstreamForwarded: false }] } });
+			return;
+		}
+		expect(requests).toHaveLength(consumed + 2);
+		const recovered = JSON.stringify(requests[consumed].messages);
+		expect(recovered).toContain("Initial observation is persisted.");
+		if (scenario === "read-only") expect(recovered).toContain("call-read-100");
+		expect(final).toMatchObject({ verifierPassed: true, runStatus: "completed", budgetDeadlineAt: boundary.budgetDeadlineAt,
+			auditComplete: true, resumedTask: { task: { status: "completed" } } });
+		expect(final.v3Evaluation.tools.map(({ toolName }: { toolName: string }) => toolName)).toEqual(["edit"]);
+	}, 90_000);
+
+	it("retains reconciliation when Pi dies after Docker writes and before the result is persisted", async () => {
+		const root = mkdtempSync(join(tmpdir(), "v3-write-fault-"));
+		roots.push(root);
+		let calls = 0;
+		const provider = await startProvider((_body, response) => {
+			calls++;
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(toolCallSse("edit", {
+				path: "math.js", edits: [{ oldText: "n * (n - 1) / 2", newText: "n * (n + 1) / 2" }],
+			}, 100, 20));
+		});
+		const runId = "v3_write_interrupted";
+		const flags = ["--v3-evaluation", "--task-id", "single-file-off-by-one", "--variant", "task-only",
+			"--v3-stub-recovery"];
+		const crashed = await runRunner(provider.url, root, image, runId, false, undefined, 45_000,
+			[...flags, "pause", "--test-interrupt-after-write"]);
+		expect(crashed.status, crashed.stderr).toBe(0);
+		const run = join(root, runId);
+		const privateDir = join(run, "private");
+		expect(JSON.parse(readFileSync(join(privateDir, "fault-proof.json"), "utf8"))).toMatchObject({
+			toolCallId: "call-edit-100", pid: expect.any(Number),
+		});
+		const history = readFileSync(join(privateDir, "agent-session.jsonl"), "utf8");
+		expect(history).not.toContain('"role":"toolResult"');
+		expect(existsSync(join(privateDir, "pause.json"))).toBe(false);
+		const task = JSON.parse(readFileSync(join(run, "run.json"), "utf8")).results[0];
+		expect(task).toMatchObject({ verifierPassed: true, auditComplete: false,
+			sandboxAudit: { state: "interrupted", audit: expect.arrayContaining([
+				expect.objectContaining({ operation: "write_file", status: "ok" }),
+			]) }, hostLifecycle: { childClosed: true, childAbsent: true, containersRemoved: true },
+			taskInterruption: { status: "needs_reconciliation", attempts: [
+				expect.objectContaining({ toolCallId: "call-edit-100", state: "needs_reconciliation" }),
+			] } });
+		const file = join(privateDir, "single-file-off-by-one", "math.js");
+		const digest = sha256(file);
+		const resumed = await runRunner(provider.url, root, image, runId, false, undefined, 45_000, [...flags, "resume"]);
+		expect(resumed.status).not.toBe(0);
+		expect(resumed.stderr).toContain("EVAL_V3_RESUME_TERMINAL_RUN");
+		expect(calls).toBe(1);
+		expect(sha256(file)).toBe(digest);
+	}, 90_000);
+
+	it.each(["task-only", "full"])("resumes a non-config task across a killed Runner (%s)", async (variant) => {
+		const root = join(v3Output(), "joint-recovery");
+		mkdirSync(root, { recursive: true });
+		const started = performance.now();
+		const runId = "joint_v3_" + variant;
+		const full = variant === "full";
+		const requests: Record<string, unknown>[] = [];
+		const turns = [
+			toolCallSse("read", { path: "diagnostics.txt" }, 100, 20),
+			full ? toolCallSse("enhanced_memory_search", { query: "normalizeKey" }, 120, 20)
+				: toolCallSse("ls", { path: "." }, 120, 20),
+			toolCallSse("read", { path: "key.js" }, 140, 20),
+			toolCallSse("run_tests", {}, 160, 20),
+			toolCallSse("edit", { path: "key.js", edits: [{ oldText: "value.trim()", newText: "value.trim().toLowerCase()" }] }, 180, 20),
+			textSse("The repair is written. Pause before the final test.", 200, 20),
+			toolCallSse("run_tests", {}, 220, 20),
+			textSse("The check has passed.", 240, 20),
+		];
+		const provider = await startProvider((body, response) => {
+			requests.push(body);
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(turns[requests.length - 1]);
+		});
+		const phase = (mode: string, task = "memory-guided-regression") => runRunner(provider.url, root, image, runId, false,
+			undefined, 90_000, ["--v3-evaluation", "--task-id", task, "--condition", "memory_seeded",
+				"--variant", variant, "--v3-stub-recovery", mode], mode === "pause");
+		const paused = await phase("pause");
+		expect(paused.killed, paused.stderr).toBe(true);
+		expect(paused.status).not.toBe(0);
+		const boundary = JSON.parse(paused.stdout);
+		expect(boundary).toMatchObject({ state: "paused", requests: 6, inputTokens: 900, outputTokens: 120,
+			checkpoint: { completedWrites: 1, auditComplete: true, phaseVerification: { status: "passed" },
+				pid: paused.pid } });
+		const privateDir = join(root, runId, "private");
+		if (full) {
+			const messages = JSON.stringify(requests[1].messages);
+			expect(messages).toContain(boundary.checkpoint.references[0]);
+			expect(messages).not.toContain("JOINT_RECOVERY_PAGE");
+			expect(JSON.stringify(requests[2].messages)).toContain("must preserve the original input value");
+		}
+		expect(JSON.stringify(requests[4].messages)).toContain("normalizeKey verification");
+		if (full) {
+			const marker = join(privateDir, "pause.json");
+			const session = join(privateDir, "agent-session.jsonl");
+			const workspace = join(privateDir, "memory-guided-regression", "key.js");
+			expect((await phase("resume", "cross-file-export")).stderr).toContain("EVAL_V3_RESUME_IDENTITY_MISMATCH");
+			for (const [path, error] of [[marker, "EVAL_V3_PAUSE_CORRUPT"], [session, "EVAL_V3_RESUME_IDENTITY_MISMATCH"],
+				[workspace, "EVAL_V3_RESUME_IDENTITY_MISMATCH"]]) {
+				const previous = readFileSync(path);
+				const backup = path + ".test-backup";
+				renameSync(path, backup);
+				try {
+					writeFileSync(path, path === marker ? '{"body":"changed","sha256":"wrong"}' : Buffer.concat([previous, Buffer.from("changed")]));
+					expect((await phase("resume")).stderr).toContain(error);
+				} finally {
+					rmSync(path);
+					renameSync(backup, path);
+				}
+			}
+			const cwd = join(privateDir, "memory-guided-regression");
+			const agentDir = join(privateDir, "memory-guided-regression-agent");
+			const database = new DatabaseSync(createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir).databasePath);
+			try {
+				const id = boundary.checkpoint.checkpointId;
+				const previous = database.prepare("SELECT workspace_fingerprint FROM task_checkpoints WHERE checkpoint_id=?").get(id)
+					?.workspace_fingerprint as string;
+				const replace = database.prepare("UPDATE task_checkpoints SET workspace_fingerprint=? WHERE checkpoint_id=?");
+				try {
+					replace.run("0".repeat(64), id);
+					expect((await phase("resume")).stderr).toContain("EVAL_V3_TASK_RECOVERY_REJECTED");
+				} finally {
+					replace.run(previous, id);
+				}
+			} finally {
+				database.close();
+			}
+			expect(requests).toHaveLength(6);
+		}
+		const resumed = await phase("resume");
+		expect(resumed.status, resumed.stderr).toBe(0);
+		expect(resumed.pid).not.toBe(paused.pid);
+		const final = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		expect(final).toMatchObject({ verifierPassed: true, runStatus: "completed", auditComplete: true,
+			budgetDeadlineAt: boundary.budgetDeadlineAt, gateway: { requestsStarted: 8, requestsCompleted: 8,
+				actualInputTokens: 1360, actualOutputTokens: 160 },
+			resumedTask: { task: { status: "completed" }, steps: [{ stepId: "reproduce", status: "completed" },
+				{ stepId: "repair", status: "completed" }] } });
+		expect(requests).toHaveLength(8);
+		expect(final.sandboxAudit.audit.filter(({ operation }: { operation: string }) => operation === "write_file")).toHaveLength(0);
+		expect(JSON.stringify(requests[6].messages)).toContain("call-edit-180");
+		expect(JSON.stringify(requests[7].messages)).toContain('"status":"passed"'.replaceAll('"', '\\"'));
+		if (full) {
+			const restored = JSON.stringify(requests[6].messages);
+			expect(restored).toContain("JOINT_RECOVERY_PAGE");
+			expect(restored).toContain("must preserve the original input value");
+			expect(restored).toContain("只修改 key.js");
+			const afterRetest = JSON.stringify(requests[7].messages);
+			expect(afterRetest.match(/JOINT_RECOVERY_PAGE/gu)).toHaveLength(1);
+			expect(afterRetest).toContain("call-run_tests-220");
+			expect(final.v3Evaluation.context.restores).toEqual([{ reference: boundary.checkpoint.references[0],
+				status: "restored", characters: 256 }]);
+		}
+		writeFileSync(join(root, runId, "recovery-trajectory.json"), JSON.stringify({
+			boundary, resumedPid: resumed.pid, requestBytes: requests.map((body) => Buffer.byteLength(JSON.stringify(body))),
+			workload: "stub", repeatedWrites: 0, validMemoryHits: full ? 1 : 0, elapsedMs: Math.round(performance.now() - started),
+		}, null, 2));
+	}, 150_000);
+
 	it("measures the same large-output fixture with each V3 module configuration", async () => {
-		const configured = process.env.PI_ENHANCED_V3_TEST_OUTPUT;
-		const root = configured ? join(configured, "ablation") : mkdtempSync(join(tmpdir(), "pi-v3-ablation-"));
-		if (configured) mkdirSync(root, { recursive: true });
-		else roots.push(root);
-		const reportSizes = new Map<string, number>();
+		const root = join(v3Output(), "ablation");
+		mkdirSync(root, { recursive: true });
+		const stubRequestBytes: Record<string, number[]> = {};
 		let turn = 0;
 		let variant = "";
 		const provider = await startProvider((body, response) => {
 			turn++;
-			if (turn === 2) reportSizes.set(variant, Buffer.byteLength(JSON.stringify(body.messages)));
+			stubRequestBytes[variant].push(Buffer.byteLength(JSON.stringify(body)));
 			const reply = turn === 1 ? toolCallSse("read", { path: "diagnostics.txt" }, 100, 20) :
 				turn === 2 ? toolCallSse("edit", { path: "validate.js", edits: [{ oldText: "items.slice(0, 10).every", newText: "items.every" }] }, 200, 20) :
 				textSse("Validation repair done.", 300, 20);
 			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(reply);
 		});
-		for (const group of ["baseline", "context-only", "memory-only", "task-only", "full"]) {
+		for (const group of v3Groups) {
 			variant = group;
+			stubRequestBytes[group] = [];
 			turn = 0;
 			const result = await runRunner(provider.url, root, image, "v3_eval_" + group, false, undefined, 60_000,
 				["--v3-evaluation", "--variant", group, "--task-id", "controlled-long-report", "--condition", "memory_seeded"]);
@@ -457,9 +662,110 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 			expect(task).toMatchObject({ verifierPassed: true, v3Evaluation: { mode: "stub", agentCompleted: true, model: { requests: 3 } } });
 			expect(turn).toBe(3);
 		}
-		expect(reportSizes.get("context-only")).toBeLessThan(reportSizes.get("baseline")!);
-		expect(reportSizes.get("full")).toBeLessThan(reportSizes.get("task-only")!);
+		expect(stubRequestBytes["context-only"][1]).toBeLessThan(stubRequestBytes.baseline[1]);
+		expect(stubRequestBytes.full[1]).toBeLessThan(stubRequestBytes["task-only"][1]);
+		writeFileSync(join(root, "stub-request-bytes.json"), JSON.stringify(stubRequestBytes));
 	}, 120_000);
+
+	it.each(v3Groups)("measures V3 memory reuse and invalidation (%s)", async (variant) => {
+		const root = join(v3Output(), "memory-matrix", variant);
+		mkdirSync(root, { recursive: true });
+		const scratch = mkdtempSync(join(tmpdir(), "v3m-"));
+		roots.push(scratch);
+		const memoryOn = variant === "memory-only" || variant === "full";
+		const observe = memoryOn ? toolCallSse("enhanced_memory_search", { query: "normalizeKey" }, 100, 20)
+			: toolCallSse("read", { path: "project-rule.txt" }, 100, 20);
+		const turns = [
+			observe,
+			toolCallSse("edit", { path: "project-rule.txt", edits: [{ oldText: "must preserve the original input value",
+				newText: "keeps its published contract" }] }, 120, 20),
+			memoryOn ? toolCallSse("enhanced_memory_search", { query: "normalizeKey" }, 140, 20)
+				: toolCallSse("read", { path: "project-rule.txt" }, 140, 20),
+			toolCallSse("edit", { path: "key.js", edits: [{ oldText: "value.trim()", newText: "value.trim().toLowerCase()" }] }, 160, 20),
+			textSse("Index key repair done.", 180, 20),
+		];
+		let calls = 0;
+		let validHits = 0;
+		let staleHits: number | null = null;
+		const stubRequestBytes: number[] = [];
+		let isolated: boolean | null = null;
+		let seedId: string | undefined;
+		let probeError: unknown;
+		const provider = await startProvider(async (body, response) => {
+			const turn = calls++;
+			stubRequestBytes.push(Buffer.byteLength(JSON.stringify(body)));
+			try {
+				if (memoryOn && (turn === 1 || turn === 2 || turn === 3)) {
+					const history = body.messages as Array<{ role: string; content: string; tool_call_id?: string }>;
+					if (turn === 1) {
+						const match = history.find((message) => message.tool_call_id === "call-enhanced_memory_search-100")
+							?.content.match(/id=([a-f0-9-]+).*status=verified/u);
+						expect(match?.[1]).toBeTruthy();
+						seedId = match![1];
+						validHits = 1;
+					} else if (turn === 2) {
+						const temp = readdirSync(scratch).find((name) => name.startsWith("pi-enhanced-real-agent-"));
+						expect(temp).toBeTruthy();
+						const fixture = join(scratch, temp!);
+						const scope = createProjectScope({ cwd: join(fixture, "memory-guided-regression"),
+							agentDir: join(fixture, "memory-guided-regression-agent") });
+						const storage = await openMemoryService(scope);
+						const otherPath = join(root, "another-task");
+						mkdirSync(otherPath);
+						const other = await openMemoryService(createProjectScope({
+							cwd: otherPath, agentDir: join(fixture, "memory-guided-regression-agent"),
+						}));
+						try {
+							const value = await storage.get(seedId!);
+							expect(value?.verifications).toEqual([expect.objectContaining({
+								type: "file_observed", evidenceRef: "project-rule.txt",
+							})]);
+							isolated = await other.get(seedId!) === null && (await other.search({ text: "normalizeKey" })).length === 0;
+							expect(value?.status).toBe("verified");
+							expect(await storage.getVerified(seedId!)).toBeNull();
+						} finally {
+							other.close();
+							storage.close();
+						}
+					} else {
+						const latest = history.find((message) => message.tool_call_id === "call-enhanced_memory_search-140");
+						expect(latest).toBeDefined();
+						expect(latest?.content).not.toContain(seedId);
+						staleHits = 0;
+					}
+				}
+				response.writeHead(200, { "Content-Type": "text/event-stream" }).end(turns[turn]);
+			} catch (error) {
+				probeError = error;
+				response.writeHead(500).end();
+			}
+		});
+		const runId = "v3_eval_" + variant;
+		const result = await runRunner(provider.url, root, image, runId, false, undefined, 60_000,
+			["--v3-evaluation", "--variant", variant, "--condition", "memory_seeded", "--task-id", "memory-guided-regression"], false, scratch);
+		if (probeError) throw probeError;
+		expect(result.status, result.stderr).toBe(0);
+		const task = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		expect(task).toMatchObject({ runStatus: "completed", verifierPassed: true, auditComplete: true });
+		expect(calls).toBe(5);
+		if (memoryOn) {
+			expect(task.memorySeed).toMatchObject({ id: seedId, verifiedHits: 1 });
+			expect({ validHits, staleHits, isolated }).toEqual({ validHits: 1, staleHits: 0, isolated: true });
+		} else {
+			expect(task.moduleTools).not.toContain("enhanced_memory_search");
+			expect(task.memorySeed).toBeNull();
+		}
+		writeFileSync(join(root, runId, "memory-evidence.json"), JSON.stringify({
+			validHits, staleHits, isolated, stubRequestBytes, duplicateVerified: memoryOn ? true : null,
+		}));
+	}, 90_000);
+
+	it("summarizes the V3 evaluation matrix", () => {
+		const matrix = writeV3Matrix(v3Output(), v3Groups);
+		expect(matrix).toHaveLength(15);
+		expect(matrix.filter(({ status }) => status === "passed")).toHaveLength(12);
+		expect(matrix.filter(({ status }) => status === "unsupported")).toHaveLength(3);
+	});
 
 	it("fails the Docker preflight before the local provider receives a request", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-enhanced-runner-preflight-"));
@@ -625,11 +931,15 @@ function runRunner(
 	feedbackTask?: "single-file-off-by-one" | "config-default",
 	timeoutMs = 60_000,
 	extraArgs: string[] = [],
-): Promise<{ status: number | null; stdout: string; stderr: string }> {
+	killAfterPause = false,
+	scratch?: string,
+	maxCalls = 8,
+): Promise<{ status: number | null; stdout: string; stderr: string; pid?: number; killed: boolean }> {
 	const v3 = extraArgs.includes("--v3-evaluation");
 	const args = [
 		"--experimental-strip-types",
-		runner,
+		killAfterPause || extraArgs.includes("--test-interrupt-after-write")
+			? resolve(import.meta.dirname, "../fixtures/runner-pause-child.ts") : runner,
 		"--execute",
 		"--local-stub-url",
 		providerUrl,
@@ -648,7 +958,7 @@ function runRunner(
 		"--max-tokens-per-task",
 		feedbackTask ? "20000" : v3 ? "40000" : "200000",
 		"--max-calls-per-task",
-		"8",
+		String(maxCalls),
 		"--timeout-ms",
 		String(timeoutMs),
 		"--concurrency",
@@ -683,17 +993,25 @@ function runRunner(
 				PI_ENHANCED_REAL_MODEL_EVAL: "1",
 				PI_ENHANCED_LOCAL_STUB_EVAL: "1",
 				MOCK_PROVIDER_KEY: "mock-upstream-key",
+				...(scratch ? { TMP: scratch, TEMP: scratch, TMPDIR: scratch } : {}),
 			},
 			windowsHide: true,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const stdout: Buffer[] = [];
 		const stderr: Buffer[] = [];
-		child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+		let killed = false;
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout.push(chunk);
+			if (killAfterPause && !killed && Buffer.concat(stdout).toString("utf8").includes('"state":"paused"'))
+				killed = child.kill("SIGKILL");
+		});
 		child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
 		child.once("close", (status) =>
 			resolveRun({
 				status,
+				pid: child.pid,
+				killed,
 				stdout: Buffer.concat(stdout).toString("utf8"),
 				stderr: Buffer.concat(stderr).toString("utf8"),
 			}),

@@ -36,7 +36,7 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "../..");
 const repositoryRoot = resolve(packageRoot, "../..");
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
 	const manifest = JSON.parse(readFileSync(join(here, "task-manifest.json"), "utf8")) as { tasks: ExperimentTask[] };
 	const execute = process.argv.includes("--execute");
 	const v3Evaluation = process.argv.includes("--v3-evaluation");
@@ -128,14 +128,15 @@ async function main(): Promise<void> {
 	const configDefaultTestFeedback = process.argv.includes("--config-default-test-feedback");
 	const baselineFixture = !cell && !sweId && !comparisonProfile &&
 		(v3Evaluation || (argument("--variant") ?? "baseline") === "baseline");
-	if (v3Evaluation && (!baselineFixture || !localStubUrl || !taskId || !["controlled-long-report", "memory-guided-regression", "config-default"].includes(taskId)))
+	if (v3Evaluation && (!baselineFixture || !localStubUrl || !taskId || !["controlled-long-report", ...manifest.tasks.map(({ id }) => id)].includes(taskId)))
 		throw new Error("EVAL_V3_LOCAL_STUB_SCOPE_REQUIRED");
 	if (singleFileTestFeedback && (taskId !== "single-file-off-by-one" || !baselineFixture))
 		throw new Error("EVAL_SINGLE_FILE_TEST_SCOPE_INVALID");
 	if (configDefaultTestFeedback && (taskId !== "config-default" || !baselineFixture))
 		throw new Error("EVAL_CONFIG_DEFAULT_TEST_SCOPE_INVALID");
-	const testFeedback = singleFileTestFeedback || configDefaultTestFeedback;
-	if (stubRecovery && (!v3Evaluation || !configDefaultTestFeedback ||
+	const jointTestFeedback = Boolean(stubRecovery && taskId === "memory-guided-regression");
+	const testFeedback = singleFileTestFeedback || configDefaultTestFeedback || jointTestFeedback;
+	if (stubRecovery && (!v3Evaluation || !taskId ||
 		!["task-only", "full"].includes(argument("--variant") ?? "")))
 		throw new Error("EVAL_V3_RECOVERY_SCOPE_REQUIRED");
 	const swebench = sweId && sweMirror ? loadSweTask(sweId, sweMirror) : undefined;
@@ -289,8 +290,10 @@ async function main(): Promise<void> {
 	const root = stubRecovery ? join(runOutput!, "private") : mkdtempSync(join(tmpdir(), "pi-enhanced-real-agent-"));
 	if (stubRecovery === "pause") mkdirSync(root, { mode: 0o700 });
 	if (stubRecovery === "resume" &&
-		(lstatSync(runOutput!).isSymbolicLink() || lstatSync(root).isSymbolicLink() || existsSync(join(runOutput!, "run.json"))))
+		(lstatSync(runOutput!).isSymbolicLink() || lstatSync(root).isSymbolicLink()))
 		throw new Error("EVAL_V3_RESUME_ROOT_INVALID");
+	if (stubRecovery === "resume" && existsSync(join(runOutput!, "run.json")))
+		throw new Error("EVAL_V3_RESUME_TERMINAL_RUN");
 	if (offlinePolicy)
 		writeFileSync(join(root, "offline-denial-policy.json"), JSON.stringify(offlinePolicy), {
 			flag: "wx",
@@ -307,7 +310,7 @@ async function main(): Promise<void> {
 	try {
 		let observedCost = 0;
 		for (const task of selectedTasks.slice(0, plan?.maxTasks ?? selectedTasks.length)) {
-			const workspace = stubRecovery === "resume" ? undefined : prepareWorkspace(task, root, cell, batchL, comparisonProfile);
+			const workspace = stubRecovery === "resume" ? undefined : prepareWorkspace(task, root, cell, batchL, comparisonProfile, v3Evaluation);
 			const repositoryCommit = workspace?.repositoryCommit;
 			if (!execute) {
 				results.push({
@@ -364,9 +367,9 @@ async function main(): Promise<void> {
 			if (stubRecovery === "pause" && execution.child.status === 0 && execution.child.closed &&
 				execution.hostLifecycle.childAbsent && execution.hostLifecycle.containersRemoved &&
 				execution.gatewayStatus.state === "ready" && execution.gatewayStatus.requestsRejected === 0) {
-				saveSuspendedRun(context, prepared, execution);
+				const checkpoint = saveSuspendedRun(context, prepared, execution);
 				process.stdout.write(JSON.stringify({
-					state: "paused", budgetDeadlineAt: execution.deadlineAt,
+					state: "paused", checkpoint, budgetDeadlineAt: execution.deadlineAt,
 					requests: execution.gatewayStatus.requestsStarted,
 					inputTokens: execution.gatewayStatus.actualInputTokens, outputTokens: execution.gatewayStatus.actualOutputTokens,
 					estimatedCostUsd: execution.gatewayStatus.actualCostUsd,

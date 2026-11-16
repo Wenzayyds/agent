@@ -4,12 +4,17 @@ import type { ScopedTaskReader } from "../task-manager/contracts.ts";
 import { estimateContextMessages } from "./budget.ts";
 import type { ContextDiagnostics, ContextMessage, ContextModuleConfig, ContextRuntimeState } from "./contracts.ts";
 import { injectVerifiedMemory } from "./memory-source.ts";
-import { offloadProjection } from "./offload.ts";
+import { offloadProjection, restoreContextPage } from "./offload.ts";
 import { selectContextMessages } from "./selector.ts";
 import { injectActiveTask } from "./task-source.ts";
 
 export type ContextReaderProvider = (ctx: ExtensionContext, timeoutMs: number) => Promise<ScopedMemoryReader>;
 export type ContextTaskReaderProvider = (ctx: ExtensionContext, timeoutMs: number) => Promise<ScopedTaskReader>;
+
+export interface ContextHostRestore {
+	page?: { reference: string; offset: number; limit: number };
+	onResult?: (result: { reference: string; status: "restored" | "rejected"; characters: number }) => void;
+}
 
 export interface ContextRuntimeOptions {
 	state: ContextRuntimeState;
@@ -50,8 +55,10 @@ export class ContextRuntime {
 	async transform(
 		messages: readonly ContextMessage[],
 		ctx: ExtensionContext,
-		canRestore = this.offloadEnabled,
+		restoreToolActive: boolean,
+		hostRestore?: ContextHostRestore,
 	): Promise<ContextMessage[] | undefined> {
+		const canRestore = restoreToolActive || hostRestore !== undefined;
 		const before = estimateContextMessages(messages);
 		if (this.closed || this.state !== "ready") {
 			this.lastValue = { ...this.emptyDiagnostics(), beforeEstimatedTokens: before, afterEstimatedTokens: before };
@@ -84,6 +91,7 @@ export class ContextRuntime {
 							ctx,
 							activeTaskId,
 							this.config.toolOutput.maximumTextCharacters,
+							hostRestore !== undefined,
 						);
 						view = projected.messages;
 						offloaded = projected.offloaded;
@@ -166,6 +174,28 @@ export class ContextRuntime {
 				}
 			}
 			if (this.closed || epoch !== this.epoch) return undefined;
+			if (hostRestore?.page) {
+				const { reference, offset, limit } = hostRestore.page;
+				const userIndex = output.findLastIndex(({ role }) => role === "user");
+				let characters = 0;
+				if (activeTaskId && userIndex >= 0) {
+					try {
+						const page = restoreContextPage(ctx, activeTaskId, reference, offset, limit);
+						const withPage = output.toSpliced(userIndex, 0, {
+							role: "custom", customType: "pi-enhanced-restored-context", display: false,
+							content: `[Untrusted output restored for ${reference}]\n${page.text}`, timestamp: output[userIndex].timestamp,
+						});
+						if (selection.targetEstimatedTokens === null ||
+							estimateContextMessages(withPage) <= selection.targetEstimatedTokens) {
+							output = withPage;
+							characters = page.text.length;
+						}
+					} catch {
+						// Out-of-scope data and unavailable pages leave the normal request view intact.
+					}
+				}
+				hostRestore.onResult?.({ reference, status: characters ? "restored" : "rejected", characters });
+			}
 			this.lastValue = {
 				runtimeState: this.state,
 				mode: this.config.mode,

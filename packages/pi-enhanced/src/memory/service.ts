@@ -112,15 +112,24 @@ export class MemoryService {
 		if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1)) {
 			throw validationError("Search limit must be a positive integer");
 		}
-		return this.provider.search({
+		const limit = Math.min(query.limit ?? DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
+		const providerQuery = {
 			text,
-			limit: Math.max(1, Math.min(query.limit ?? DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT)),
+			limit,
 			statuses,
 			...(query.kinds ? { kinds: query.kinds } : {}),
 			...(query.sourceTypes ? { sourceTypes: query.sourceTypes } : {}),
 			...(query.categories ? { categories: query.categories } : {}),
 			...(query.lifecycles ? { lifecycles: query.lifecycles } : {}),
-		});
+		};
+		const isCurrent = (record: MemoryRecord) => record.status !== "verified" || this.hasCurrentFileEvidence(record);
+		const records = await this.provider.search(providerQuery);
+		const current = records.filter(isCurrent);
+		if (current.length === records.length || records.length < limit || limit === MAX_SEARCH_LIMIT) return current;
+
+		// Invalidated file evidence must not crowd out valid lower-ranked records.
+		const candidates = await this.provider.search({ ...providerQuery, limit: MAX_SEARCH_LIMIT });
+		return candidates.filter(isCurrent).slice(0, limit);
 	}
 
 	async list(
@@ -146,13 +155,21 @@ export class MemoryService {
 		return this.provider.get(validateId(id));
 	}
 
+	async getVerified(id: string): Promise<MemoryRecord | null> {
+		const record = await this.get(id);
+		return record?.status === "verified" && this.hasCurrentFileEvidence(record) ? record : null;
+	}
+
 	async listVerifiedSnapshot(limit = MAX_VERIFIED_SNAPSHOT_RECORDS): Promise<VerifiedMemorySnapshot> {
 		this.assertOpen();
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_VERIFIED_SNAPSHOT_RECORDS) {
 			throw validationError("Verified snapshot limit is invalid");
 		}
 		const records = await this.provider.listVerified(limit + 1);
-		return { records: records.slice(0, limit), truncated: records.length > limit };
+		return {
+			records: records.slice(0, limit).filter((record) => this.hasCurrentFileEvidence(record)),
+			truncated: records.length > limit,
+		};
 	}
 
 	getCore(name: CoreMemoryName): CoreMemoryDocument | null {
@@ -277,13 +294,8 @@ export class MemoryService {
 		for (const item of [...files].sort((left, right) => right.verifiedAt - left.verifiedAt)) {
 			if (checked.has(item.evidenceRef)) continue;
 			checked.add(item.evidenceRef);
-			const { fileContent: text } = this.readEvidenceFile(item.evidenceRef);
-			const observedSha256 = createHash("sha256").update(text).digest("hex");
-			if (
-				observedSha256 === item.evidenceVersion ||
-				normalizeMemoryText(text).includes(normalizeMemoryText(record.content))
-			)
-				return record;
+			const { unchanged, observedSha256 } = this.observeFileProof(record, item);
+			if (unchanged) return record;
 			changed.push({ evidenceRef: item.evidenceRef, previousSha256: item.evidenceVersion, observedSha256 });
 		}
 		return this.provider.setStatus({
@@ -293,6 +305,32 @@ export class MemoryService {
 			now: Date.now(),
 			reflection: changed,
 		});
+	}
+
+	/** Suppress obsolete file-only claims at retrieval. Governance still owns status transitions. */
+	private hasCurrentFileEvidence(record: MemoryRecord): boolean {
+		const proof = record.verifications.filter((item) => item.verifiedContentRevision === record.contentRevision);
+		if (!proof.length || proof.some((item) => item.type !== "file_observed")) return true;
+		const checked = new Set<string>();
+		return [...proof].sort((left, right) => right.verifiedAt - left.verifiedAt).some((item) => {
+			if (checked.has(item.evidenceRef)) return false;
+			checked.add(item.evidenceRef);
+			try {
+				return this.observeFileProof(record, item).unchanged;
+			} catch {
+				return false;
+			}
+		});
+	}
+
+	private observeFileProof(record: MemoryRecord, item: MemoryRecord["verifications"][number]) {
+		const { fileContent } = this.readEvidenceFile(item.evidenceRef);
+		const observedSha256 = createHash("sha256").update(fileContent).digest("hex");
+		return {
+			observedSha256,
+			unchanged: observedSha256 === item.evidenceVersion ||
+				normalizeMemoryText(fileContent).includes(normalizeMemoryText(record.content)),
+		};
 	}
 
 	private readEvidenceFile(relativePath: string): { pathFromRoot: string; fileContent: string } {

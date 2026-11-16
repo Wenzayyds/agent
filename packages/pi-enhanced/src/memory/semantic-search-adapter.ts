@@ -121,11 +121,10 @@ export class SemanticSearchAdapter {
 		const records: MemoryRecord[] = [];
 		const now = Date.now();
 		for (const candidate of candidates) {
-			const record = await this.service.get(candidate.memoryId);
+			const record = await this.service.getVerified(candidate.memoryId);
 			if (
 				!record ||
 				record.projectId !== this.service.scope.projectId ||
-				record.status !== "verified" ||
 				record.lifecycle !== "active" ||
 				(record.validFrom !== undefined && record.validFrom > now) ||
 				(record.validUntil !== undefined && record.validUntil <= now)

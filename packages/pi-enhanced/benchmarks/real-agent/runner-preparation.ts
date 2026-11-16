@@ -4,6 +4,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { LocalMemoryProvider } from "../../src/memory/provider.ts";
+import { openMemoryService } from "../../src/memory/service.ts";
 import { ensureProjectStorage } from "../../src/memory/storage.ts";
 import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
@@ -68,6 +69,7 @@ export function prepareWorkspace(
 	cell: ControlledCell | undefined,
 	batchL: boolean,
 	comparisonProfile?: string,
+	v3Evaluation = false,
 ) {
 	const cwd = join(root, task.id);
 	if (task.swebench) {
@@ -76,6 +78,12 @@ export function prepareWorkspace(
 	}
 	mkdirSync(cwd);
 	generate(task.id, cwd);
+	if (v3Evaluation && task.id === "memory-guided-regression") {
+		writeFileSync(join(cwd, "project-rule.txt"), V3_MEMORY_RULE + "\n");
+		writeFileSync(join(cwd, "diagnostics.txt"), "Trace entry from the index checker.\n".repeat(30) +
+			"JOINT_RECOVERY_PAGE: original index diagnostic retained across processes.\n" +
+			"End of index checker trace.\n".repeat(100));
+	}
 	if (batchL)
 		for (const [name, content] of Object.entries(batchLReferences(cell!))) writeFileSync(join(cwd, name), content);
 	const inputFixtureHash = digest(
@@ -101,7 +109,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		join(agentDir, "settings.json"),
 		JSON.stringify({
 			defaultProjectTrust: "always",
-			...(cell || task.swebench || context.testFeedback ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
+			...(cell || task.swebench || context.testFeedback || context.stubRecovery ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
 		}),
 	);
 	writeFileSync(
@@ -122,7 +130,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 					taskInjection: { enabled: switches.task },
 					...(context.v3Evaluation ? {
 						compaction: { enabled: true },
-						toolOutput: { enabled: true, maximumTextCharacters: 2_000 },
+						toolOutput: { enabled: true, maximumTextCharacters: 2_000, ...(context.stubRecovery ? { offload: true } : {}) },
 					} : {}),
 					...(cell?.module === "context"
 						? { toolOutput: { enabled: cell.treatment, maximumTextCharacters: 2_000 } }
@@ -135,7 +143,9 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		}),
 	);
 	const memorySeed = (batchL ? cell!.module === "memory" : condition === "memory_seeded" && switches.memory)
-		? await seedMemory(cwd, agentDir, cell ? MEMORY_RULE : undefined)
+		? context.v3Evaluation && task.id === "memory-guided-regression"
+			? await seedFileMemory(cwd, agentDir)
+			: await seedMemory(cwd, agentDir, cell ? MEMORY_RULE : undefined)
 		: null;
 	let seededTaskId: string | undefined;
 	let taskStateBefore: ReturnType<TaskService["get"]> = null;
@@ -151,7 +161,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 					? TASK_STEPS
 					: context.stubRecovery
 						? [
-							{ stepId: "reproduce", title: "复现失败", expectedOutcome: "隔离测试报告失败且有退出码" },
+							{ stepId: "reproduce", title: "保存第一阶段观察与操作", expectedOutcome: "会话与已完成操作可核验" },
 							{ stepId: "repair", title: "修复并验证", expectedOutcome: "独立验证通过", dependsOn: ["reproduce"] },
 						]
 						: [
@@ -188,7 +198,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 						: "")
 			: task.prompt +
 				(context.testFeedback
-					? `\n先用 run_tests 复现失败。只修改 ${task.id === "config-default" ? "config.js" : "math.js"}，修改后复测；若失败，按测试反馈继续修复。`
+					? `\n先用 run_tests 复现失败。只修改 ${task.id === "config-default" ? "config.js" : task.id === "single-file-off-by-one" ? "math.js" : "key.js"}，修改后复测；若失败，按测试反馈继续修复。`
 					: "") +
 				(cell?.id === "m_inline" ? `\n项目规则：${MEMORY_RULE}` : "") +
 				(cell?.id === "t_inline" ? `\n步骤计划：${JSON.stringify({ goal: task.prompt, steps: TASK_STEPS })}` : "") +
@@ -198,7 +208,28 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 				(seededTaskId ? ` 任务计划 ID 为 ${seededTaskId}，可先用 enhanced_task_get 查询。` : "");
 	return { ...workspace, agentDir, memorySeed, seededTaskId, taskStateBefore, moduleTools, prompt };
 }
-export type PreparedAgent = Awaited<ReturnType<typeof prepareAgent>>;
+export type PreparedAgent = Awaited<ReturnType<typeof prepareAgent>> & {
+	recovery?: { priorTestCalls: number; sessionId: string; page?: { reference: string; offset: number; limit: number } };
+};
+const V3_MEMORY_RULE = "normalizeKey is used for index lookups and must preserve the original input value.";
+
+async function seedFileMemory(cwd: string, agentDir: string) {
+	const service = await openMemoryService(createProjectScope({ cwd, agentDir }));
+	try {
+		const input = { kind: "fact", content: V3_MEMORY_RULE, source: { type: "file", ref: "project-rule.txt" } } as const;
+		const candidate = await service.saveCandidate(input);
+		const verified = await service.verifyFileFact(candidate.id, {
+			relativePath: "project-rule.txt", exactExcerpt: V3_MEMORY_RULE,
+		}, candidate.revision);
+		const duplicate = await service.saveCandidate(input);
+		const probeQuery = "normalizeKey";
+		const hits = await service.search({ text: probeQuery });
+		if (duplicate.id !== verified.id || !hits.some(({ id }) => id === verified.id))
+			throw new Error("EVAL_V3_MEMORY_SEED_INVALID");
+		return { id: verified.id, probeQuery, verifiedHits: hits.length };
+	} finally { service.close(); }
+}
+
 async function seedMemory(
 	cwd: string,
 	agentDir: string,

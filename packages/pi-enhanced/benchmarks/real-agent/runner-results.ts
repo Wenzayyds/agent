@@ -26,7 +26,7 @@ import { gatewayEvidence } from "./gateway-integration.ts";
 import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { classifyTermination } from "./result-classification.ts";
 import type { AgentExecution } from "./runner-execution.ts";
-import { finishResumedRun } from "./runner-resume.ts";
+import { finishResumedRun, recordInterruptedRun } from "./runner-resume.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 /** Interprets completed evidence and persists results; never starts an Agent, model request or container. */
 export function collectTaskResult(context: RunnerContext, prepared: PreparedAgent, execution: AgentExecution) {
@@ -142,8 +142,11 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 			return { status: "budget_exhausted", checkpoint, attemptStates: store.getAttempts(seededTaskId).map(({ stepId, state, riskClass }) =>
 				({ stepId, state, riskClass })) };
 		} finally { store.close(); }
-	})() : undefined;	const resumedTask = context.stubRecovery === "resume" && !budgetTermination
-		? finishResumedRun(prepared, verifierPassed, outcome.runStatus === "completed", auditComplete)
+	})() : undefined;
+	const taskInterruption = context.stubRecovery && seededTaskId && !budgetTermination && !auditComplete &&
+		hostLifecycle.childClosed && hostLifecycle.childAbsent ? recordInterruptedRun(prepared) : undefined;
+	const resumedTask = context.stubRecovery === "resume" && !budgetTermination && !taskInterruption
+		? finishResumedRun(context, prepared, verifierPassed, outcome.runStatus === "completed", auditComplete, gatewayStatus)
 		: undefined;
 	mkdirSync(taskOutput, { recursive: true });
 	writeFileSync(join(taskOutput, "patch.diff"), patch);
@@ -160,6 +163,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		verifierPassed,
 		...(budgetTermination ? { taskTermination: budgetTermination } : {}),
 		...(resumedTask ? { resumedTask } : {}),
+		...(taskInterruption ? { taskInterruption } : {}),
 		agentExitCode: child.status,
 		timedOut,
 		usage,
@@ -172,6 +176,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 			v3Evaluation: {
 				mode: "stub",
 				modules: switches,
+				fixtureSha256: inputFixtureHash,
 				costType: "gateway_rate_estimate",
 				model: {
 					requests: usage.calls, inputTokens: gatewayStatus.actualInputTokens, outputTokens: gatewayStatus.actualOutputTokens,
@@ -182,7 +187,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 				tools: events.filter(({ type }) => type === "tool_execution_end").map(({ toolName, isError }) => ({ toolName, isError })),
 				context: contextAudit,
 				memorySeeded: Boolean(memorySeed),
-				checkpointId: budgetTermination?.checkpoint?.checkpointId ?? null,
+				checkpointId: budgetTermination?.checkpoint?.checkpointId ?? resumedTask?.lastCheckpoint?.checkpointId ?? null,
 				agentCompleted: outcome.runStatus === "completed",
 				auditComplete,
 				budgetReason,

@@ -33,7 +33,8 @@ function digest(text: string): string {
 	return createHash("sha256").update(text, "utf16le").digest("hex");
 }
 
-function storedResults(ctx: ExtensionContext, taskId: string) {
+type ContextScope = Pick<ExtensionContext, "cwd" | "isProjectTrusted" | "sessionManager">;
+function storedResults(ctx: ContextScope, taskId: string) {
 	if (!ctx.isProjectTrusted() || !ctx.sessionManager.getSessionFile()) return [];
 	const root = realpathSync.native(ctx.cwd);
 	if (root !== realpathSync.native(ctx.sessionManager.getCwd())) return [];
@@ -58,7 +59,7 @@ function storedResults(ctx: ExtensionContext, taskId: string) {
 	return results;
 }
 
-export function contextReferences(ctx: ExtensionContext, taskId: string): string[] {
+export function contextReferences(ctx: ContextScope, taskId: string): string[] {
 	return storedResults(ctx, taskId)
 		.slice(-20)
 		.map(({ reference }) => reference);
@@ -69,6 +70,7 @@ export function offloadProjection(
 	ctx: ExtensionContext,
 	taskId: string,
 	limit: number,
+	hostRestores = false,
 ) {
 	const offloaded = new Set<string>();
 	const calls = collectToolCallIds(messages);
@@ -94,7 +96,9 @@ export function offloadProjection(
 		)
 			return message;
 		const text = redactMemoryOutput(original.text, ctx.cwd);
-		const note = `\n[Stored in this task's session. Use ${CONTEXT_RESTORE} with reference ${original.reference}.]\n`;
+		const note = hostRestores
+			? `\n[Stored in this task's session with reference ${original.reference}.]\n`
+			: `\n[Stored in this task's session. Use ${CONTEXT_RESTORE} with reference ${original.reference}.]\n`;
 		const preview = Math.max(0, Math.floor((limit - note.length) / 2));
 		offloaded.add(message.toolCallId);
 		return {

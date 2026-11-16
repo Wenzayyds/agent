@@ -4,13 +4,14 @@ import { Type } from "@earendil-works/pi-ai";
 import { assertSandboxWorkspaceIdentity } from "../../src/sandbox/config.ts";
 import { createSandboxExtension } from "../../src/sandbox/extension.ts";
 import { pytestFileVersions } from "../../src/sandbox/pytest.ts";
-import { runApprovedTestInDocker } from "./docker-verifier.ts";
+import { type FeedbackFixture, runApprovedTestInDocker } from "./docker-verifier.ts";
 
-export function createJsTestFeedback(taskId: "single-file-off-by-one" | "config-default") {
+export function createJsTestFeedback(taskId: FeedbackFixture) {
 	const configDefault = taskId === "config-default";
-	const file = configDefault ? "config.js" : "math.js";
+	const file = configDefault ? "config.js" : taskId === "single-file-off-by-one" ? "math.js" : "key.js";
 	return createSandboxExtension(undefined, undefined, undefined, false, (pi, config, isActive) => {
-		let calls = configDefault && process.env.PI_ENHANCED_V3_PRIOR_TEST_CALLS === "1" ? 1 : 0;
+		const prior = process.env.PI_ENHANCED_V3_PRIOR_TEST_CALLS;
+		let calls = prior === undefined ? 0 : (/^[0-3]$/u.test(prior) ? Number(prior) : 3);
 		let running = false;
 		const reply = (details: { status: string; stdout: string; stderr: string; exitCode: number | null }) => {
 			const { status, exitCode, stdout, stderr } = details;
@@ -35,7 +36,9 @@ export function createJsTestFeedback(taskId: "single-file-off-by-one" | "config-
 			label: "Run approved JavaScript test",
 			description: configDefault
 				? "Test both timeout cases in read-only Docker. At most three calls."
-				: "Test sumTo in read-only Docker. At most three calls.",
+				: taskId === "memory-guided-regression"
+					? "Test the index key lookup in read-only Docker. At most three calls."
+					: "Test sumTo in read-only Docker. At most three calls.",
 			parameters: Type.Object({}, { additionalProperties: false }),
 			async execute(_id, _args, signal) {
 				if (!isActive() || !config.trusted || !config.containerOwner || signal?.aborted || running || calls >= 3)
@@ -80,4 +83,7 @@ export function createJsTestFeedback(taskId: "single-file-off-by-one" | "config-
 	});
 }
 
-export default createJsTestFeedback("single-file-off-by-one");
+export default createJsTestFeedback(
+	process.env.PI_ENHANCED_V3_RECOVERY_PHASE && process.env.PI_ENHANCED_V3_TASK_ID && process.env.PI_ENHANCED_V3_JOINT_FIXTURE === "1"
+		? "memory-guided-regression" : "single-file-off-by-one",
+);

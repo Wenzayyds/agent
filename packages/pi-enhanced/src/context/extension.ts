@@ -11,10 +11,11 @@ import {
 	MAX_RESTORE_CHARACTERS,
 	restoreContextPage,
 } from "./offload.ts";
-import { ContextRuntime } from "./runtime.ts";
+import { type ContextHostRestore, ContextRuntime } from "./runtime.ts";
 
 export interface ContextExtensionOptions {
 	agentDir?: string;
+	hostRestore?: ContextHostRestore;
 	onDiagnostics?: (diagnostics: Readonly<ContextDiagnostics>, config: Readonly<ContextModuleConfig>) => void;
 	onView?: (before: readonly ContextMessage[], after: readonly ContextMessage[]) => void;
 }
@@ -27,6 +28,7 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 	let runtime: ContextRuntime | undefined;
 	let generation = 0;
 	let restoreRegistered = false;
+	let hostRestorationReported = false;
 	const registerRestore = (active: boolean): void => {
 		if (!active && !restoreRegistered) return;
 		restoreRegistered = true;
@@ -69,6 +71,7 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 
 	const start = (ctx: ExtensionContext): void => {
 		runtime?.close();
+		hostRestorationReported = false;
 		generation += 1;
 		const loaded = loadContextConfig({
 			agentDir: options.agentDir ?? getAgentDir(),
@@ -130,7 +133,20 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 	pi.on("context", async (event, ctx) => {
 		const current = runtime;
 		if (!current) return undefined;
-		const messages = await current.transform(event.messages, ctx, pi.getActiveTools().includes(CONTEXT_RESTORE));
+		const hostRestore = options.hostRestore;
+		const messages = await current.transform(event.messages, ctx, pi.getActiveTools().includes(CONTEXT_RESTORE),
+			hostRestore && {
+				page: hostRestore.page,
+				onResult: (result) => {
+					if (hostRestorationReported) return;
+					hostRestorationReported = true;
+					try {
+						hostRestore.onResult?.(result);
+					} catch {
+						// Observation must not affect Context output.
+					}
+				},
+			});
 		try {
 			options.onView?.(event.messages, messages ?? event.messages);
 			options.onDiagnostics?.(current.diagnostics, structuredClone(current.config));

@@ -60,8 +60,8 @@ export class ScopedMemoryReaderAdapter implements ScopedMemoryReader {
 
 	async get(id: string): Promise<MemoryRecord | null> {
 		this.assertOpen();
-		const record = await this.service.get(id);
-		return record?.status === "verified" && record.lifecycle === "active" ? record : null;
+		const record = await this.service.getVerified(id);
+		return record?.lifecycle === "active" ? record : null;
 	}
 
 	async getCore(name: CoreMemoryName): Promise<CoreMemoryDocument | null> {

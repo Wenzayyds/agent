@@ -74,7 +74,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		offlinePolicy,
 		observedCost,
 	} = context;
-	const { cwd, agentDir, seededTaskId, moduleTools, prompt } = prepared;
+	const { cwd, agentDir, seededTaskId, moduleTools, prompt, recovery } = prepared;
 	const pidHandshake = stubPidHandshakeEnabled(
 		process.env.PI_ENHANCED_SWE_STUB_PID_HANDSHAKE,
 		localStubUrl,
@@ -107,7 +107,14 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		tempDir: root,
 		evaluation: {
 			PI_ENHANCED_EVAL_RUN_ID: plan!.runId,
-			...(context.stubRecovery === "resume" ? { PI_ENHANCED_V3_PRIOR_TEST_CALLS: "1" } : {}),
+			...(context.stubRecovery && seededTaskId ? {
+				PI_ENHANCED_V3_TASK_ID: seededTaskId,
+				PI_ENHANCED_V3_RECOVERY_PHASE: context.stubRecovery,
+				PI_ENHANCED_V3_MODULE_TOOLS: moduleTools.join(","),
+				...(task.id === "memory-guided-regression" ? { PI_ENHANCED_V3_JOINT_FIXTURE: "1" } : {}),
+			} : {}),
+			...(recovery ? { PI_ENHANCED_V3_PRIOR_TEST_CALLS: String(recovery.priorTestCalls) } : {}),
+			...(recovery?.page ? { PI_ENHANCED_V3_CONTEXT_PAGE: JSON.stringify(recovery.page) } : {}),
 			...(telemetryEnabled ? { PI_ENHANCED_EVALUATION_TELEMETRY: "1" } : {}),
 			PI_ENHANCED_MAX_TOKENS_PER_TASK: String(plan!.maxTokensPerTask),
 			PI_ENHANCED_MAX_CALLS_PER_TASK: String(plan!.maxCallsPerTask),
@@ -247,7 +254,8 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	if (switches.memory) extensionArgs.push("--extension", join(packageRoot, "extensions", "memory.ts"));
 	if (switches.context) extensionArgs.push("--extension", join(here, "context-probe.ts"));
 	if (batchL) extensionArgs.push("--extension", join(here, "batch-l-tools.ts"));
-	else if (switches.task) extensionArgs.push("--extension", join(packageRoot, "extensions", "task-manager.ts"));
+	else if (switches.task) extensionArgs.push("--extension", context.stubRecovery
+		? join(here, "recovery-task.ts") : join(packageRoot, "extensions", "task-manager.ts"));
 	if (task.swebench) extensionArgs.push("--extension", join(here, "swe-tools.ts"));
 	const started = performance.now();
 	let gatewayStatus: BudgetGatewayStatus;
@@ -258,7 +266,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	let boundaryShutdownDeadline: number | undefined;
 	try {
 		if (context.stubRecovery === "resume") {
-			beginResumedRun(context);
+			beginResumedRun(context, gatewayAtStart!, gateway.deadlineAt);
 			startTelemetry();
 		}
 		writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));

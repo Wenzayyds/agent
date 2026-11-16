@@ -142,6 +142,25 @@ describe("Memory Governance schema and lifecycle", () => {
 		}
 	});
 
+	it("fills a bounded search after an invalidated file fact takes the first rank", async () => {
+		const { scope, service } = createStore();
+		const facts = [];
+		for (const suffix of ["first", "second"]) {
+			const relativePath = suffix + ".txt";
+			const content = "lookup guard " + suffix;
+			writeFileSync(join(scope.rootPath, relativePath), content);
+			const candidate = await service.saveCandidate({ kind: "fact", content, source: { type: "file", ref: relativePath } });
+			facts.push(await service.verifyFileFact(candidate.id, { relativePath, exactExcerpt: content }, candidate.revision));
+		}
+		const query = { text: "lookup guard", limit: 1 };
+		const [first] = await service.search(query);
+		expect(first).toBeDefined();
+		writeFileSync(join(scope.rootPath, first.verifications[0].evidenceRef), "The old evidence no longer applies.");
+		const current = facts.find(({ id }) => id !== first.id);
+		expect(await service.getVerified(first.id)).toBeNull();
+		expect((await service.search(query)).map(({ id }) => id)).toEqual([current?.id]);
+	});
+
 	it("archives reversibly, excludes archived records from default search/snapshots, and tracks usage without revision churn", async () => {
 		const { provider, service } = createStore();
 		const record = await verified(provider, "archive lifecycle fixture");

@@ -66,8 +66,9 @@ export async function verifyPatchInDocker(
 	return await runDockerCheck(taskId, config, limits);
 }
 
+export type FeedbackFixture = "single-file-off-by-one" | "config-default" | "memory-guided-regression";
 export async function runApprovedTestInDocker(
-	taskId: "single-file-off-by-one" | "config-default",
+	taskId: FeedbackFixture,
 	config: SandboxConfig,
 	signal?: AbortSignal,
 ) {
@@ -139,6 +140,17 @@ const config = await import("./config.js");
 const actual = [${configObservations.map((expression) => `observe(() => ${expression})`).join(",")}];
 emit(encode({ protocolVersion: 1, actual }));
 process.exitCode = ${CONFIG_CHECKS.map(({ expected }, index) => `actual[${index}] === ${expected}`).join(" && ")} ? 0 : 1;`
+			: feedback && taskId === "memory-guided-regression"
+				? `import { deepStrictEqual } from "node:assert/strict";
+const passed = console.log.bind(console);
+const failed = console.error.bind(console);
+try {
+	deepStrictEqual(await (async () => {${task.program}})(), ${JSON.stringify(task.expected)});
+	passed("PASS normalized index key and unchanged input");
+} catch (error) {
+	failed("normalizeKey verification: " + (error instanceof Error ? error.message : String(error)));
+	process.exitCode = 1;
+}`
 			: feedback
 				? `import { strictEqual } from "node:assert/strict";
 const passed = console.log.bind(console);

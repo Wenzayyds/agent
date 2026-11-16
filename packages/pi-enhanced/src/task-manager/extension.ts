@@ -19,6 +19,7 @@ import { ownsModelPlan, progressLedger, registerTaskV2, TASK_V2_TOOL } from "./v
 
 export interface TaskManagerExtensionOptions {
 	agentDir?: string;
+	initialBinding?: { taskId: string; stepId: string };
 }
 export function createTaskManagerExtension(options: TaskManagerExtensionOptions = {}): (pi: ExtensionAPI) => void {
 	return (pi) => registerTaskManagerExtension(pi, options);
@@ -60,6 +61,12 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 			return;
 		}
 		runtime = next;
+		if (options.initialBinding && next.state === "ready" && next.service) {
+			const { taskId, stepId } = options.initialBinding;
+			const snapshot = next.service.get(taskId);
+			if (snapshot?.task.status === "running" && snapshot.steps.some((step) => step.stepId === stepId && step.status === "pending"))
+				next.service.bind(taskId, stepId, ctx.sessionManager.getSessionId(), branchLeaf(ctx));
+		}
 		if (next.state === "ready" && next.scope && next.reader) {
 			if (!interactionsRegistered) {
 				registerInteractions(pi, () => runtime);
