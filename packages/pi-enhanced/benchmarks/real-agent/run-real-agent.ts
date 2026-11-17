@@ -22,8 +22,9 @@ import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
 import { loadSuspendedRun, saveSuspendedRun } from "./runner-resume.ts";
-import { resolveSweProfile, SWE_TASK_LIMITS } from "./swe-profile.ts";
+import { resolveSweProfile, SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, SWE_TASK_LIMITS } from "./swe-profile.ts";
 import { collectSweResult } from "./swe-results.ts";
+import { readSwePytestPolicy } from "./swe-test-feedback.ts";
 import { loadSweTask } from "./swe-workspace.ts";
 import {
 	claimTaskPairCell,
@@ -54,8 +55,15 @@ export async function main(): Promise<void> {
 	const sweId = argument("--swebench-id");
 	const sweMirror = argument("--swebench-mirror");
 	const taskMode = argument("--task-mode");
+	const swePytestPath = argument("--swe-pytest-policy");
+	if (process.argv.includes("--swe-pytest-policy") && (!swePytestPath || !sweId || !execute || (taskMode !== undefined && taskMode !== "off")))
+		throw new Error("SWE_PYTEST_SCOPE_INVALID");
 	const comparisonProfile = argument("--comparison-profile");
 	const swe = resolveSweProfile(comparisonProfile);
+	if (execute && comparisonProfile === SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE && !swePytestPath)
+		throw new Error("SWE_PYTEST_POLICY_REQUIRED");
+	if (swePytestPath && ((!localStubUrl || swe) && (swe?.admission !== "instances" || swe.cells.length !== 1)))
+		throw new Error("SWE_PYTEST_REQUIRES_ONE_INSTANCE");
 	const flashInstance = swe?.admission === "instances"
 		? swe.configuration.instances.find((instance) => instance.instanceId === sweId)
 		: undefined;
@@ -86,6 +94,7 @@ export async function main(): Promise<void> {
 	}
 	if (taskMode && (!sweId || (taskMode !== "off" && taskMode !== "v1" && taskMode !== "v2")))
 		throw new Error("SWE_TASK_MODE_INVALID");
+	const swePytest = swePytestPath ? readSwePytestPolicy(swePytestPath, sweId!) : undefined;
 	const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
 	if (
 		comparisonProfile &&
@@ -119,6 +128,7 @@ export async function main(): Promise<void> {
 					authorizationBatchId ?? "",
 					argument("--ci-evidence"),
 					swe?.configuration.profile ?? TASK_PAIR_PROFILE,
+					Boolean(swePytest),
 				)
 			: undefined;
 	const authorization =
@@ -233,7 +243,7 @@ export async function main(): Promise<void> {
 	if (taskPairExpectedPath) {
 		const input = JSON.parse(readFileSync(taskPairExpectedPath, "utf8"));
 		if (swe?.admission === "instances" && flashInstance)
-			taskPairExpected = readSweFlashOffInputs(input, swe.configuration.instances)[flashInstance.instanceId];
+			taskPairExpected = readSweFlashOffInputs(input, swe.configuration.instances, Boolean(swePytest))[flashInstance.instanceId];
 		else if (swe?.admission === "task") taskPairExpected = readSweProTaskInputs(input)[taskMode as "v1" | "v2"];
 		else if (swe?.admission === "all") taskPairExpected = readSweModeInputs(input)[taskMode as "off" | "v1" | "v2"];
 		else taskPairExpected = readTaskPairInput(input);
@@ -375,6 +385,7 @@ export async function main(): Promise<void> {
 				condition,
 				readonlyModuleTools,
 				testFeedback,
+				swePytest,
 				telemetryEnabled,
 				v3Evaluation,
 				recoveryPhase,

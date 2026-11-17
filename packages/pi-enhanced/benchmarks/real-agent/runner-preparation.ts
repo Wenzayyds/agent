@@ -24,6 +24,7 @@ import type { OfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { SWE_TASK_CONFIGURATION } from "./swe-profile.ts";
 import { swePrompt } from "./swe-instance.ts";
 import { prepareSweWorkspace, type SweTask } from "./swe-workspace.ts";
+import type { SwePytestPolicy } from "./swe-test-feedback.ts";
 import type { TaskPairAuthorization, TaskPairInput } from "./task-pair-authorization.ts";
 export interface ExperimentTask {
 	id: string;
@@ -50,6 +51,7 @@ export interface RunnerContext {
 	condition: string;
 	readonlyModuleTools: boolean;
 	testFeedback?: boolean;
+	swePytest?: SwePytestPolicy;
 	telemetryEnabled: boolean;
 	v3Evaluation?: boolean;
 	recoveryPhase?: "pause" | "resume";
@@ -189,7 +191,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 				? [...(switches.memory ? ["enhanced_memory_search"] : []), ...(switches.task ? ["enhanced_task_get"] : [])]
 				: [];
 	const prompt = task.swebench
-		? swePrompt(task.prompt)
+		? swePrompt(task.prompt, Boolean(context.swePytest))
 		: batchL
 			? batchLPrompt(cell!) +
 				(comparisonProfile === TASK_PAIR_PROFILE

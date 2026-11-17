@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { TASK_PAIR_CELLS, TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { verifyControlledCi } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
+import { readSweManifest, swePrompt } from "./swe-instance.ts";
 import {
 	resolveSweProfile,
 	SWE_FLASH_OFF_CONFIGURATION,
@@ -67,6 +68,7 @@ export function loadTaskPairAuthorization(
 	batchId: string,
 	ciPath: string | undefined,
 	expectedProfile: typeof TASK_PAIR_PROFILE | SweProfileName = TASK_PAIR_PROFILE,
+	publicTests = false,
 ): TaskPairAuthorization {
 	if (!path || !isAbsolute(path)) throw new Error("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
 	const stat = lstatSync(path);
@@ -77,6 +79,8 @@ export function loadTaskPairAuthorization(
 	const expiry = Date.parse(grant?.expiresAt);
 	const now = Date.now();
 	const swe = resolveSweProfile(expectedProfile);
+	if (publicTests && (swe?.admission !== "instances" || swe.cells.length !== 1))
+		throw new Error("SWE_PYTEST_REQUIRES_ONE_INSTANCE");
 	if (
 		!grant ||
 		Object.keys(grant).length !== (swe?.admission === "all" || swe?.admission === "task" ? 12 : 11) ||
@@ -101,7 +105,7 @@ export function loadTaskPairAuthorization(
 	)
 		throw new Error("TASK_PAIR_AUTHORIZATION_INVALID_OR_EXPIRED");
 	const input = swe?.admission === "instances" ? undefined : readTaskPairInput(grant.input);
-	if (swe?.admission === "instances") readSweFlashOffInputs(grant.instanceInputs, swe.configuration.instances);
+	if (swe?.admission === "instances") readSweFlashOffInputs(grant.instanceInputs, swe.configuration.instances, publicTests);
 	if (swe?.admission === "all") {
 		const inputs = readSweModeInputs(grant.modeInputs);
 		if (!isDeepStrictEqual(inputs.off, grant.input)) throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
@@ -168,10 +172,22 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 	writeFileSync(`${path}.used.${cellId}`, digest(grant), { flag: "wx", mode: 0o600 });
 }
 
+export function sweFlashOffPromptSha256(
+	instance: (typeof SWE_FLASH_OFF_CONFIGURATION)["instances"][number],
+	publicTests: boolean,
+): string {
+	if (!publicTests) return instance.userPromptSha256;
+	const issue = readSweManifest().instances.find((row) => row.instance_id === instance.instanceId && row.role === "candidate");
+	if (!issue?.problem_statement || digest(issue.problem_statement) !== instance.problemSha256)
+		throw new Error("SWE_ISSUE_HASH_MISMATCH");
+	return digest(swePrompt(issue.problem_statement, true));
+}
+
 /** Every OFF authorization binds one selected issue to its own calibrated request. */
 export function readSweFlashOffInputs(
 	value: unknown,
 	instances: (typeof SWE_FLASH_OFF_CONFIGURATION)["instances"] = SWE_FLASH_OFF_CONFIGURATION.instances,
+	publicTests = false,
 ): Record<string, TaskPairInput> {
 	if (!value || typeof value !== "object" || Object.keys(value).length !== instances.length)
 		throw new Error("SWE_INSTANCE_INPUTS_INVALID");
@@ -179,7 +195,7 @@ export function readSweFlashOffInputs(
 	for (const instance of instances) {
 		if (!Object.hasOwn(inputs, instance.instanceId)) throw new Error("SWE_INSTANCE_INPUTS_INVALID");
 		const input = readTaskPairInput(inputs[instance.instanceId]);
-		if (input.fixtureCommit !== instance.baseCommit || input.userPromptSha256 !== instance.userPromptSha256)
+		if (input.fixtureCommit !== instance.baseCommit || input.userPromptSha256 !== sweFlashOffPromptSha256(instance, publicTests))
 			throw new Error("SWE_INSTANCE_INPUT_MISMATCH");
 	}
 	return inputs;

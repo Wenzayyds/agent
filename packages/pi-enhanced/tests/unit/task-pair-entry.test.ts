@@ -5,8 +5,9 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TASK_PAIR_CONFIGURATION } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
+import { readSweManifest, swePrompt } from "../../benchmarks/real-agent/swe-instance.ts";
 import { SWE_FLASH_OFF_CONFIGURATION, SWE_FLASH_OFF_FOUR_CONFIGURATION, SWE_FLASH_OFF_FOUR_PROFILE, SWE_FLASH_OFF_PROFILE, SWE_FLASH_OFF_SINGLE_CONFIGURATION, SWE_FLASH_OFF_SINGLE_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
-import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
+import { SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	claimTaskPairCell,
@@ -31,6 +32,36 @@ function invoke(entry: string, args: string[]) {
 }
 
 describe("Task pair offline entry", () => {
+	it("scopes the new pytest profile to 7671 and requires explicit policy", () => {
+		const args = ["--comparison-profile", SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, "--swebench-mirror", root];
+		const selected = [...args, "--swebench-id", "astropy__astropy-7671"];
+		const preview = invoke("run-controlled.ts", selected);
+		expect(preview.status, preview.stderr).toBe(0);
+		const report = JSON.parse(preview.stdout);
+		expect(report.cells.map((cell: { instanceId: string }) => cell.instanceId)).toEqual(["astropy__astropy-7671"]);
+		expect(report.limits).toMatchObject({ maxRuns: 1, maxRequests: 20, maxTokens: 200_000, timeoutMs: 600_000, maxCostUsd: 0.08, maxBatchCostUsd: 0.08 });
+		expect(invoke("run-controlled.ts", [...selected, "--execute"]).stderr).toContain("SWE_PYTEST_POLICY_REQUIRED");
+		expect(invoke("run-controlled.ts", [...args, "--swebench-id", "astropy__astropy-13033"]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
+	}, 30_000);
+
+	it("binds test-enabled Flash OFF inputs to the public-test prompt without changing legacy admission", () => {
+		const configuration = SWE_FLASH_OFF_SINGLE_CONFIGURATION;
+		const instance = configuration.instances[0]!;
+		const issue = readSweManifest().instances.find((row) => row.instance_id === instance.instanceId)!;
+		const input = { fixtureCommit: instance.baseCommit, userPromptSha256: instance.userPromptSha256,
+			fixtureSha256: digest(instance.baseCommit), systemPromptSha256: "a".repeat(64),
+			toolSchemaSha256: "b".repeat(64), firstRequestSha256: "c".repeat(64) };
+		const legacy = { [instance.instanceId]: input };
+		const prompt = swePrompt(issue.problem_statement!, true);
+		expect(prompt).toContain("可用 run_tests");
+		expect(prompt).not.toContain("不提供 Shell 或 Agent 内测试执行能力");
+		const enabled = { [instance.instanceId]: { ...input, userPromptSha256: digest(prompt) } };
+		expect(readSweFlashOffInputs(legacy, configuration.instances)).toEqual(legacy);
+		expect(readSweFlashOffInputs(enabled, configuration.instances, true)).toEqual(enabled);
+		expect(() => readSweFlashOffInputs(legacy, configuration.instances, true)).toThrow("SWE_INSTANCE_INPUT_MISMATCH");
+		expect(() => readSweFlashOffInputs(enabled, configuration.instances)).toThrow("SWE_INSTANCE_INPUT_MISMATCH");
+	});
+
 	it("authorizes all five Flash OFF fingerprints and consumes each instance only in order", () => {
 		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-flash-grant-")));
 		try {

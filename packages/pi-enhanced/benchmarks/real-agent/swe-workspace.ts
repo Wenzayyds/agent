@@ -39,6 +39,15 @@ export function prepareSweWorkspace(task: SweTask, cwd: string): string {
 	const tree = git(task.mirror, ["ls-tree", "-rlz", base]).split("\0").filter(Boolean);
 	let bytes = 0;
 	for (const entry of tree) {
+		if (base === "a7141cd90019b62688d507ae056298507678c058") {
+			// This public base has one gitlink left uninitialized and a literal tilde in a build filename.
+			// Match the pinned objects and paths without accepting others or checking out submodules.
+			if (/^160000 commit ca630405b54d40695b7bbd2824cb0f142b5811b6 +-\tastropy_helpers$/u.test(entry)) continue;
+			if (/^100644 blob c573da90c5ccebffba4dce9a6462036bfa986d5f +6126\tcextern\/expat\/m4\/lt~obsolete\.m4$/u.test(entry)) {
+				bytes += 6126;
+				continue;
+			}
+		}
 		const match = /^(100644|100755) blob [a-f0-9]+ +([0-9]+)\t([A-Za-z0-9_./+@ -]+)$/u.exec(entry);
 		if (!match || !safeBasePath(match[3]!)) throw new Error("SWE_UNSUPPORTED_BASE_TREE");
 		bytes += Number(match[2]);

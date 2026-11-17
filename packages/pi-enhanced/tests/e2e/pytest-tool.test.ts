@@ -10,6 +10,9 @@ import type { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
 import { createSandboxExtension, sandboxToolAllowed } from "../../src/sandbox/extension.ts";
 import { createPytestExecutor, type PytestConfig } from "../../src/sandbox/pytest.ts";
+import { createSweTestFeedback, sweVerificationStatus } from "../../benchmarks/real-agent/swe-test-feedback.ts";
+import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
+import { readSwePatch } from "../../benchmarks/real-agent/swe-patch.ts";
 import { sandboxConfigForTesting } from "../fixtures/runner-support.ts";
 
 const image = process.env.PI_TEST_PYTEST_IMAGE ?? "";
@@ -69,6 +72,48 @@ it("blocks native edit when CCR auto has no trusted Sandbox", async () => {
 });
 
 describe.skipIf(!image)("isolated pytest", () => {
+	it("feeds a failed SWE patch back to Pi and binds a later pass to the exported revision", async () => {
+		const sandbox = (cwd: string) => sandboxConfigForTesting({ workspace: cwd, runId: "swe-pytest-loop" });
+		const harness = await createHarness({ extensionFactories: [createSweTestFeedback({
+			...policy(), tests: ["test_calc.py::test_negative", "test_calc.py::test_positive"],
+			instanceId: "example__example-100", baseCommit: "a".repeat(40),
+		}, sandbox)] });
+		const cwd = harness.tempDir;
+		const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+		try {
+			writeFileSync(join(cwd, "calc.py"), "def clamp(x):\n    return 0\n");
+			writeFileSync(join(cwd, "test_calc.py"), "from calc import clamp\ndef test_positive():\n    assert clamp(4) == 4\ndef test_negative():\n    assert clamp(-2) == 0\n");
+			git("init");
+			git("add", "calc.py", "test_calc.py");
+			git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture");
+			await harness.session.bindExtensions({});
+			const call = (name: string, args: Record<string, unknown>) => fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
+			const edit = (oldText: string, newText: string) => call("edit", { path: "calc.py", edits: [{ oldText, newText }] });
+			harness.setResponses([
+				call("run_tests", { targets: ["test_calc.py"] }),
+				edit("return 0", "return x"),
+				call("run_tests", { targets: ["test_calc.py::test_negative"] }),
+				edit("return x", "return max(0, x)"),
+				call("run_tests", { targets: ["test_calc.py::test_negative", "test_calc.py::test_positive"] }),
+				fauxAssistantMessage("Finished after both public tests passed."),
+			]);
+			await harness.session.prompt("Fix clamp and verify the public tests.");
+			const results = harness.session.messages.filter((m) => m.role === "toolResult" && m.toolName === "run_tests").map((m) => JSON.parse(getMessageText(m)));
+			expect(results).toHaveLength(3);
+			expect(results[0]).toMatchObject({ status: "unavailable", reason: "unsupported", exitCode: null });
+			expect(results[1]).toMatchObject({ status: "failed", exitCode: 1, failed: 1, canRunAgain: true });
+			expect(results[1].output).toContain("assert -2 == 0");
+			expect(results[2]).toMatchObject({ status: "passed", exitCode: 0, passed: 2 });
+			expect(results[2].patchSha256).not.toBe(results[1].patchSha256);
+			const verification = () => sweVerificationStatus(sandbox(cwd).runRoot, digest(readSwePatch(cwd)));
+			expect(verification()).toMatchObject({ status: "passed", targets: ["test_calc.py::test_negative", "test_calc.py::test_positive"] });
+			writeFileSync(join(cwd, "calc.py"), "def clamp(x):\n    return x\n");
+			expect(verification()).toMatchObject({ status: "failed", targets: ["test_calc.py::test_negative"] });
+			writeFileSync(join(cwd, "calc.py"), "def clamp(x):\n    return -1\n");
+			expect(verification()).toMatchObject({ status: "unavailable", reason: "patch_changed_or_unavailable" });
+		} finally { harness.cleanup(); }
+	}, 60_000);
+
 	it("does not register run_tests without trusted opt-in", async () => {
 		let broker: DockerSandboxBroker | undefined;
 		const harness = await createHarness({ extensionFactories: [createSandboxExtension(

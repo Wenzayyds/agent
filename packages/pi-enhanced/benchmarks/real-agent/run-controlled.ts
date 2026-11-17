@@ -25,10 +25,11 @@ import {
 } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
-import { resolveSweProfile, SWE_FLASH_OFF_SINGLE_PROFILE, type SWE_TASK_LIMITS } from "./swe-profile.ts";
+import { resolveSweProfile, SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, type SWE_TASK_LIMITS } from "./swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	loadTaskPairAuthorization,
+	sweFlashOffPromptSha256,
 	readTaskPairInput,
 	type TaskPairInput,
 } from "./task-pair-authorization.ts";
@@ -46,9 +47,14 @@ const swe = resolveSweProfile(comparisonProfile);
 const hostGrantProfile = taskPair || Boolean(swe);
 const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
+const swePytestPath = argument("--swe-pytest-policy");
+if (execute && comparisonProfile === SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE && !swePytestPath)
+	throw new Error("SWE_PYTEST_POLICY_REQUIRED");
+if (process.argv.includes("--swe-pytest-policy") && (!swePytestPath || swe?.admission !== "instances" || swe.cells.length !== 1 || !execute))
+	throw new Error("SWE_PYTEST_REQUIRES_ONE_INSTANCE");
 const flash = swe?.admission === "instances" ? swe : undefined;
 if (swe && (!sweMirror || (swe.admission === "instances"
-	? swe.configuration.profile === SWE_FLASH_OFF_SINGLE_PROFILE
+	? swe.cells.length === 1
 		? sweId !== swe.configuration.instances[0]!.instanceId
 		: process.argv.includes("--swebench-id")
 	: sweId !== swe.configuration.instanceId))) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
@@ -103,6 +109,7 @@ const taskPairAuthorization =
 				batchId ?? "",
 				ciPath,
 				swe?.configuration.profile ?? TASK_PAIR_PROFILE,
+				Boolean(swePytestPath),
 			)
 		: undefined;
 const telemetryEnabled = hostGrantProfile || process.argv.includes("--evaluation-telemetry");
@@ -298,6 +305,7 @@ for (let index = 0; index < specs.length; index++) {
 			ciPath!,
 		);
 	if (taskPairExpected) args.push("--task-pair-expected-input", taskPairExpected);
+	if (swePytestPath) args.push("--swe-pytest-policy", resolve(swePytestPath));
 	const cellStarted = performance.now();
 	const child = spawnSync(process.execPath, args, {
 		cwd: repositoryRoot,
@@ -353,7 +361,7 @@ for (let index = 0; index < specs.length; index++) {
 		if (hostGrantProfile) {
 			const admission = JSON.parse(readFileSync(join(batchDir, runId, spec.taskId, "input-admission.json"), "utf8"));
 			const input = readTaskPairInput(admission.input);
-			if (instance && (input.fixtureCommit !== instance.baseCommit || input.userPromptSha256 !== instance.userPromptSha256))
+			if (instance && (input.fixtureCommit !== instance.baseCommit || input.userPromptSha256 !== sweFlashOffPromptSha256(instance, Boolean(swePytestPath))))
 				stoppedReason = "task_pair_input_admission_failed";
 			if (
 				!instance &&

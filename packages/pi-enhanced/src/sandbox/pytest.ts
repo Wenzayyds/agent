@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { sandboxUser } from "./broker.ts";
-import { assertSandboxWorkspaceIdentity, type SandboxConfig } from "./config.ts";
+import { assertSandboxContainerOwner, assertSandboxWorkspaceIdentity, SANDBOX_CONTAINER_OWNER_LABEL, type SandboxConfig } from "./config.ts";
 
 /** Host-only configuration: exact files, never globs or model-supplied paths. */
 export interface PytestConfig {
@@ -127,6 +127,12 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, '/workspace')
 raise SystemExit(pytest.main(['-c', '/dev/null', '-p', 'no:cacheprovider', '--basetemp=/tmp/pytest', '--tb=short', '-r', 'fE', '-q', *sys.argv[1:]]))`;
 
+function pytestTargetFile(target: string): string | undefined {
+	if (target.length > 240) return undefined;
+	const [file, ...nodes] = target.split("::");
+	return nodes.length <= 2 && nodes.every((node) => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(node)) ? file : undefined;
+}
+
 export function isPytestConfig(input: unknown): input is PytestConfig {
 	if (!input || typeof input !== "object" || Array.isArray(input)) return false;
 	const { image, timeoutMs: configuredTimeout, files, tests } = input as Partial<PytestConfig>;
@@ -144,7 +150,7 @@ export function isPytestConfig(input: unknown): input is PytestConfig {
 		files.every((file) => typeof file === "string" && allowedPath(file)) &&
 		Array.isArray(tests) &&
 		tests.length >= 1 &&
-		tests.every((test) => typeof test === "string" && files.includes(test))
+		tests.every((test) => typeof test === "string" && files.includes(pytestTargetFile(test) ?? ""))
 	);
 }
 
@@ -156,7 +162,7 @@ export interface PytestEvidence {
 }
 
 /** One instance per session; limits are consumed even when a call fails. */
-export function createPytestExecutor(config: SandboxConfig, input: PytestConfig) {
+export function createPytestExecutor(config: SandboxConfig, input: PytestConfig, namespacePackages = false) {
 	if (!config.enabled || !config.trusted || !isPytestConfig(input)) throw new Error("PYTEST_CONFIG_DENIED");
 	const policy = structuredClone(input);
 	const timeoutMs = policy.timeoutMs ?? 30_000;
@@ -178,9 +184,12 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 			!Array.isArray(targets) ||
 			targets.length < 1 ||
 			targets.length > 16 ||
-			!targets.every((target) => typeof target === "string" && policy.tests.includes(target))
+			!targets.every((target) => {
+				const file = typeof target === "string" ? pytestTargetFile(target) : undefined;
+				return file !== undefined && (policy.tests.includes(file) || policy.tests.includes(target));
+			})
 		)
-			return { ...result, status: "unsupported", output: "Only host-approved test files are supported." };
+			return { ...result, status: "unsupported", output: "Only host-approved test files or functions are supported." };
 		result.targets = [...targets];
 		calls++;
 		busy = true;
@@ -212,12 +221,15 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 			// Image IDs are immutable; no tag resolution or implicit pulls at execution time.
 			if (docker(["image", "inspect", policy.image, "--format", "{{.Id}}"]) !== policy.image)
 				throw new Error("PYTEST_IMAGE_MISMATCH");
+			const owner = config.containerOwner;
+			if (owner !== undefined) assertSandboxContainerOwner(owner);
 			id = docker([
 				"create",
 				"--name",
 				`pi-pytest-${randomUUID()}`,
 				"--pull",
 				"never",
+				...(owner === undefined ? [] : ["--label", SANDBOX_CONTAINER_OWNER_LABEL + "=" + owner]),
 				"--log-driver",
 				"none",
 				"--network",
@@ -254,6 +266,7 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 				"-B",
 				"-c",
 				program,
+				...(namespacePackages ? ["--import-mode=importlib", "--rootdir=/workspace", "-o", "consider_namespace_packages=true"] : []),
 				...targets,
 			]);
 			if (!/^[a-f0-9]{64}$/u.test(id)) {
@@ -263,6 +276,7 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig)
 			const info = JSON.parse(docker(["inspect", id]))[0];
 			if (
 				info.Image !== policy.image ||
+				(owner !== undefined && info.Config.Labels?.[SANDBOX_CONTAINER_OWNER_LABEL] !== owner) ||
 				info.Config.User !== sandboxUser() ||
 				info.HostConfig.NetworkMode !== "none" ||
 				!info.HostConfig.ReadonlyRootfs ||

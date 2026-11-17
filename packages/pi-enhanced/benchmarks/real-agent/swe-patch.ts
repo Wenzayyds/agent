@@ -24,6 +24,10 @@ export function sweWritePathAllowed(cwd: string, input: unknown): boolean {
 	return git(cwd, ["ls-files", "-z", "--", path]).split("\0").filter(Boolean).includes(path);
 }
 
+export function readSwePatch(cwd: string): string {
+	return git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD", "--"]);
+}
+
 export function exportSwePrediction(
 	task: SweTask,
 	cwd: string,
@@ -71,7 +75,7 @@ export function exportSwePrediction(
 			pathSha256: sha(path),
 		}));
 		diagnostic.pathsTruncated = changed.length > 64;
-		const patch = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD", "--"]);
+		const patch = readSwePatch(cwd);
 		diagnostic.candidatePatchSha256 = sha(patch);
 		diagnostic.candidatePatchBytes = Buffer.byteLength(patch);
 		if (!changed.length) {

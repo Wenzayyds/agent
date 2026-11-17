@@ -5,8 +5,13 @@ const manifestPath = fileURLToPath(new URL("./swebench-verified.json", import.me
 export const SWE_EVALUATION_PROTOCOL = "swebench_verified_source_restricted_v1";
 export const SWE_SOURCE_INSTRUCTIONS =
 	"本次采用受限源码评测协议：允许读取工作区中的测试文件，但禁止修改、创建或删除测试文件。只能修改已有且被 Git 跟踪的 .py/.js/.ts/.rst/.md 源码文件；禁止新增文件、删除、重命名、权限变更及修改凭据或仓库元数据。不提供 Shell 或 Agent 内测试执行能力；完成最小源码修复后结束，由独立官方 Harness 判分。所有模式使用相同限制，没有按答案位置设置文件白名单。";
-export function swePrompt(issue: string): string {
-	return `${issue}\n\n${SWE_SOURCE_INSTRUCTIONS}`;
+const SWE_PUBLIC_TEST_INSTRUCTIONS = SWE_SOURCE_INSTRUCTIONS.replace(
+	"不提供 Shell 或 Agent 内测试执行能力；完成最小源码修复后结束，由独立官方 Harness 判分。",
+	"禁用 Shell。修改后可用 run_tests 运行宿主批准的公开测试，查看失败诊断并在剩余预算内修复和复测。若测试不可用，说明验证状态后结束。最终由独立官方 Harness 判分。",
+);
+
+export function swePrompt(issue: string, publicTests = false): string {
+	return issue + "\n\n" + (publicTests ? SWE_PUBLIC_TEST_INSTRUCTIONS : SWE_SOURCE_INSTRUCTIONS);
 }
 
 interface Identity {

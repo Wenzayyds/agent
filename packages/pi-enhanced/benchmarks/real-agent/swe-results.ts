@@ -13,6 +13,7 @@ import type { AgentExecution } from "./runner-execution.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 import { SWE_EVALUATION_PROTOCOL } from "./swe-instance.ts";
 import { exportSwePrediction } from "./swe-patch.ts";
+import { sweVerificationStatus } from "./swe-test-feedback.ts";
 
 /** Persist SWE evidence and export a safe patch; official grading remains a separate invocation. */
 export function collectSweResult(context: RunnerContext, prepared: PreparedAgent, execution: AgentExecution) {
@@ -95,6 +96,9 @@ export function collectSweResult(context: RunnerContext, prepared: PreparedAgent
 		controlledCell: context.taskMode,
 		runStatus,
 		patchStatus: "not_run",
+		...(context.swePytest ? {
+			localVerification: sweVerificationStatus(root, prediction.status === "not_run" ? prediction.patchSha256 : null),
+		} : {}),
 		patchExportError: prediction.status === "agent_failed" ? prediction.reason : null,
 		patchDiagnostic: existsSync(join(dir, "patch-export-diagnostics.json"))
 			? JSON.parse(readFileSync(join(dir, "patch-export-diagnostics.json"), "utf8"))

@@ -85,7 +85,7 @@ export const SWE_PRO_TASK_CONFIGURATION = Object.freeze({
 
 export const SWE_FLASH_OFF_PROFILE = "swe-flash-off-v1";
 const verifiedSelection = readSweManifest().instances;
-const flashOffInstances = [13033, 13453, 14365, 14369, 14508].map((issue) => {
+function flashOffInstance(issue: number) {
 	const instanceId = `astropy__astropy-${issue}`;
 	const row = verifiedSelection.find((item) => item.instance_id === instanceId && item.role === "candidate");
 	if (!row?.problem_statement || digest(row.problem_statement) !== row.problem_sha256)
@@ -97,7 +97,8 @@ const flashOffInstances = [13033, 13453, 14365, 14369, 14508].map((issue) => {
 		userPromptSha256: digest(swePrompt(row.problem_statement)),
 		cellId: `off_${issue}`,
 	};
-});
+}
+const flashOffInstances = [13033, 13453, 14365, 14369, 14508].map(flashOffInstance);
 const flashOffCells = flashOffInstances.map(({ cellId }) => ({ ...SWE_TASK_CELLS[0]!, id: cellId }));
 export const SWE_FLASH_OFF_CONFIGURATION = Object.freeze({
 	profile: SWE_FLASH_OFF_PROFILE,
@@ -119,6 +120,16 @@ export const SWE_FLASH_OFF_SINGLE_CONFIGURATION = Object.freeze({
 	cells: flashOffSingleCells.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
 	limits: { ...SWE_FLASH_OFF_CONFIGURATION.limits, maxRuns: 1, maxBatchCostUsd: 0.08 },
 	instances: [flashOffSingleInstance],
+});
+
+export const SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE = "swe-flash-off-pytest-single-v1";
+const pytestSingleInstance = flashOffInstance(7671);
+const pytestSingleCells = [{ ...SWE_TASK_CELLS[0]!, id: pytestSingleInstance.cellId }];
+export const SWE_FLASH_OFF_PYTEST_SINGLE_CONFIGURATION = Object.freeze({
+	...SWE_FLASH_OFF_SINGLE_CONFIGURATION,
+	profile: SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE,
+	cells: pytestSingleCells.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+	instances: [pytestSingleInstance],
 });
 
 export const SWE_FLASH_OFF_FOUR_PROFILE = "swe-flash-off-four-v1";
@@ -167,6 +178,12 @@ const profiles = [
 		batchIdPattern: /^swe_flash_single_[a-z0-9_]{4,20}$/u,
 		admission: "instances",
 		compactGrep: true,
+	},
+	{
+		configuration: SWE_FLASH_OFF_PYTEST_SINGLE_CONFIGURATION,
+		cells: pytestSingleCells,
+		batchIdPattern: /^swe_flash_pytest_[a-z0-9_]{4,20}$/u,
+		admission: "instances",
 	},
 	{
 		configuration: SWE_FLASH_OFF_FOUR_CONFIGURATION,
