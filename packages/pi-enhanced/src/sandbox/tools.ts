@@ -260,6 +260,41 @@ async function executeRead(
 	};
 }
 
+type GrepRow = { path: string; line: number; text: string; match: boolean };
+
+function formatGrepRow(row: GrepRow): string {
+	const separator = row.match ? ":" : "-";
+	return `${row.path}${separator}${row.line}${separator} ${row.text}`;
+}
+
+/** Bound the serialized DeepSeek tool message while giving real matches priority over context. */
+export function compactSweGrep(rows: readonly GrepRow[], toolCallId: string): string {
+	const byLine = new Map<string, GrepRow>();
+	for (const row of rows) {
+		const key = `${row.path}\0${row.line}`;
+		if (row.match || !byLine.has(key)) byLine.set(key, row);
+	}
+	const lines = [...byLine.values()].map((row) => ({ match: row.match, text: formatGrepRow(row) }));
+	const wireBytes = (content: string) => Buffer.byteLength(JSON.stringify({ role: "tool", content, tool_call_id: toolCallId }));
+	const maxBytes = 8 * 1024;
+	const full = lines.map(({ text }) => text).join("\n");
+	if (wireBytes(full) <= maxBytes) return full;
+
+	const notice = "[grep output truncated. Narrow the search, or use read with the file path relative to the workspace and the displayed line number.]";
+	const selected = new Set<(typeof lines)[number]>();
+	let remaining = maxBytes - wireBytes(notice);
+	for (const match of [true, false]) {
+		for (const line of lines) {
+			// The JSON string quotes count the same as the escaped newline before the notice.
+			const bytes = Buffer.byteLength(JSON.stringify(line.text));
+			if (line.match !== match || bytes > remaining) continue;
+			selected.add(line);
+			remaining -= bytes;
+		}
+	}
+	return [...lines.filter((line) => selected.has(line)).map(({ text }) => text), notice].join("\n");
+}
+
 async function executeGrep(
 	broker: DockerSandboxBroker,
 	workspace: string,
@@ -281,12 +316,12 @@ async function executeGrep(
 			limit: input.limit,
 		},
 		{ requestId: `${id}:grep`, signal },
-	)) as { rows: Array<{ path: string; line: number; text: string; match: boolean }>; matchLimitReached?: number };
+	)) as { rows: GrepRow[]; matchLimitReached?: number };
 	if (result.rows.length === 0)
 		return { content: [{ type: "text" as const, text: "No matches found" }], details: undefined };
-	const text = result.rows
-		.map((row) => `${row.path}${row.match ? ":" : "-"}${row.line}${row.match ? ":" : "-"} ${row.text}`)
-		.join("\n");
+	const text = process.env.PI_ENHANCED_SWE_SINGLE_COMPACT_GREP === "1"
+		? compactSweGrep(result.rows, id)
+		: result.rows.map(formatGrepRow).join("\n");
 	return {
 		content: [{ type: "text" as const, text }],
 		details: result.matchLimitReached ? { matchLimitReached: result.matchLimitReached } : undefined,

@@ -347,6 +347,8 @@ it.skipIf(!available).each(cases)(
 				expect(result.terminationClassification).toBe("gateway_budget_stop");
 				expect(result.runStatus).toBe("budget_stopped");
 				expect(result.agentCompleted).toBe(false);
+				expect(result.auditComplete).toBe(true);
+				expect(result.sandboxAudit).toMatchObject({ state: "completed", pending: [] });
 				const denial = result.gatewayRejections.at(-1);
 				expect(denial).toMatchObject({ code: "GATEWAY_TOKEN_BUDGET", upstreamForwarded: false });
 				const d = denial.reservationDiagnostics;
@@ -377,6 +379,7 @@ it.skipIf(!available).each(cases)(
 				expect(result.agentCompleted).toBe(false);
 				expect(result.auditComplete).toBe(false);
 				expect(result.terminationClassification).toBe("agent_execution_error");
+				expect(result.sandboxAudit).toMatchObject({ state: "interrupted", pending: [] });
 				expect(result.sandboxAudit.audit.length).toBeGreaterThan(0);
 			} else {
 				expect(calls).toBe(2);

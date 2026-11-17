@@ -19,7 +19,7 @@ import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { finalizeAgentExecution, removeRunContainers } from "./runner-cleanup.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 import { beginResumedRun, resumeSessionPath } from "./runner-resume.ts";
-import { resolveSweProfile } from "./swe-profile.ts";
+import { resolveSweProfile, SWE_FLASH_OFF_SINGLE_PROFILE } from "./swe-profile.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export function stubPidHandshakeEnabled(flag: string | undefined, localStubUrl: string | undefined, swe: boolean, stubEval: string | undefined): boolean {
@@ -127,6 +127,9 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			PI_ENHANCED_SANDBOX_WORKSPACE: cwd,
 			PI_ENHANCED_SANDBOX_IMAGE: plan!.sandboxImage,
 			PI_ENHANCED_SANDBOX_REPORT_PATH: sandboxAuditPath,
+			...(task.swebench && context.comparisonProfile === SWE_FLASH_OFF_SINGLE_PROFILE
+				? { PI_ENHANCED_SWE_SINGLE_COMPACT_GREP: "1" }
+				: {}),
 			PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools || (task.swebench && switches.task) ? "1" : "0",
 			...(task.swebench && context.taskMode === "v2" ? { PI_ENHANCED_SANDBOX_TASK_PLAN_TOOL: "1" } : {}),
 			PI_ENHANCED_CONTEXT_REPORT_PATH: contextReportPath,
@@ -334,17 +337,21 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 					? {
 							stopOnBoundaryFailure: () => {
 								const status = gateway.status();
-								if (status.state === "ready" && status.requestsRejected === 0) return false;
+								if (status.state === "ready" && status.requestsRejected === 0) return;
 								const denial = status.denials[0]?.code ?? "";
 								const budgetStop = ["GATEWAY_TOKEN_BUDGET", "GATEWAY_COST_BUDGET", "GATEWAY_REQUEST_LIMIT"].includes(denial);
 								const providerStop = /^GATEWAY_(?:UPSTREAM_|USAGE_|PROVIDER_USAGE_)/u.test(status.lastError ?? "");
-								if (testFeedback && status.activeRequests === 0 && (providerStop || (status.requestsRejected === 1 && budgetStop))) {
-									// The feedback profile disables retries. Give Pi time to flush its real terminal audit.
+								const sweBudgetStop = task.swebench && status.state === "ready" && status.requestsRejected === 1
+									&& budgetStop && status.denials[0]?.upstreamForwarded === false;
+								if (status.activeRequests === 0 && (sweBudgetStop ||
+									(testFeedback && (providerStop || (status.requestsRejected === 1 && budgetStop))))) {
+									// These profiles disable retries. Give Pi time to flush its terminal audit.
 									const now = performance.now();
 									boundaryShutdownDeadline ??= now + 2_000;
-									return now >= boundaryShutdownDeadline;
+									if (now < boundaryShutdownDeadline) return;
+									return sweBudgetStop ? "SIGKILL" : "SIGTERM";
 								}
-								return true;
+								return "SIGTERM";
 							},
 						}
 					: {}),
@@ -362,7 +369,6 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			executionFailure,
 		));
 	}
-	admission?.assertForwarded();
 	let childAbsent = false;
 	if (child.pid) {
 		try {
@@ -372,13 +378,14 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		}
 	}
 	let auditTerminationError: string | undefined;
-	if (gateway.deadlineAt !== undefined && child.closed && childAbsent) {
+	if ((task.swebench || gateway.deadlineAt !== undefined) && child.closed && childAbsent) {
 		try { interruptSandboxAudit(sandboxAuditPath, verifierScope.runId); }
 		catch (error) {
 			auditTerminationError = (error as NodeJS.ErrnoException).code === "ENOENT" ? "SANDBOX_AUDIT_MISSING" :
 				error instanceof Error ? error.message : "SANDBOX_AUDIT_TERMINATION_FAILED";
 		}
 	}
+	admission?.assertForwarded();
 	let workspaceIdentityValid = false;
 	try {
 		assertSandboxWorkspaceIdentity(verifierScope);
@@ -428,7 +435,7 @@ async function runAgentProcess(
 		cwd: string;
 		env: NodeJS.ProcessEnv;
 		timeoutMs: number;
-		stopOnBoundaryFailure?: () => boolean;
+		stopOnBoundaryFailure?: () => NodeJS.Signals | undefined;
 		onTimeout?: () => void;
 		onEvent?: (value: unknown) => void;
 		onEventError?: () => void;
@@ -483,7 +490,9 @@ async function runAgentProcess(
 		child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
 		const boundaryTimer = options.stopOnBoundaryFailure
 			? setInterval(() => {
-					if (!(timedOut && options.onTimeout) && options.stopOnBoundaryFailure?.()) child.kill();
+					if (timedOut && options.onTimeout) return;
+					const signal = options.stopOnBoundaryFailure?.();
+					if (signal) child.kill(signal);
 				}, 25)
 			: undefined;
 		const timer = setTimeout(() => {

@@ -18,8 +18,21 @@ import {
 	sweWritePathAllowed,
 	windowsDockerStorage,
 } from "../../benchmarks/real-agent/swebench.ts";
+import { compactSweGrep } from "../../src/sandbox/tools.ts";
 
 describe("SWE-bench Verified adapter", () => {
+	it("deduplicates context, prioritizes matches and caps the JSON-encoded grep result", () => {
+		const path = "a-file.py";
+		const rows = Array.from({ length: 10 }, (_, line) => ({ path, line: line + 1, text: '汉字\\"'.repeat(250), match: false }));
+		rows.push({ path, line: 2, text: "upgraded context", match: true }, { path, line: 12, text: "late match", match: true });
+		const text = compactSweGrep(rows, "call-grep");
+		expect(text).toContain("a-file.py:2: upgraded context");
+		expect(text).not.toContain("a-file.py-2-");
+		expect(text).toContain("a-file.py:12: late match");
+		expect(text).toContain("[grep output truncated.");
+		expect(Buffer.byteLength(JSON.stringify({ role: "tool", content: text, tool_call_id: "call-grep" }))).toBeLessThanOrEqual(8192);
+		expect(compactSweGrep(rows.slice(-2), "call-grep")).toBe("a-file.py:2: upgraded context\na-file.py:12: late match");
+	});
 	it("binds the scoring evidence to the exact bytes parsed before the original files change", () => {
 		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-scoring-input-")));
 		const predictionPath = join(dir, "predictions.jsonl");

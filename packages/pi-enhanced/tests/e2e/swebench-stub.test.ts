@@ -40,6 +40,7 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 	});
 	const calls: string[] = [];
 	let probeOutsideWorkspace = false;
+	let probeCompactGrep = false;
 	const provider = await startStubProvider((body, response) => {
 		const messages = body.messages as Array<{ role: string; content: unknown }>;
 		const system = messages.find((message) => message.role === "system")?.content;
@@ -66,16 +67,25 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 		}
 		if (task.instanceId === rootSearchId) {
 			if (toolResults.length === 0) {
-				// Replay the paid attempt's first tool turn against the same base commit.
+				const grepArgs = probeCompactGrep
+					? { pattern: "required|as the first column|time_bin_size", path: "astropy/timeseries/tests", context: 6 }
+					: { pattern: searchPattern, path: "." };
 				response.end(toolCallsSse([
-					{ name: "grep", args: { pattern: searchPattern, path: "." } },
+					{ name: "grep", args: grepArgs },
 					{ name: "find", args: { pattern: "**/timeseries/**/*.py", path: ".", limit: 50 } },
 				], 100, 10));
 				return;
 			}
 			const text = JSON.stringify(toolResults);
-			expect(text).toContain(searchPattern);
-			expect(text).toContain("astropy/timeseries/");
+			if (probeCompactGrep) {
+				const grep = toolResults[0]!;
+				expect(Buffer.byteLength(JSON.stringify(grep))).toBeLessThanOrEqual(8 * 1024);
+				expect(grep.content).toMatch(/test_(?:binned|sampled)\.py:\d+: .*required/u);
+				expect(grep.content).toContain("[grep output truncated.");
+			} else {
+				expect(text).toContain(searchPattern);
+				expect(text).toContain("astropy/timeseries/");
+			}
 			expect(text).not.toContain("SANDBOX_TIMEOUT");
 		}
 		const searched = task.instanceId === rootSearchId ? 2 : 0;
@@ -162,7 +172,9 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 		const singleExpected = join(dir, "single-expected.json");
 		writeFileSync(singleExpected, JSON.stringify({ [rootSearchId]: singleInput }), { flag: "wx" });
 		const singleStart = calls.length;
+		probeCompactGrep = true;
 		const single = await run("matched", ["--task-pair-expected-input", singleExpected], true);
+		probeCompactGrep = false;
 		const singleCell = instances[0]!.cellId;
 		const singleDir = (suffix: string) => join(dir, `swe_flash_single_${suffix}`, `swe_flash_single_${suffix}_${singleCell}`);
 		const readEvidence = (suffix: string, file: string) => JSON.parse(readFileSync(join(singleDir(suffix), file), "utf8"));
