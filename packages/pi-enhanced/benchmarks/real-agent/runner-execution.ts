@@ -19,7 +19,7 @@ import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { finalizeAgentExecution, removeRunContainers } from "./runner-cleanup.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 import { beginResumedRun, resumeSessionPath } from "./runner-resume.ts";
-import { resolveSweProfile, SWE_FLASH_OFF_SINGLE_PROFILE } from "./swe-profile.ts";
+import { resolveSweProfile } from "./swe-profile.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export function stubPidHandshakeEnabled(flag: string | undefined, localStubUrl: string | undefined, swe: boolean, stubEval: string | undefined): boolean {
@@ -127,7 +127,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			PI_ENHANCED_SANDBOX_WORKSPACE: cwd,
 			PI_ENHANCED_SANDBOX_IMAGE: plan!.sandboxImage,
 			PI_ENHANCED_SANDBOX_REPORT_PATH: sandboxAuditPath,
-			...(task.swebench && context.comparisonProfile === SWE_FLASH_OFF_SINGLE_PROFILE
+			...(task.swebench && swe && "compactGrep" in swe && swe.compactGrep
 				? { PI_ENHANCED_SWE_SINGLE_COMPACT_GREP: "1" }
 				: {}),
 			PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools || (task.swebench && switches.task) ? "1" : "0",

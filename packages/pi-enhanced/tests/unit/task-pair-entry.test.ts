@@ -5,12 +5,13 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TASK_PAIR_CONFIGURATION } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
-import { SWE_FLASH_OFF_CONFIGURATION, SWE_FLASH_OFF_PROFILE, SWE_FLASH_OFF_SINGLE_CONFIGURATION, SWE_FLASH_OFF_SINGLE_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
+import { SWE_FLASH_OFF_CONFIGURATION, SWE_FLASH_OFF_FOUR_CONFIGURATION, SWE_FLASH_OFF_FOUR_PROFILE, SWE_FLASH_OFF_PROFILE, SWE_FLASH_OFF_SINGLE_CONFIGURATION, SWE_FLASH_OFF_SINGLE_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	claimTaskPairCell,
 	loadTaskPairAuthorization,
+	readSweFlashOffInputs,
 } from "../../benchmarks/real-agent/task-pair-authorization.ts";
 
 const root = resolve(import.meta.dirname, "../../../..");
@@ -105,6 +106,37 @@ describe("Task pair offline entry", () => {
 		expect(invoke("run-controlled.ts", [...args, "--swebench-id", "astropy__astropy-13033"]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
 		expect(invoke("run-real-agent.ts", [...args, "--swebench-id", "astropy__astropy-12907", "--task-mode", "off", "--execute"]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
 	});
+
+	it("fixes the four Flash OFF instances, isolated budgets and fingerprint scope", () => {
+		const config = SWE_FLASH_OFF_FOUR_CONFIGURATION;
+		const expected = [13453, 14365, 14369, 14508].map((issue) => `astropy__astropy-${issue}`);
+		const args = ["--comparison-profile", SWE_FLASH_OFF_FOUR_PROFILE, "--swebench-mirror", root];
+		const preview = invoke("run-controlled.ts", args);
+		expect(preview.status, preview.stderr).toBe(0);
+		const report = JSON.parse(preview.stdout);
+		expect(report.cells.map((cell: { instanceId: string }) => cell.instanceId)).toEqual(expected);
+		expect(report).toMatchObject({
+			configurationSha256: digest(config),
+			configuration: { provider: "deepseek", model: "deepseek-flash", thinking: "off", retries: 0,
+				concurrency: 1, maxOutputTokens: 2048, compactGrep: true, moduleTools: { off: [] } },
+			limits: { maxRuns: 4, maxCostUsd: 0.08, maxBatchCostUsd: 0.32, maxRequests: 20, maxTokens: 200_000, timeoutMs: 600_000 },
+		});
+		const archived = ["--swebench-id", "astropy__astropy-13033"];
+		expect(invoke("run-controlled.ts", [...args, ...archived]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
+		expect(invoke("run-real-agent.ts", [...args, ...archived, "--task-mode", "off", "--execute"]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
+		expect(invoke("run-controlled.ts", [...args, "--execute"]).stderr).toContain("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
+
+		const inputs = Object.fromEntries(SWE_FLASH_OFF_CONFIGURATION.instances.map(({ instanceId, baseCommit, userPromptSha256 }) => [
+			instanceId, { fixtureCommit: baseCommit, userPromptSha256, fixtureSha256: digest(baseCommit),
+				systemPromptSha256: "b".repeat(64), toolSchemaSha256: "c".repeat(64), firstRequestSha256: digest(instanceId) },
+		]));
+		const scoped = Object.fromEntries(expected.map((id) => [id, inputs[id]]));
+		expect(readSweFlashOffInputs(scoped, config.instances)).toEqual(scoped);
+		expect(() => readSweFlashOffInputs(inputs, config.instances)).toThrow("SWE_INSTANCE_INPUTS_INVALID");
+		const { [expected[0]!]: replaced, ...remaining } = scoped;
+		expect(() => readSweFlashOffInputs({ ...remaining, "astropy__astropy-13033": replaced }, config.instances))
+			.toThrow("SWE_INSTANCE_INPUTS_INVALID");
+	}, 30_000);
 
 	it("previews only 13033 and requires a separate single-instance grant on the matching commit", () => {
 		const configuration = SWE_FLASH_OFF_SINGLE_CONFIGURATION;

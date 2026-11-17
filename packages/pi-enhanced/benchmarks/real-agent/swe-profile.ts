@@ -121,6 +121,20 @@ export const SWE_FLASH_OFF_SINGLE_CONFIGURATION = Object.freeze({
 	instances: [flashOffSingleInstance],
 });
 
+export const SWE_FLASH_OFF_FOUR_PROFILE = "swe-flash-off-four-v1";
+const flashOffFourInstances = [13453, 14365, 14369, 14508].map((issue) =>
+	flashOffInstances.find(({ instanceId }) => instanceId === `astropy__astropy-${issue}`)!,
+);
+const flashOffFourCells = flashOffFourInstances.map(({ cellId }) => ({ ...SWE_TASK_CELLS[0]!, id: cellId }));
+export const SWE_FLASH_OFF_FOUR_CONFIGURATION = Object.freeze({
+	...SWE_FLASH_OFF_CONFIGURATION,
+	profile: SWE_FLASH_OFF_FOUR_PROFILE,
+	cells: flashOffFourCells.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+	limits: { ...SWE_FLASH_OFF_CONFIGURATION.limits, maxRuns: flashOffFourInstances.length, maxBatchCostUsd: 0.32 },
+	instances: flashOffFourInstances,
+	compactGrep: true,
+});
+
 // CLI and authorization share the same mode list, configuration and admission shape.
 const profiles = [
 	{
@@ -152,6 +166,14 @@ const profiles = [
 		cells: flashOffSingleCells,
 		batchIdPattern: /^swe_flash_single_[a-z0-9_]{4,20}$/u,
 		admission: "instances",
+		compactGrep: true,
+	},
+	{
+		configuration: SWE_FLASH_OFF_FOUR_CONFIGURATION,
+		cells: flashOffFourCells,
+		batchIdPattern: /^swe_flash_four_[a-z0-9_]{4,20}$/u,
+		admission: "instances",
+		compactGrep: SWE_FLASH_OFF_FOUR_CONFIGURATION.compactGrep,
 	},
 ] as const;
 
