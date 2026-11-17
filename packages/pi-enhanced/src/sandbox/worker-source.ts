@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const PROTOCOL = 1;
 const ROOT = '/workspace';
 const MAX_FILE_BYTES = 1024 * 1024;
+const GREP_READ_BATCH_SIZE = 8;
 const BLOCKED_SEGMENTS = new Set(['.git', '.pi', '.ssh', '.aws', '.gnupg']);
 
 function fail(code) {
@@ -178,23 +179,31 @@ async function operate(request) {
       const needle = args.ignoreCase ? String(args.pattern).toLocaleLowerCase() : String(args.pattern);
       const matcher = args.glob ? globRegex(String(args.glob)) : null;
       const stat = await fsp.stat(item.absolute);
-      const candidates = stat.isDirectory() ? (await walk(item.absolute, 5000)).filter((entry) => !entry.directory) : [{ rel: path.basename(item.absolute), absolute: item.absolute, directory: false }];
+      const entries = stat.isDirectory() ? await walk(item.absolute, 5000) : [{ rel: path.basename(item.absolute), absolute: item.absolute, directory: false }];
+      const candidates = entries.filter((entry) => !entry.directory && (!matcher || matcher.test(entry.rel) || matcher.test(path.basename(entry.rel))));
       const rows = [];
-      for (const candidate of candidates) {
-        if (matcher && !matcher.test(candidate.rel) && !matcher.test(path.basename(candidate.rel))) continue;
-        const fileStat = await fsp.stat(candidate.absolute);
-        if (fileStat.size > MAX_FILE_BYTES) continue;
-        const content = await fsp.readFile(candidate.absolute, 'utf8');
-        if (content.includes('\0')) continue;
-        const lines = content.replaceAll('\r\n', '\n').split('\n');
-        for (let index = 0; index < lines.length; index++) {
-          const subject = args.ignoreCase ? lines[index].toLocaleLowerCase() : lines[index];
-          expression && (expression.lastIndex = 0);
-          if (expression ? expression.test(lines[index]) : subject.includes(needle)) {
-            const start = Math.max(0, index - context);
-            const end = Math.min(lines.length - 1, index + context);
-            for (let row = start; row <= end; row++) rows.push({ path: candidate.rel, line: row + 1, text: lines[row].slice(0, 2000), match: row === index });
-            if (rows.filter((row) => row.match).length >= limit) return { rows, matchLimitReached: limit };
+      let matches = 0;
+      for (let offset = 0; offset < candidates.length; offset += GREP_READ_BATCH_SIZE) {
+        // Overlap bind-mount reads, but consume them in traversal order for deterministic limits.
+        const batch = candidates.slice(offset, offset + GREP_READ_BATCH_SIZE);
+        const contents = await Promise.allSettled(batch.map(async ({ absolute }) => {
+          const stat = await fsp.stat(absolute);
+          return stat.size > MAX_FILE_BYTES ? null : fsp.readFile(absolute, 'utf8');
+        }));
+        for (const [entryIndex, read] of contents.entries()) {
+          if (read.status === 'rejected') throw read.reason;
+          const content = read.value;
+          if (content === null || content.includes('\0')) continue;
+          const lines = content.replaceAll('\r\n', '\n').split('\n');
+          for (let index = 0; index < lines.length; index++) {
+            const subject = args.ignoreCase ? lines[index].toLocaleLowerCase() : lines[index];
+            expression && (expression.lastIndex = 0);
+            if (expression ? expression.test(lines[index]) : subject.includes(needle)) {
+              const start = Math.max(0, index - context);
+              const end = Math.min(lines.length - 1, index + context);
+              for (let row = start; row <= end; row++) rows.push({ path: batch[entryIndex].rel, line: row + 1, text: lines[row].slice(0, 2000), match: row === index });
+              if (++matches >= limit) return { rows, matchLimitReached: limit };
+            }
           }
         }
       }
