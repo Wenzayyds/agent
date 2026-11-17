@@ -41,6 +41,13 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 	const calls: string[] = [];
 	const provider = await startStubProvider((body, response) => {
 		const messages = body.messages as Array<{ role: string; content: unknown }>;
+		const system = messages.find((message) => message.role === "system")?.content;
+		expect(typeof system).toBe("string");
+		expect(system).toMatch(/<cwd>\r?\n[^\r\n]+\/swebench\r?\n<\/cwd>/u);
+		expect(system).toContain("搜索整个任务仓库时使用 `.`");
+		expect(String(system).replaceAll("\\", "/")).not.toContain(
+			join(root, "packages", "coding-agent").replaceAll("\\", "/"),
+		);
 		const user = messages.find((message) => message.role === "user")?.content;
 		const prompt = Array.isArray(user) ? user.map((part) => part.text).join("") : user;
 		const task = tasks.find((item) => item.prompt === prompt)!;
