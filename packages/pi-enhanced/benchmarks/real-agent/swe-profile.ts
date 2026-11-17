@@ -1,5 +1,6 @@
 import { CONTROLLED_IMAGE } from "./controlled-cases.ts";
 import { digest } from "./evaluation-identity.ts";
+import { frozenCases, frozenProfile, frozenSelectionSha256 } from "./swe-frozen-catalog.ts";
 import { readSweManifest, SWE_SOURCE_INSTRUCTIONS, swePrompt } from "./swe-instance.ts";
 
 export const SWE_TASK_PROFILE = "swe-task-v1";
@@ -85,8 +86,7 @@ export const SWE_PRO_TASK_CONFIGURATION = Object.freeze({
 
 export const SWE_FLASH_OFF_PROFILE = "swe-flash-off-v1";
 const verifiedSelection = readSweManifest().instances;
-function flashOffInstance(issue: number) {
-	const instanceId = `astropy__astropy-${issue}`;
+function flashOffInstance(instanceId: string, issue: number) {
 	const row = verifiedSelection.find((item) => item.instance_id === instanceId && item.role === "candidate");
 	if (!row?.problem_statement || digest(row.problem_statement) !== row.problem_sha256)
 		throw new Error("SWE_FLASH_OFF_INSTANCE_INVALID");
@@ -98,7 +98,7 @@ function flashOffInstance(issue: number) {
 		cellId: `off_${issue}`,
 	};
 }
-const flashOffInstances = [13033, 13453, 14365, 14369, 14508].map(flashOffInstance);
+const flashOffInstances = [13033, 13453, 14365, 14369, 14508].map((issue) => flashOffInstance("astropy__astropy-" + issue, issue));
 const flashOffCells = flashOffInstances.map(({ cellId }) => ({ ...SWE_TASK_CELLS[0]!, id: cellId }));
 export const SWE_FLASH_OFF_CONFIGURATION = Object.freeze({
 	profile: SWE_FLASH_OFF_PROFILE,
@@ -123,7 +123,7 @@ export const SWE_FLASH_OFF_SINGLE_CONFIGURATION = Object.freeze({
 });
 
 export const SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE = "swe-flash-off-pytest-single-v1";
-const pytestSingleInstance = flashOffInstance(7671);
+const pytestSingleInstance = flashOffInstance("astropy__astropy-7671", 7671);
 const pytestSingleCells = [{ ...SWE_TASK_CELLS[0]!, id: pytestSingleInstance.cellId }];
 export const SWE_FLASH_OFF_PYTEST_SINGLE_CONFIGURATION = Object.freeze({
 	...SWE_FLASH_OFF_SINGLE_CONFIGURATION,
@@ -144,6 +144,26 @@ export const SWE_FLASH_OFF_FOUR_CONFIGURATION = Object.freeze({
 	limits: { ...SWE_FLASH_OFF_CONFIGURATION.limits, maxRuns: flashOffFourInstances.length, maxBatchCostUsd: 0.32 },
 	instances: flashOffFourInstances,
 	compactGrep: true,
+});
+
+const frozenProfiles = frozenCases.map((row) => {
+	const instance = flashOffInstance(row.instanceId, row.order);
+	if (instance.baseCommit !== row.baseCommit || instance.problemSha256 !== row.publicIssueSha256)
+		throw new Error("SWE_FROZEN_CATALOG_MISMATCH");
+	const cells = [{ ...SWE_TASK_CELLS[0]!, id: instance.cellId }];
+	const profile = frozenProfile(row.order);
+	return {
+		configuration: Object.freeze({
+			...SWE_FLASH_OFF_PYTEST_SINGLE_CONFIGURATION, profile, instances: [instance],
+			cells: cells.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+			selectionSha256: frozenSelectionSha256,
+			pytestPolicySha256: row.policy ? digest(row.policy) : null,
+			officialImage: row.officialImage,
+		}),
+		cells,
+		batchIdPattern: /^swe_frozen_[a-z0-9_]{4,24}$/u,
+		admission: "instances" as const,
+	};
 });
 
 // CLI and authorization share the same mode list, configuration and admission shape.
@@ -192,6 +212,7 @@ const profiles = [
 		admission: "instances",
 		compactGrep: SWE_FLASH_OFF_FOUR_CONFIGURATION.compactGrep,
 	},
+	...frozenProfiles,
 ] as const;
 
 export type SweProfile = (typeof profiles)[number];

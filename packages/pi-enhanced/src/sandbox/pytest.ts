@@ -24,6 +24,7 @@ export interface PytestConfig {
 	files: string[];
 	tests: string[];
 	timeoutMs?: number;
+	candidateImport?: "pytest" | "requests";
 }
 export interface PytestResult {
 	status: "passed" | "failed" | "timeout" | "execution_error" | "sandbox_error" | "unsupported";
@@ -35,7 +36,9 @@ export interface PytestResult {
 	truncated: boolean;
 }
 
-function allowedPath(path: string): boolean {
+function allowedPath(path: string, candidateImport?: PytestConfig["candidateImport"]): boolean {
+	// Exactly one public Requests source path. All snapshot identity checks still apply.
+	if (candidateImport === "requests" && path === "requests/auth.py") return true;
 	return (
 		path.length <= 180 &&
 		path
@@ -51,8 +54,8 @@ function allowedPath(path: string): boolean {
 	);
 }
 
-function checkedFile(root: string, path: string): string {
-	if (!allowedPath(path)) throw new Error("PYTEST_PATH_DENIED");
+function checkedFile(root: string, path: string, candidateImport?: PytestConfig["candidateImport"]): string {
+	if (!allowedPath(path, candidateImport)) throw new Error("PYTEST_PATH_DENIED");
 	let current = root;
 	for (const part of path.split("/")) {
 		current = join(current, part);
@@ -74,12 +77,12 @@ function boundedRead(fd: number): Buffer {
 	return buffer.subarray(0, length);
 }
 
-export function pytestFileVersions(config: SandboxConfig, policy: Pick<PytestConfig, "files">, destination?: string): Map<string, string> {
+export function pytestFileVersions(config: SandboxConfig, policy: Pick<PytestConfig, "files" | "candidateImport">, destination?: string): Map<string, string> {
 	assertSandboxWorkspaceIdentity(config);
 	const versions = new Map<string, string>();
 	let total = 0;
 	for (const path of policy.files) {
-		const source = checkedFile(config.workspace, path);
+		const source = checkedFile(config.workspace, path, policy.candidateImport);
 		const identity = lstatSync(source);
 		if (!identity.isFile()) throw new Error("PYTEST_FILE_DENIED");
 		const fd = openSync(source, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
@@ -95,7 +98,7 @@ export function pytestFileVersions(config: SandboxConfig, policy: Pick<PytestCon
 				throw new Error("PYTEST_FILE_DENIED");
 			const bytes = boundedRead(fd);
 			if (!bytes.equals(boundedRead(fd))) throw new Error("PYTEST_SOURCE_CHANGED");
-			const after = lstatSync(checkedFile(config.workspace, path));
+			const after = lstatSync(checkedFile(config.workspace, path, policy.candidateImport));
 			if (
 				before.dev !== after.dev ||
 				before.ino !== after.ino ||
@@ -127,15 +130,38 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, '/workspace')
 raise SystemExit(pytest.main(['-c', '/dev/null', '-p', 'no:cacheprovider', '--basetemp=/tmp/pytest', '--tb=short', '-r', 'fE', '-q', *sys.argv[1:]]))`;
 
+const pytestSourceProgram = `import os, pathlib, sys
+sys.path.insert(0, "/workspace/src")
+os.environ["PYTHONPATH"] = "/workspace/src"
+import _pytest
+if not pathlib.Path("/workspace/src/_pytest/_version.py").is_file():
+    # Public Git snapshots omit setuptools-generated version metadata.
+    import types
+    metadata = types.ModuleType("_pytest._version")
+    metadata.version = metadata.__version__ = _pytest.__version__
+    sys.modules[metadata.__name__] = metadata
+    _pytest._version = metadata
+import pytest
+for module in (pytest, _pytest):
+    assert str(pathlib.Path(module.__file__).resolve()).startswith("/workspace/src/"), module.__file__
+    print("Candidate module:", module.__file__)
+` + program;
+const requestsSourceProgram = `import pathlib, sys
+sys.path.insert(0, "/workspace")
+import requests
+assert str(pathlib.Path(requests.__file__).resolve()).startswith("/workspace/requests/"), requests.__file__
+print("Candidate module:", requests.__file__)
+` + program;
+
 function pytestTargetFile(target: string): string | undefined {
 	if (target.length > 240) return undefined;
 	const [file, ...nodes] = target.split("::");
 	return nodes.length <= 2 && nodes.every((node) => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(node)) ? file : undefined;
 }
 
-export function isPytestConfig(input: unknown): input is PytestConfig {
+export function isPytestConfig(input: unknown, allowCandidateImport = false): input is PytestConfig {
 	if (!input || typeof input !== "object" || Array.isArray(input)) return false;
-	const { image, timeoutMs: configuredTimeout, files, tests } = input as Partial<PytestConfig>;
+	const { image, timeoutMs: configuredTimeout, files, tests, candidateImport } = input as Partial<PytestConfig>;
 	const timeoutMs = configuredTimeout ?? 30_000;
 	return (
 		typeof image === "string" &&
@@ -147,7 +173,11 @@ export function isPytestConfig(input: unknown): input is PytestConfig {
 		files.length >= 1 &&
 		files.length <= 128 &&
 		new Set(files).size === files.length &&
-		files.every((file) => typeof file === "string" && allowedPath(file)) &&
+		files.every((file) => typeof file === "string" && allowedPath(file, candidateImport)) &&
+		(candidateImport === undefined || allowCandidateImport && (
+			(candidateImport === "pytest" && files.includes("src/_pytest/__init__.py") &&
+				(files.includes("src/pytest.py") || files.includes("src/pytest/__init__.py"))) ||
+			(candidateImport === "requests" && files.includes("requests/__init__.py")))) &&
 		Array.isArray(tests) &&
 		tests.length >= 1 &&
 		tests.every((test) => typeof test === "string" && files.includes(pytestTargetFile(test) ?? ""))
@@ -163,7 +193,7 @@ export interface PytestEvidence {
 
 /** One instance per session; limits are consumed even when a call fails. */
 export function createPytestExecutor(config: SandboxConfig, input: PytestConfig, namespacePackages = false) {
-	if (!config.enabled || !config.trusted || !isPytestConfig(input)) throw new Error("PYTEST_CONFIG_DENIED");
+	if (!config.enabled || !config.trusted || !isPytestConfig(input, namespacePackages)) throw new Error("PYTEST_CONFIG_DENIED");
 	const policy = structuredClone(input);
 	const timeoutMs = policy.timeoutMs ?? 30_000;
 	let calls = 0;
@@ -265,8 +295,8 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig,
 				"-I",
 				"-B",
 				"-c",
-				program,
-				...(namespacePackages ? ["--import-mode=importlib", "--rootdir=/workspace", "-o", "consider_namespace_packages=true"] : []),
+				policy.candidateImport === "pytest" ? pytestSourceProgram : policy.candidateImport === "requests" ? requestsSourceProgram : program,
+				...(policy.candidateImport === "pytest" ? ["-p", "pytester", "--rootdir=/workspace"] : namespacePackages ? ["--import-mode=importlib", "--rootdir=/workspace", "-o", "consider_namespace_packages=true"] : []),
 				...targets,
 			]);
 			if (!/^[a-f0-9]{64}$/u.test(id)) {

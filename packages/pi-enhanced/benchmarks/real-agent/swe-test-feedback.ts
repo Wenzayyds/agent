@@ -16,13 +16,15 @@ export interface SwePytestPolicy extends PytestConfig {
 }
 
 function parsePolicy(value: unknown, instanceId?: string): SwePytestPolicy {
-	if (!isPytestConfig(value)) throw new Error("SWE_PYTEST_POLICY_INVALID");
+	if (!isPytestConfig(value, true)) throw new Error("SWE_PYTEST_POLICY_INVALID");
 	const policy = value as SwePytestPolicy;
 	if (
-		Object.keys(policy).some((key) => !["instanceId", "baseCommit", "image", "files", "tests", "timeoutMs"].includes(key)) ||
+		Object.keys(policy).some((key) => !["instanceId", "baseCommit", "image", "files", "tests", "timeoutMs", "candidateImport"].includes(key)) ||
 		typeof policy.instanceId !== "string" || !/^[a-zA-Z0-9_-]+__[a-zA-Z0-9_-]+-\d+$/u.test(policy.instanceId) ||
 		(instanceId !== undefined && policy.instanceId !== instanceId) ||
 		typeof policy.baseCommit !== "string" || !/^[a-f0-9]{40}$/u.test(policy.baseCommit) ||
+		(policy.candidateImport === "pytest" && !policy.instanceId.startsWith("pytest-dev__pytest-")) ||
+		(policy.candidateImport === "requests" && !policy.instanceId.startsWith("psf__requests-")) ||
 		new Set(policy.tests).size !== policy.tests.length ||
 		!policy.tests.every((target) => {
 			const file = target.split("::")[0]!;

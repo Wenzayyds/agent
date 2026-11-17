@@ -22,6 +22,8 @@ import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
 import { loadSuspendedRun, saveSuspendedRun } from "./runner-resume.ts";
+import { assertFrozenDispatch } from "./swe-frozen-batch.ts";
+import { assertFrozenPytest, frozenCaseForProfile, frozenCases } from "./swe-frozen-catalog.ts";
 import { resolveSweProfile, SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, SWE_TASK_LIMITS } from "./swe-profile.ts";
 import { collectSweResult } from "./swe-results.ts";
 import { readSwePytestPolicy } from "./swe-test-feedback.ts";
@@ -95,6 +97,12 @@ export async function main(): Promise<void> {
 	if (taskMode && (!sweId || (taskMode !== "off" && taskMode !== "v1" && taskMode !== "v2")))
 		throw new Error("SWE_TASK_MODE_INVALID");
 	const swePytest = swePytestPath ? readSwePytestPolicy(swePytestPath, sweId!) : undefined;
+	const frozenCase = frozenCaseForProfile(comparisonProfile);
+	const frozenAuthorization = argument("--swe-frozen-authorization");
+	if ((sweId && frozenCases.some(({ instanceId }) => instanceId === sweId) && !frozenCase) ||
+		(process.argv.includes("--swe-frozen-authorization") && (!frozenCase || localStubUrl || !frozenAuthorization)))
+		throw new Error("SWE_FROZEN_BATCH_UNAUTHORIZED");
+	if (frozenCase) assertFrozenPytest(frozenCase, swePytest);
 	const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
 	if (
 		comparisonProfile &&
@@ -119,6 +127,11 @@ export async function main(): Promise<void> {
 	const experimentalLimits = taskPair ? TASK_PAIR_LIMITS : batchL ? BATCH_L_LIMITS : CONTROLLED_LIMITS;
 	if (batchL && !cell) throw new Error("BATCH_L_REAL_AUTHORIZATION_REQUIRED");
 	const authorizationBatchId = argument("--authorization-batch-id");
+	if (frozenCase && !localStubUrl) assertFrozenDispatch(frozenAuthorization, repositoryRoot,
+		execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(), {
+			instanceId: sweId, batchId: authorizationBatchId, grant: taskPairPath, ci: argument("--ci-evidence"),
+			mirror: sweMirror, policy: swePytestPath,
+		});
 	const taskPairAuthorization =
 		(taskPair || swe) && execute && !localStubUrl
 			? loadTaskPairAuthorization(

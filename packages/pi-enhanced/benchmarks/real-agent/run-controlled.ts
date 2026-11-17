@@ -24,6 +24,9 @@ import {
 	verifyControlledCi,
 } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
+import { assertFrozenDispatch } from "./swe-frozen-batch.ts";
+import { assertFrozenPytest, frozenCaseForProfile } from "./swe-frozen-catalog.ts";
+import { readSwePytestPolicy } from "./swe-test-feedback.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import { resolveSweProfile, SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, type SWE_TASK_LIMITS } from "./swe-profile.ts";
 import {
@@ -44,6 +47,10 @@ const offlinePolicyPath = argument("--offline-denial-policy");
 const comparisonProfile = argument("--comparison-profile");
 const taskPair = comparisonProfile === TASK_PAIR_PROFILE;
 const swe = resolveSweProfile(comparisonProfile);
+const frozenCase = frozenCaseForProfile(comparisonProfile);
+const frozenAuthorization = argument("--swe-frozen-authorization");
+if (process.argv.includes("--swe-frozen-authorization") && (!frozenCase || stub || !execute || !frozenAuthorization))
+	throw new Error("SWE_FROZEN_BATCH_UNAUTHORIZED");
 const hostGrantProfile = taskPair || Boolean(swe);
 const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
@@ -59,6 +66,7 @@ if (swe && (!sweMirror || (swe.admission === "instances"
 		: process.argv.includes("--swebench-id")
 	: sweId !== swe.configuration.instanceId))) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 if (!swe && (sweId || sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
+if (execute && frozenCase) assertFrozenPytest(frozenCase, swePytestPath ? readSwePytestPolicy(swePytestPath, frozenCase.instanceId) : undefined);
 let CONTROLLED_LIMITS = swe
 	? swe.configuration.limits
 	: taskPair
@@ -97,6 +105,9 @@ const authorizationPath = argument("--batch-l-authorization");
 const taskPairPath = argument("--task-pair-authorization");
 const taskPairExpected = argument("--task-pair-expected-input");
 const ciPath = argument("--ci-evidence");
+if (execute && frozenCase && !stub) assertFrozenDispatch(frozenAuthorization, repositoryRoot, commit, {
+	instanceId: sweId, batchId, grant: taskPairPath, ci: ciPath, mirror: sweMirror, policy: swePytestPath,
+});
 if (hostGrantProfile && (authorizationPath || offlinePolicyPath)) throw new Error("TASK_PAIR_STRICT_STUB_ONLY");
 if (taskPairPath && (!hostGrantProfile || stub)) throw new Error("TASK_PAIR_AUTHORIZATION_SCOPE_INVALID");
 if (taskPairExpected && (!hostGrantProfile || !stub)) throw new Error("TASK_PAIR_EXPECTED_INPUT_SCOPE_INVALID");
@@ -306,6 +317,7 @@ for (let index = 0; index < specs.length; index++) {
 		);
 	if (taskPairExpected) args.push("--task-pair-expected-input", taskPairExpected);
 	if (swePytestPath) args.push("--swe-pytest-policy", resolve(swePytestPath));
+	if (frozenAuthorization) args.push("--swe-frozen-authorization", frozenAuthorization);
 	const cellStarted = performance.now();
 	const child = spawnSync(process.execPath, args, {
 		cwd: repositoryRoot,
