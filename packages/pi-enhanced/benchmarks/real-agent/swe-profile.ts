@@ -18,9 +18,7 @@ export const SWE_TASK_LIMITS = Object.freeze({
 	maxRuns: 3,
 	maxBatchCostUsd: 0.24,
 });
-export const SWE_TASK_CONFIGURATION = Object.freeze({
-	profile: SWE_TASK_PROFILE,
-	cells: SWE_TASK_CELLS.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+const SWE_FLASH_DEFAULTS = {
 	provider: "deepseek",
 	model: "deepseek-flash",
 	thinking: "off",
@@ -32,6 +30,11 @@ export const SWE_TASK_CONFIGURATION = Object.freeze({
 	retries: 0,
 	maxOutputTokens: 2048,
 	image: CONTROLLED_IMAGE,
+} as const;
+export const SWE_TASK_CONFIGURATION = Object.freeze({
+	profile: SWE_TASK_PROFILE,
+	cells: SWE_TASK_CELLS.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+	...SWE_FLASH_DEFAULTS,
 	limits: SWE_TASK_LIMITS,
 	instanceId: "astropy__astropy-13033",
 	baseCommit: "298ccb478e6bf092953bca67a3d29dc6c35f6752",
@@ -80,6 +83,33 @@ export const SWE_PRO_TASK_CONFIGURATION = Object.freeze({
 	moduleTools: { v1: ["enhanced_task_get"], v2: ["enhanced_task_get", "enhanced_task_plan_update"] },
 });
 
+export const SWE_FLASH_OFF_PROFILE = "swe-flash-off-v1";
+const verifiedSelection = readSweManifest().instances;
+const flashOffInstances = [13033, 13453, 14365, 14369, 14508].map((issue) => {
+	const instanceId = `astropy__astropy-${issue}`;
+	const row = verifiedSelection.find((item) => item.instance_id === instanceId && item.role === "candidate");
+	if (!row?.problem_statement || digest(row.problem_statement) !== row.problem_sha256)
+		throw new Error("SWE_FLASH_OFF_INSTANCE_INVALID");
+	return {
+		instanceId,
+		baseCommit: row.base_commit,
+		problemSha256: row.problem_sha256,
+		userPromptSha256: digest(swePrompt(row.problem_statement)),
+		cellId: `off_${issue}`,
+	};
+});
+const flashOffCells = flashOffInstances.map(({ cellId }) => ({ ...SWE_TASK_CELLS[0]!, id: cellId }));
+export const SWE_FLASH_OFF_CONFIGURATION = Object.freeze({
+	profile: SWE_FLASH_OFF_PROFILE,
+	cells: flashOffCells.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+	...SWE_FLASH_DEFAULTS,
+	limits: { ...SWE_TASK_LIMITS, maxRuns: 5, maxBatchCostUsd: 0.40 },
+	instances: flashOffInstances,
+	sourcePolicySha256: SWE_TASK_CONFIGURATION.sourcePolicySha256,
+	continuationPolicy: SWE_TASK_CONFIGURATION.continuationPolicy,
+	moduleTools: { off: [] },
+});
+
 // CLI and authorization share the same mode list, configuration and admission shape.
 const profiles = [
 	{
@@ -99,6 +129,12 @@ const profiles = [
 		cells: SWE_PRO_TASK_CELLS,
 		batchIdPattern: /^swe_pro_task_[a-z0-9_]{4,20}$/u,
 		admission: "task",
+	},
+	{
+		configuration: SWE_FLASH_OFF_CONFIGURATION,
+		cells: flashOffCells,
+		batchIdPattern: /^swe_flash_off_[a-z0-9_]{4,20}$/u,
+		admission: "instances",
 	},
 ] as const;
 

@@ -73,6 +73,17 @@ describe("SWE-bench Verified adapter", () => {
 			expect(readFileSync(report, "utf8")).toBe('{"resolved_ids":');
 			writeFileSync(report, JSON.stringify({ resolved_ids: [id], unresolved_ids: [], error_ids: [] }));
 			expect(readOfficialOutcome(report, id, null)).toBe("resolved");
+			const instance = join(dir, "instance");
+			mkdirSync(instance);
+			expect(readOfficialOutcome(report, id, null, instance)).toBe("evaluation_error");
+			writeFileSync(join(instance, "report.json"), JSON.stringify({ [id]: { patch_successfully_applied: true, resolved: false } }));
+			expect(readOfficialOutcome(report, id, null, instance)).toBe("evaluation_error");
+			writeFileSync(join(instance, "report.json"), JSON.stringify({ [id]: { patch_successfully_applied: true, resolved: true } }));
+			expect(readOfficialOutcome(report, id, null, instance)).toBe("resolved");
+			writeFileSync(report, JSON.stringify({ resolved_ids: [], unresolved_ids: [], error_ids: [id] }));
+			expect(readOfficialOutcome(report, id, null, instance)).toBe("evaluation_error");
+			writeFileSync(join(instance, "test_output.txt"), "pytest output\n\nTimeout error: 1 seconds exceeded.");
+			expect(readOfficialOutcome(report, id, null, instance)).toBe("timeout");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -118,7 +129,7 @@ describe("SWE-bench Verified adapter", () => {
 			agentCompleted: false,
 			auditComplete: false,
 		};
-		for (const status of ["resolved", "unresolved", "not_run", "timeout", "evaluation_error"])
+		for (const status of ["resolved", "unresolved", "incomplete", "not_run", "timeout", "evaluation_error"])
 			expect(assessSwePrediction(agent, prediction, status)).toMatchObject({
 				officialHarnessStatus: status,
 				resolved: status === "resolved" ? true : status === "unresolved" ? false : null,
@@ -260,6 +271,7 @@ describe("SWE-bench Verified adapter", () => {
 		expect(first.args.slice(0, 2)).toEqual(["-m", "swebench.harness.run_evaluation"]);
 		expect(first.args).toContain("--max_workers");
 		expect(first.args[first.args.indexOf("--max_workers") + 1]).toBe("1");
+		expect(first.args[first.args.indexOf("--cache_level") + 1]).toBe("instance");
 		expect(first.reportFile).toBe(`gold.${first.runId}.json`);
 		const predicted = harnessCommand({ ...input, prediction: resolve("predictions.jsonl"), modelName: "offline" });
 		expect(predicted.reportFile).toBe(`offline.${predicted.runId}.json`);
@@ -267,6 +279,7 @@ describe("SWE-bench Verified adapter", () => {
 		expect(() =>
 			harnessCommand({ ...input, prediction: resolve("predictions.jsonl"), modelName: "../bad" }),
 		).toThrow();
+		expect(() => harnessCommand({ ...input, prediction: resolve("predictions.jsonl"), modelName: ".." })).toThrow();
 		expect(() => harnessCommand({ ...input, datasetPath: "../dataset.json" })).toThrow();
 	});
 	it("allows only normalized source paths outside repository metadata", () => {
@@ -296,6 +309,8 @@ describe("SWE-bench Verified adapter", () => {
 		expect(officialOutcome({ resolved_ids: [], unresolved_ids: [], error_ids: [id] }, id)).toBe("evaluation_error");
 		expect(officialOutcome(null, id, true)).toBe("timeout");
 		expect(officialOutcome({ resolved_ids: [], unresolved_ids: [], error_ids: [] }, id)).toBe("not_run");
+		expect(officialOutcome({ resolved_ids: [], unresolved_ids: [], error_ids: [], incomplete_ids: [id] }, id)).toBe("incomplete");
+		expect(officialOutcome({ resolved_ids: [], unresolved_ids: [], error_ids: [], empty_patch_ids: [id] }, id)).toBe("incomplete");
 		expect(() => officialOutcome({ resolved_ids: [id], unresolved_ids: [id], error_ids: [] }, id)).toThrow();
 	});
 });

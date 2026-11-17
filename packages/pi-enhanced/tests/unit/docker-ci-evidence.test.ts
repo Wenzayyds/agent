@@ -62,7 +62,10 @@ function report(): DockerTestReport {
 					].map(([id, mode]) => ({
 						fullName: `exports an applicable non-Gold Stub patch for ${id} in ${mode}`,
 						status: "passed",
-					})),
+					})).concat({
+						fullName: "runs all five Flash OFF instances with distinct admission, fixed budgets and clean shutdown",
+						status: "passed",
+					}),
 				},
 			]),
 	};

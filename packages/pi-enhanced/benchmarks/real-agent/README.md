@@ -8,6 +8,19 @@
 
 三个入口保持原路径，命令行参数和结果格式保持不变。`npm run evaluate:swe --workspace=@wz-agent/pi-enhanced -- ...` 选择 SWE profile；仍须提供原实例、镜像、批次和输出参数。真实执行还须有当前 Commit 的 CI 证据和新的一次性宿主授权。
 
+## 五题 Flash OFF
+
+`swe-flash-off-v1` 固定按 `13033 → 13453 → 14365 → 14369 → 14508` 运行 Astropy 的五道 Verified 题。每题使用新的工作区和预算账本，最多 20 次请求、200,000 Token、600 秒、USD 0.08。批次按每题完整额度预留，总上限 USD 0.40，并发为 1。预览时只传本地镜像路径，题号由配置决定。
+
+```bash
+node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts \
+  --comparison-profile swe-flash-off-v1 --swebench-mirror "$MIRROR"
+```
+
+实际宿主授权沿用现有的 Commit、CI、配置散列、批次、输出和有效期绑定。该配置的授权文件用 `instanceInputs` 替代 `input` 与 `modeInputs`，键是完整的 SWE-bench `instance_id`，值是该题单独校准的 `TaskPairInput`。批次和每题各有独占消费记录。输入不匹配时 Gateway 拒绝该题首请求，并停止批次。
+
+本地验证可把 `PI_ENHANCED_SWE_LOCAL_MIRROR` 指向包含五个基线提交的 Astropy 镜像，然后运行 `swebench-stub.test.ts`。若设置 `PI_ENHANCED_SWE_FLASH_OFF_EVIDENCE` 为现有的证据目录，测试会保留批次与预测。每题结果位于 `<batchId>/<batchId>_off_<issue>/swebench/`，其中的 `predictions.jsonl` 和 `result.json` 可交给现有 `swebench.ts` 在独立目录判分。
+
 ## 调用关系
 
 ```text

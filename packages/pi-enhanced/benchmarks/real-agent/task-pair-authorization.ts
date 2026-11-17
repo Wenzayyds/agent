@@ -6,6 +6,7 @@ import { verifyControlledCi } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
 import {
 	resolveSweProfile,
+	SWE_FLASH_OFF_CONFIGURATION,
 	SWE_PRO_TASK_CONFIGURATION,
 	SWE_TASK_CONFIGURATION,
 	type SweProfileName,
@@ -31,8 +32,9 @@ export interface TaskPairAuthorization {
 	expiresAt: string;
 	ciRunId: number;
 	configurationSha256: string;
-	input: TaskPairInput;
+	input?: TaskPairInput;
 	modeInputs?: Record<"v1" | "v2", TaskPairInput> & Partial<Record<"off", TaskPairInput>>;
+	instanceInputs?: Record<string, TaskPairInput>;
 }
 
 export function readTaskPairInput(value: unknown): TaskPairInput {
@@ -77,7 +79,7 @@ export function loadTaskPairAuthorization(
 	const swe = resolveSweProfile(expectedProfile);
 	if (
 		!grant ||
-		Object.keys(grant).length !== (swe && swe.admission !== "off" ? 12 : 11) ||
+		Object.keys(grant).length !== (swe?.admission === "all" || swe?.admission === "task" ? 12 : 11) ||
 		grant.schemaVersion !== 1 ||
 		grant.status !== "authorized" ||
 		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(grant.authorizationId) ||
@@ -98,7 +100,8 @@ export function loadTaskPairAuthorization(
 		grant.ciRunId <= 0
 	)
 		throw new Error("TASK_PAIR_AUTHORIZATION_INVALID_OR_EXPIRED");
-	readTaskPairInput(grant.input);
+	const input = swe?.admission === "instances" ? undefined : readTaskPairInput(grant.input);
+	if (swe?.admission === "instances") readSweFlashOffInputs(grant.instanceInputs);
 	if (swe?.admission === "all") {
 		const inputs = readSweModeInputs(grant.modeInputs);
 		if (!isDeepStrictEqual(inputs.off, grant.input)) throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
@@ -109,8 +112,8 @@ export function loadTaskPairAuthorization(
 	}
 	if (
 		swe?.admission === "off" &&
-		(grant.input.fixtureCommit !== swe.configuration.baseCommit ||
-			grant.input.userPromptSha256 !== swe.configuration.userPromptSha256)
+		(input?.fixtureCommit !== swe.configuration.baseCommit ||
+			input?.userPromptSha256 !== swe.configuration.userPromptSha256)
 	)
 		throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
 	if (!ciPath) throw new Error("CONTROLLED_CI_REQUIRED");
@@ -145,6 +148,10 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 			batch.cells?.map((cell: { id: string }) => cell.id),
 			cells.map((cell) => cell.id),
 		) ||
+		(swe?.admission === "instances" && !isDeepStrictEqual(
+			batch.cells.map((cell: { instanceId: string }) => cell.instanceId),
+			swe.configuration.instances.map((instance) => instance.instanceId),
+		)) ||
 		batch.cells[index]?.resultStatus !== "run" ||
 		cells.some((cell, position) =>
 			position > index
@@ -159,6 +166,21 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 	)
 		throw new Error("TASK_PAIR_CELL_ORDER_INVALID");
 	writeFileSync(`${path}.used.${cellId}`, digest(grant), { flag: "wx", mode: 0o600 });
+}
+
+/** Every OFF authorization binds one selected issue to its own calibrated request. */
+export function readSweFlashOffInputs(value: unknown): Record<string, TaskPairInput> {
+	const { instances } = SWE_FLASH_OFF_CONFIGURATION;
+	if (!value || typeof value !== "object" || Object.keys(value).length !== instances.length)
+		throw new Error("SWE_INSTANCE_INPUTS_INVALID");
+	const inputs = value as Record<string, TaskPairInput>;
+	for (const instance of instances) {
+		if (!Object.hasOwn(inputs, instance.instanceId)) throw new Error("SWE_INSTANCE_INPUTS_INVALID");
+		const input = readTaskPairInput(inputs[instance.instanceId]);
+		if (input.fixtureCommit !== instance.baseCommit || input.userPromptSha256 !== instance.userPromptSha256)
+			throw new Error("SWE_INSTANCE_INPUT_MISMATCH");
+	}
+	return inputs;
 }
 
 /** Full schemas intentionally differ by mode; the issue, base, tree and system input must remain identical. */

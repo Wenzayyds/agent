@@ -28,9 +28,11 @@ import { loadSweTask } from "./swe-workspace.ts";
 import {
 	claimTaskPairCell,
 	loadTaskPairAuthorization,
+	readSweFlashOffInputs,
 	readSweModeInputs,
 	readSweProTaskInputs,
 	readTaskPairInput,
+	type TaskPairInput,
 } from "./task-pair-authorization.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -54,12 +56,17 @@ export async function main(): Promise<void> {
 	const taskMode = argument("--task-mode");
 	const comparisonProfile = argument("--comparison-profile");
 	const swe = resolveSweProfile(comparisonProfile);
+	const flashInstance = swe?.admission === "instances"
+		? swe.configuration.instances.find((instance) => instance.instanceId === sweId)
+		: undefined;
 	if (
 		swe &&
-		(sweId !== swe.configuration.instanceId ||
-			!sweMirror ||
+		(!sweMirror ||
 			!taskMode ||
-			(swe.admission !== "all" && !swe.cells.some((cell) => cell.id === taskMode)))
+			(swe.admission === "instances"
+				? !flashInstance || taskMode !== "off"
+				: sweId !== swe.configuration.instanceId ||
+					(swe.admission !== "all" && !swe.cells.some((cell) => cell.id === taskMode))))
 	)
 		throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 	if (sweId || sweMirror) {
@@ -222,10 +229,19 @@ export async function main(): Promise<void> {
 			throw new Error("EVAL_GATE_LOCAL_STUB_UNAUTHORIZED");
 		}
 	}
+	let taskPairExpected: TaskPairInput | undefined;
+	if (taskPairExpectedPath) {
+		const input = JSON.parse(readFileSync(taskPairExpectedPath, "utf8"));
+		if (flashInstance) taskPairExpected = readSweFlashOffInputs(input)[flashInstance.instanceId];
+		else if (swe?.admission === "task") taskPairExpected = readSweProTaskInputs(input)[taskMode as "v1" | "v2"];
+		else if (swe?.admission === "all") taskPairExpected = readSweModeInputs(input)[taskMode as "off" | "v1" | "v2"];
+		else taskPairExpected = readTaskPairInput(input);
+	}
 	if (taskPairAuthorization) {
+		const authorizationCell = flashInstance?.cellId ?? (swe ? taskMode! : cell!.id);
 		if (
 			process.env.PI_ENHANCED_REAL_MODEL_EVAL !== "1" ||
-			input.runId !== `${authorizationBatchId}_${swe ? taskMode : cell!.id}` ||
+			input.runId !== `${authorizationBatchId}_${authorizationCell}` ||
 			!input.outputDir ||
 			execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
 				cwd: repositoryRoot,
@@ -233,7 +249,11 @@ export async function main(): Promise<void> {
 			}).trim()
 		)
 			throw new Error("TASK_PAIR_RUN_SCOPE_INVALID");
-		claimTaskPairCell(taskPairPath!, taskPairAuthorization, swe ? taskMode! : cell!.id, input.outputDir);
+		claimTaskPairCell(taskPairPath!, taskPairAuthorization, authorizationCell, input.outputDir);
+		if (flashInstance) taskPairExpected = taskPairAuthorization.instanceInputs?.[flashInstance.instanceId];
+		else if (swe?.admission === "all" || swe?.admission === "task")
+			taskPairExpected = taskPairAuthorization.modeInputs![taskMode as "off" | "v1" | "v2"];
+		else taskPairExpected = taskPairAuthorization.input;
 	}
 	if (jointRecovery && (!execute || process.env.PI_ENHANCED_REAL_MODEL_EVAL !== "1"))
 		throw new Error("EVAL_V3_JOINT_RECOVERY_UNAUTHORIZED");
@@ -363,17 +383,7 @@ export async function main(): Promise<void> {
 				offlinePolicy,
 				comparisonProfile,
 				taskPairAuthorization,
-				taskPairExpected:
-					(swe && swe.admission !== "off" && taskPairAuthorization
-						? taskPairAuthorization.modeInputs![taskMode as "off" | "v1" | "v2"]
-						: taskPairAuthorization?.input) ??
-					(taskPairExpectedPath
-						? swe && swe.admission !== "off"
-							? swe.admission === "task"
-								? readSweProTaskInputs(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))[taskMode as "v1" | "v2"]
-								: readSweModeInputs(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))[taskMode as "off" | "v1" | "v2"]
-							: readTaskPairInput(JSON.parse(readFileSync(taskPairExpectedPath, "utf8")))
-						: undefined),
+				taskPairExpected,
 				observedCost,
 				taskMode: swebench ? ((taskMode as "off" | "v1" | "v2" | undefined) ?? "off") : undefined,
 			};

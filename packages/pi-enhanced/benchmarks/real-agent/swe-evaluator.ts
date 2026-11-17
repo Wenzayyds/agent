@@ -21,6 +21,7 @@ import { publicInstance, readSweManifest, SWE_EVALUATION_PROTOCOL } from "./swe-
 
 export const SWE_HARNESS_COMMIT = "726c5461e2ef52d83cf1ea2107870a8bb3328d57";
 export const SWE_DATA_REVISION = "c104f840cc67f8b6eec6f759ebc8b2693d585d4a";
+const SWE_MODEL_NAME = /^(?!\.{1,2}$)[a-zA-Z0-9_.-]{1,100}$/u;
 
 export function officialOutcome(report: unknown, id: string, timeout = false) {
 	if (timeout) return "timeout";
@@ -31,9 +32,12 @@ export function officialOutcome(report: unknown, id: string, timeout = false) {
 		["resolved_ids", "resolved"],
 		["unresolved_ids", "unresolved"],
 		["error_ids", "evaluation_error"],
+		["incomplete_ids", "incomplete"],
+		["empty_patch_ids", "incomplete"],
 	] as const;
 	const found = categories.filter(([key]) => {
 		const ids = value[key];
+		if (ids === undefined && (key === "incomplete_ids" || key === "empty_patch_ids")) return false;
 		if (!Array.isArray(ids) || ids.some((item) => typeof item !== "string")) throw new Error("SWE_REPORT_INVALID");
 		return ids.includes(id);
 	});
@@ -51,11 +55,34 @@ export function readOfficialOutcome(
 	reportPath: string,
 	id: string,
 	failure: "timeout" | "evaluation_error" | null,
+	instanceDir?: string,
 ) {
 	if (failure) return failure;
 	try {
 		const report = JSON.parse(readFileSync(reportPath, "utf8"));
-		return report ? officialOutcome(report, id) : "evaluation_error";
+		const status = report ? officialOutcome(report, id) : "evaluation_error";
+		if (!instanceDir) return status;
+		if (status === "evaluation_error" && report?.error_ids?.includes(id)) {
+			// v4.1 records a test timeout under error_ids and appends this marker to the test output.
+			const path = join(instanceDir, "test_output.txt");
+			if (!existsSync(path)) return status;
+			const fd = openSync(path, "r");
+			try {
+				const size = fstatSync(fd).size;
+				const tail = Buffer.alloc(Math.min(size, 256));
+				const length = readSync(fd, tail, 0, tail.length, size - tail.length);
+				if (/\r?\n\r?\nTimeout error: \d+ seconds exceeded\.(?:\r?\n)?$/u.test(tail.toString("utf8", 0, length)))
+					return "timeout";
+			} finally {
+				closeSync(fd);
+			}
+		}
+		if (status === "resolved" || status === "unresolved") {
+			const instance = JSON.parse(readFileSync(join(instanceDir, "report.json"), "utf8"))?.[id];
+			if (instance?.patch_successfully_applied !== true || instance.resolved !== (status === "resolved"))
+				return "evaluation_error";
+		}
+		return status === "not_run" ? "incomplete" : status;
 	} catch {
 		return "evaluation_error";
 	}
@@ -71,7 +98,7 @@ export function assessSwePrediction(
 		agent.instanceId !== prediction.instance_id ||
 		agent.patchExportStatus !== "exported" ||
 		agent.patchSha256 !== sha(prediction.model_patch) ||
-		!["resolved", "unresolved", "not_run", "timeout", "evaluation_error", "environment_blocked"].includes(status)
+		!["resolved", "unresolved", "incomplete", "not_run", "timeout", "evaluation_error", "environment_blocked"].includes(status)
 	)
 		throw new Error("SWE_AGENT_PREDICTION_BINDING_INVALID");
 	return {
@@ -102,7 +129,7 @@ export function harnessCommand(input: {
 		!isAbsolute(input.datasetPath) ||
 		!/^[a-zA-Z0-9_.-]+__[a-zA-Z0-9_.-]+-[0-9]+$/u.test(input.id) ||
 		(input.prediction !== "gold" && !isAbsolute(input.prediction)) ||
-		(input.prediction !== "gold" && !/^[a-zA-Z0-9_.-]{1,100}$/u.test(input.modelName ?? "")) ||
+		(input.prediction !== "gold" && !SWE_MODEL_NAME.test(input.modelName ?? "")) ||
 		!/^[a-f0-9]{64}$/u.test(input.predictionHash)
 	)
 		throw new Error("SWE_HARNESS_INPUT_INVALID");
@@ -123,6 +150,8 @@ export function harnessCommand(input: {
 			input.prediction,
 			"--max_workers",
 			"1",
+			"--cache_level",
+			"instance",
 			"--timeout",
 			"1800",
 			"--run_id",
@@ -278,7 +307,8 @@ export function runOfficialHarness() {
 		prediction &&
 		(Object.keys(prediction).sort().join(",") !== "instance_id,model_name_or_path,model_patch" ||
 			prediction.instance_id !== row.instance_id ||
-			!/^[a-zA-Z0-9_.-]{1,100}$/u.test(prediction.model_name_or_path) ||
+			typeof prediction.model_name_or_path !== "string" ||
+			!SWE_MODEL_NAME.test(prediction.model_name_or_path) ||
 			typeof prediction.model_patch !== "string" ||
 			!prediction.model_patch.trim())
 	)
@@ -344,7 +374,10 @@ export function runOfficialHarness() {
 		failure = (error as NodeJS.ErrnoException).code === "ETIMEDOUT" ? "timeout" : "evaluation_error";
 	}
 	const reportPath = join(output, command.reportFile);
-	const status = readOfficialOutcome(reportPath, row.instance_id, failure);
+	const instanceDir = join(
+		output, "logs", "run_evaluation", command.runId, prediction?.model_name_or_path ?? "gold", row.instance_id,
+	);
+	const status = readOfficialOutcome(reportPath, row.instance_id, failure, instanceDir);
 	writeFileSync(
 		join(output, "outcome.json"),
 		JSON.stringify(

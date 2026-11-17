@@ -46,7 +46,10 @@ const swe = resolveSweProfile(comparisonProfile);
 const hostGrantProfile = taskPair || Boolean(swe);
 const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
-if (swe && (sweId !== swe.configuration.instanceId || !sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
+const flash = swe?.admission === "instances" ? swe : undefined;
+if (swe && (!sweMirror || (swe.admission === "instances"
+	? process.argv.includes("--swebench-id")
+	: sweId !== swe.configuration.instanceId))) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 if (!swe && (sweId || sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 let CONTROLLED_LIMITS = swe
 	? swe.configuration.limits
@@ -112,7 +115,9 @@ if (!execute) {
 			status: "not_run",
 			commit,
 			limits: CONTROLLED_LIMITS,
-			cells: swe ? swe.cells : taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
+			cells: flash
+				? flash.cells.map((cell, index) => ({ ...cell, instanceId: flash.configuration.instances[index]!.instanceId }))
+				: swe ? swe.cells : taskPair ? TASK_PAIR_CELLS : CONTROLLED_CELLS,
 			...(hostGrantProfile
 				? {
 						configuration: swe?.configuration ?? TASK_PAIR_CONFIGURATION,
@@ -170,6 +175,7 @@ const specs = swe
 			: CONTROLLED_CELLS;
 const cells: Array<{
 	id: string;
+	instanceId?: string;
 	status: string;
 	resultStatus: string;
 	endToEndMs?: number;
@@ -178,7 +184,12 @@ const cells: Array<{
 	cellStopReason?: string | null;
 	notRunReason?: string;
 	result?: ControlledResult;
-}> = specs.map(({ id }) => ({ id, status: "not_run", resultStatus: "not_run" }));
+}> = specs.map(({ id }, index) => ({
+	id,
+	...(flash ? { instanceId: flash.configuration.instances[index]!.instanceId } : {}),
+	status: "not_run",
+	resultStatus: "not_run",
+}));
 let stoppedReason: string | null = null;
 let reservedMaximumUsd = 0;
 let firstPairInput: TaskPairInput | undefined;
@@ -224,6 +235,8 @@ save();
 for (let index = 0; index < specs.length; index++) {
 	const spec = specs[index]!;
 	const state = cells[index]!;
+	const instance = flash?.configuration.instances[index];
+	const mode = instance ? "off" : spec.id;
 	if (reservedMaximumUsd + CONTROLLED_LIMITS.maxCostUsd > CONTROLLED_LIMITS.maxBatchCostUsd + Number.EPSILON) {
 		stoppedReason = "batch_budget_reservation";
 		save();
@@ -239,7 +252,7 @@ for (let index = 0; index < specs.length; index++) {
 		join(here, "run-real-agent.ts"),
 		"--execute",
 		...(swe
-			? ["--swebench-id", sweId!, "--swebench-mirror", sweMirror!, "--task-mode", spec.id]
+			? ["--swebench-id", instance?.instanceId ?? sweId!, "--swebench-mirror", sweMirror!, "--task-mode", mode]
 			: ["--controlled-cell", spec.id]),
 		"--run-id",
 		runId,
@@ -310,7 +323,8 @@ for (let index = 0; index < specs.length; index++) {
 			results: ControlledResult[];
 		};
 		const result = report.results[0];
-		if (!result || result.controlledCell !== spec.id || (swe && result.runId !== runId))
+		if (!result || result.controlledCell !== mode || (swe && result.runId !== runId) ||
+			(instance && (result.instanceId !== instance.instanceId || result.repositoryCommit !== instance.baseCommit)))
 			throw new Error("CONTROLLED_RESULT_MISMATCH");
 		state.result = result;
 		if (swe)
@@ -337,7 +351,10 @@ for (let index = 0; index < specs.length; index++) {
 		if (hostGrantProfile) {
 			const admission = JSON.parse(readFileSync(join(batchDir, runId, spec.taskId, "input-admission.json"), "utf8"));
 			const input = readTaskPairInput(admission.input);
+			if (instance && (input.fixtureCommit !== instance.baseCommit || input.userPromptSha256 !== instance.userPromptSha256))
+				stoppedReason = "task_pair_input_admission_failed";
 			if (
+				!instance &&
 				firstPairInput &&
 				!isDeepStrictEqual(
 					swe
@@ -351,7 +368,7 @@ for (let index = 0; index < specs.length; index++) {
 				)
 			)
 				stoppedReason = "task_pair_input_admission_failed";
-			firstPairInput ??= input;
+			if (!instance) firstPairInput ??= input;
 		}
 		if (comparisonProfile) {
 			const own = result.fairness as {
@@ -364,7 +381,7 @@ for (let index = 0; index < specs.length; index++) {
 				} | null;
 			};
 			if (!own?.inputAudit) stoppedReason = "comparison_input_audit_missing";
-			const peerResult = cells
+			const peerResult = instance ? undefined : cells
 				.slice(0, index)
 				.find((cell) => specs.find((s) => s.id === cell.id)?.module === spec.module)?.result;
 			const peer = peerResult?.fairness as typeof own | undefined;

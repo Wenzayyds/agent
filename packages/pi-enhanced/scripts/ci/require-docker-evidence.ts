@@ -44,7 +44,8 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 		["astropy__astropy-14365", "v2"],
 	];
 	if (
-		swe.length !== requiredSwe.length ||
+		swe.length !== requiredSwe.length + 1 ||
+		!swe.some((test) => test.fullName === "runs all five Flash OFF instances with distinct admission, fixed budgets and clean shutdown") ||
 		requiredSwe.some(
 			([id, mode]) =>
 				swe.filter((test) => test.fullName.endsWith(`Stub patch for ${id} in ${mode}`) && test.status === "passed")

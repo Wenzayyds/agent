@@ -9,6 +9,7 @@ import {
 	startBudgetGateway,
 } from "../../benchmarks/real-agent/budget-gateway.ts";
 import { finalizeAgentExecution } from "../../benchmarks/real-agent/runner-cleanup.ts";
+import { SWE_FLASH_OFF_CONFIGURATION } from "../../benchmarks/real-agent/swe-profile.ts";
 
 const running: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
@@ -26,6 +27,33 @@ const baseLimits: BudgetGatewayLimits = {
 };
 
 describe("Batch H hard budget gateway", () => {
+	it("blocks a Flash request at the exact $0.08 task cap while request and Token budget remain", async () => {
+		let forwarded = 0;
+		const upstream = await mockUpstream(async (_request, response) => {
+			forwarded++;
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end('data: {"choices":[],"usage":{"prompt_tokens":8000,"completion_tokens":2048,"total_tokens":10048}}\n\ndata: [DONE]\n\n');
+		});
+		const { limits, maxOutputTokens } = SWE_FLASH_OFF_CONFIGURATION;
+		const gateway = await startBudgetGateway({
+			runId: "swe-flash-off-budget-test", upstreamBaseUrl: upstream.url, upstreamApiKey: "upstream-key",
+			clientToken: "client-token", adminToken: "admin-token", allowedModel: "deepseek-flash",
+			limits: { ...baseLimits, maxRequests: limits.maxRequests, maxTotalTokens: limits.maxTokens,
+				maxTotalCostUsd: limits.maxCostUsd, maxOutputTokensPerRequest: maxOutputTokens },
+			pricing: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
+		});
+		running.push(gateway);
+		const body = { max_tokens: maxOutputTokens, messages: [{ role: "user", content: "a".repeat(8_100) }] };
+		for (let request = 0; request < 16; request++)
+			expect((await callGateway(gateway.url, "client-token", body)).status).toBe(200);
+		expect((await callGateway(gateway.url, "client-token", body)).status).toBe(429);
+		const status = gateway.status();
+		expect(forwarded).toBe(16);
+		expect(status.actualCostUsd).toBeCloseTo(0.0777216, 10);
+		expect(status.denials.at(-1)).toMatchObject({ code: "GATEWAY_COST_BUDGET", upstreamForwarded: false,
+			reservationDiagnostics: { maxTotalCostUsd: 0.08, remainingTokenHeadroom: 39_232 } });
+	});
+
 	it("still closes the gateway and removes containers when final evidence cannot be written", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-gateway-cleanup-"));
 		try {

@@ -81,7 +81,10 @@ jobs:
           mirror="$RUNNER_TEMP/pi-enhanced-astropy.git"
           git init --bare "$mirror"
           git -C "$mirror" remote add origin https://github.com/astropy/astropy.git
-          git -C "$mirror" -c core.hooksPath=/dev/null fetch --depth=1 --no-tags origin 298ccb478e6bf092953bca67a3d29dc6c35f6752 19cc80471739bcb67b7e8099246b391c355023ee 7269fa3e33e8d02485a647da91a5a2a60a06af61
+          git -C "$mirror" -c core.hooksPath=/dev/null fetch --depth=1 --no-tags origin \
+            298ccb478e6bf092953bca67a3d29dc6c35f6752 19cc80471739bcb67b7e8099246b391c355023ee \
+            7269fa3e33e8d02485a647da91a5a2a60a06af61 fa4e8d1cd279acf9b24560813c8652494ccd5922 \
+            a3f4ae6cd24d5ecdf49f213d77b3513dd509a06c
           echo "PI_ENHANCED_SWE_LOCAL_MIRROR=$mirror" >> "$GITHUB_ENV"
           mkdir -p packages/pi-enhanced/swe-stub
       - run: npm run smoke:docker --workspace=@wz-agent/pi-enhanced
