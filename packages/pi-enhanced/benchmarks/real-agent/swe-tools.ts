@@ -4,7 +4,8 @@ import { registerInputAudit } from "./input-audit.ts";
 import { sweWritePathAllowed } from "./swe-patch.ts";
 
 export default function sweTools(pi: ExtensionAPI): void {
-	pi.on("before_agent_start", (event) => {
+	pi.on("before_agent_start", (event, ctx) => {
+		if (ctx.model?.id !== "deepseek-flash") return;
 		event.systemPromptOptions.sections.docs =
 			"当前 SWE-bench 任务仓库位于 <cwd> 指定的目录。文件工具的 path 使用相对于该目录的路径，搜索整个任务仓库时使用 `.`。";
 	});
