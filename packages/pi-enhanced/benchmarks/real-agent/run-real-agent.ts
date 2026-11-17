@@ -232,7 +232,8 @@ export async function main(): Promise<void> {
 	let taskPairExpected: TaskPairInput | undefined;
 	if (taskPairExpectedPath) {
 		const input = JSON.parse(readFileSync(taskPairExpectedPath, "utf8"));
-		if (flashInstance) taskPairExpected = readSweFlashOffInputs(input)[flashInstance.instanceId];
+		if (swe?.admission === "instances" && flashInstance)
+			taskPairExpected = readSweFlashOffInputs(input, swe.configuration.instances)[flashInstance.instanceId];
 		else if (swe?.admission === "task") taskPairExpected = readSweProTaskInputs(input)[taskMode as "v1" | "v2"];
 		else if (swe?.admission === "all") taskPairExpected = readSweModeInputs(input)[taskMode as "off" | "v1" | "v2"];
 		else taskPairExpected = readTaskPairInput(input);

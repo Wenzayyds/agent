@@ -101,7 +101,7 @@ export function loadTaskPairAuthorization(
 	)
 		throw new Error("TASK_PAIR_AUTHORIZATION_INVALID_OR_EXPIRED");
 	const input = swe?.admission === "instances" ? undefined : readTaskPairInput(grant.input);
-	if (swe?.admission === "instances") readSweFlashOffInputs(grant.instanceInputs);
+	if (swe?.admission === "instances") readSweFlashOffInputs(grant.instanceInputs, swe.configuration.instances);
 	if (swe?.admission === "all") {
 		const inputs = readSweModeInputs(grant.modeInputs);
 		if (!isDeepStrictEqual(inputs.off, grant.input)) throw new Error("SWE_AUTHORIZATION_INPUT_MISMATCH");
@@ -169,8 +169,10 @@ export function claimTaskPairCell(path: string, grant: TaskPairAuthorization, ce
 }
 
 /** Every OFF authorization binds one selected issue to its own calibrated request. */
-export function readSweFlashOffInputs(value: unknown): Record<string, TaskPairInput> {
-	const { instances } = SWE_FLASH_OFF_CONFIGURATION;
+export function readSweFlashOffInputs(
+	value: unknown,
+	instances: (typeof SWE_FLASH_OFF_CONFIGURATION)["instances"] = SWE_FLASH_OFF_CONFIGURATION.instances,
+): Record<string, TaskPairInput> {
 	if (!value || typeof value !== "object" || Object.keys(value).length !== instances.length)
 		throw new Error("SWE_INSTANCE_INPUTS_INVALID");
 	const inputs = value as Record<string, TaskPairInput>;

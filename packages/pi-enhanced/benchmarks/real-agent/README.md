@@ -19,6 +19,18 @@ node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/run-c
 
 实际宿主授权沿用现有的 Commit、CI、配置散列、批次、输出和有效期绑定。该配置的授权文件用 `instanceInputs` 替代 `input` 与 `modeInputs`，键是完整的 SWE-bench `instance_id`，值是该题单独校准的 `TaskPairInput`。批次和每题各有独占消费记录。输入不匹配时 Gateway 拒绝该题首请求，并停止批次。
 
+## 单题 Flash OFF
+
+`swe-flash-off-single-v1` 要求显式提供 `--swebench-id astropy__astropy-13033`，只准备和执行这一题。单题和批次费用上限均为 USD 0.08，请求、Token 和时间上限沿用五题配置的单题上限。先预览并核对配置散列与唯一题号。
+
+```bash
+node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts \
+  --comparison-profile swe-flash-off-single-v1 \
+  --swebench-id astropy__astropy-13033 --swebench-mirror "$MIRROR"
+```
+
+正式执行使用 `swe_flash_single_` 开头的唯一批次 ID，追加 `--execute --batch-id "$BATCH_ID" --output-dir "$OUTPUT_BASE" --ci-evidence "$CI_EVIDENCE" --task-pair-authorization "$GRANT"`，并由操作者设置 `PI_ENHANCED_REAL_MODEL_EVAL=1`。使用干净检出及该提交的 CI 证据。新授权的 `instanceInputs` 只包含 `astropy__astropy-13033` 的首请求指纹。该入口只有一次执行机会，停止后不会重试或改跑其他题目。官方 Harness 独立启动，只提交成功导出的非空补丁，由官方结果判定是否 resolved。
+
 本地验证可把 `PI_ENHANCED_SWE_LOCAL_MIRROR` 指向包含五个基线提交的 Astropy 镜像，然后运行 `swebench-stub.test.ts`。若设置 `PI_ENHANCED_SWE_FLASH_OFF_EVIDENCE` 为现有的证据目录，测试会保留批次与预测。每题结果位于 `<batchId>/<batchId>_off_<issue>/swebench/`，其中的 `predictions.jsonl` 和 `result.json` 可交给现有 `swebench.ts` 在独立目录判分。
 
 ## 调用关系

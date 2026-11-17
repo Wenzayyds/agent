@@ -110,6 +110,17 @@ export const SWE_FLASH_OFF_CONFIGURATION = Object.freeze({
 	moduleTools: { off: [] },
 });
 
+export const SWE_FLASH_OFF_SINGLE_PROFILE = "swe-flash-off-single-v1";
+const flashOffSingleInstance = flashOffInstances.find(({ instanceId }) => instanceId === "astropy__astropy-13033")!;
+const flashOffSingleCells = flashOffCells.filter(({ id }) => id === flashOffSingleInstance.cellId);
+export const SWE_FLASH_OFF_SINGLE_CONFIGURATION = Object.freeze({
+	...SWE_FLASH_OFF_CONFIGURATION,
+	profile: SWE_FLASH_OFF_SINGLE_PROFILE,
+	cells: flashOffSingleCells.map(({ id, taskId, variant }) => ({ id, taskId, variant })),
+	limits: { ...SWE_FLASH_OFF_CONFIGURATION.limits, maxRuns: 1, maxBatchCostUsd: 0.08 },
+	instances: [flashOffSingleInstance],
+});
+
 // CLI and authorization share the same mode list, configuration and admission shape.
 const profiles = [
 	{
@@ -134,6 +145,12 @@ const profiles = [
 		configuration: SWE_FLASH_OFF_CONFIGURATION,
 		cells: flashOffCells,
 		batchIdPattern: /^swe_flash_off_[a-z0-9_]{4,20}$/u,
+		admission: "instances",
+	},
+	{
+		configuration: SWE_FLASH_OFF_SINGLE_CONFIGURATION,
+		cells: flashOffSingleCells,
+		batchIdPattern: /^swe_flash_single_[a-z0-9_]{4,20}$/u,
 		admission: "instances",
 	},
 ] as const;

@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TASK_PAIR_CONFIGURATION } from "../../benchmarks/real-agent/batch-l-profile.ts";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
-import { SWE_FLASH_OFF_CONFIGURATION, SWE_FLASH_OFF_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
+import { SWE_FLASH_OFF_CONFIGURATION, SWE_FLASH_OFF_PROFILE, SWE_FLASH_OFF_SINGLE_CONFIGURATION, SWE_FLASH_OFF_SINGLE_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import { SWE_PRO_OFF_CONFIGURATION, SWE_PRO_OFF_PROFILE, SWE_PRO_TASK_CONFIGURATION, SWE_PRO_TASK_PROFILE, SWE_TASK_CONFIGURATION, SWE_TASK_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
@@ -105,6 +105,73 @@ describe("Task pair offline entry", () => {
 		expect(invoke("run-controlled.ts", [...args, "--swebench-id", "astropy__astropy-13033"]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
 		expect(invoke("run-real-agent.ts", [...args, "--swebench-id", "astropy__astropy-12907", "--task-mode", "off", "--execute"]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
 	});
+
+	it("previews only 13033 and requires a separate single-instance grant on the matching commit", () => {
+		const configuration = SWE_FLASH_OFF_SINGLE_CONFIGURATION;
+		const { instanceId, cellId, baseCommit, userPromptSha256 } = configuration.instances[0]!;
+		const args = ["--comparison-profile", SWE_FLASH_OFF_SINGLE_PROFILE, "--swebench-mirror", root];
+		const selected = [...args, "--swebench-id", instanceId];
+		const preview = invoke("run-controlled.ts", selected);
+		expect(preview.status, preview.stderr).toBe(0);
+		const { commit } = JSON.parse(preview.stdout);
+		expect(JSON.parse(preview.stdout)).toMatchObject({
+			configurationSha256: digest(configuration),
+			limits: { maxRuns: 1, maxCostUsd: 0.08, maxBatchCostUsd: 0.08, maxRequests: 20, maxTokens: 200_000, timeoutMs: 600_000 },
+			cells: [{ id: cellId, instanceId: "astropy__astropy-13033" }],
+		});
+		expect(invoke("run-controlled.ts", args).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
+		const otherId = "astropy__astropy-13453";
+		const wrongInstance = [...args, "--swebench-id", otherId, "--execute"];
+		expect(invoke("run-controlled.ts", wrongInstance).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
+		expect(invoke("run-real-agent.ts", [...wrongInstance, "--task-mode", "off"]).stderr).toContain("SWE_EXPERIMENT_SCOPE_INVALID");
+		expect(invoke("run-controlled.ts", [...selected, "--execute"]).stderr).toContain("TASK_PAIR_REAL_AUTHORIZATION_REQUIRED");
+
+		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-flash-single-grant-")));
+		try {
+			const path = join(dir, "grant.json"), ciPath = join(dir, "ci.json");
+			const input = {
+				fixtureSha256: "a".repeat(64), fixtureCommit: baseCommit, userPromptSha256,
+				systemPromptSha256: "b".repeat(64), toolSchemaSha256: "c".repeat(64), firstRequestSha256: "d".repeat(64),
+			};
+			const grant = {
+				schemaVersion: 1, status: "authorized", authorizationId: "00000000-0000-4000-8000-000000000006",
+				profile: SWE_FLASH_OFF_SINGLE_PROFILE, commit, batchId: "swe_flash_single_fixture",
+				outputBase: dir, expiresAt: new Date(Date.now() + 60_000).toISOString(), ciRunId: 1,
+				configurationSha256: digest(configuration), instanceInputs: { [instanceId]: input },
+			};
+			writeFileSync(ciPath, JSON.stringify({
+				commit, conclusion: "success", runId: 1, runUrl: "https://github.com/Wenzayyds/agent/actions/runs/1",
+				jobs: ["offline-engineering (ubuntu-latest)", "offline-engineering (windows-latest)", "docker-isolation"]
+					.map((name) => ({ name, conclusion: "success" })),
+			}));
+			const load = () => loadTaskPairAuthorization(path, root, commit, grant.batchId, ciPath, SWE_FLASH_OFF_SINGLE_PROFILE);
+			for (const invalid of [
+				{ ...grant, commit: "0".repeat(40) },
+				{ ...grant, profile: SWE_FLASH_OFF_PROFILE, configurationSha256: digest(SWE_FLASH_OFF_CONFIGURATION) },
+				{ ...grant, instanceInputs: { [otherId]: input } },
+				{ ...grant, instanceInputs: { ...grant.instanceInputs, [otherId]: input } },
+			]) {
+				writeFileSync(path, JSON.stringify(invalid));
+				expect(load).toThrow();
+			}
+			writeFileSync(path, JSON.stringify(grant));
+			const loaded = load();
+			const output = join(dir, grant.batchId);
+			mkdirSync(output);
+			claimTaskPairAuthorization(path, loaded);
+			expect(() => claimTaskPairAuthorization(path, loaded)).toThrow();
+			writeFileSync(join(output, "batch.json"), JSON.stringify({
+				commit, batchId: grant.batchId, comparisonProfile: grant.profile,
+				authorization: { id: grant.authorizationId }, stoppedReason: null,
+				cells: [{ id: cellId, instanceId, resultStatus: "run" }],
+			}));
+			expect(() => claimTaskPairCell(path, loaded, "off_13453", output)).toThrow("TASK_PAIR_CELL_ORDER_INVALID");
+			claimTaskPairCell(path, loaded, cellId, output);
+			expect(() => claimTaskPairCell(path, loaded, cellId, output)).toThrow();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
 
 	it("binds Pro V1/V2 to a distinct grant, two fingerprints and ordered one-use cells", () => {
 		const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-swe-pro-task-grant-")));

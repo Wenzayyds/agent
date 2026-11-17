@@ -25,7 +25,7 @@ import {
 } from "./controlled-policy.ts";
 import { digest } from "./evaluation-identity.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
-import { resolveSweProfile, type SWE_TASK_LIMITS } from "./swe-profile.ts";
+import { resolveSweProfile, SWE_FLASH_OFF_SINGLE_PROFILE, type SWE_TASK_LIMITS } from "./swe-profile.ts";
 import {
 	claimTaskPairAuthorization,
 	loadTaskPairAuthorization,
@@ -48,7 +48,9 @@ const sweId = argument("--swebench-id");
 const sweMirror = argument("--swebench-mirror");
 const flash = swe?.admission === "instances" ? swe : undefined;
 if (swe && (!sweMirror || (swe.admission === "instances"
-	? process.argv.includes("--swebench-id")
+	? swe.configuration.profile === SWE_FLASH_OFF_SINGLE_PROFILE
+		? sweId !== swe.configuration.instances[0]!.instanceId
+		: process.argv.includes("--swebench-id")
 	: sweId !== swe.configuration.instanceId))) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 if (!swe && (sweId || sweMirror)) throw new Error("SWE_EXPERIMENT_SCOPE_INVALID");
 let CONTROLLED_LIMITS = swe

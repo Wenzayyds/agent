@@ -1,11 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { CONTROLLED_IMAGE } from "../../benchmarks/real-agent/controlled-cases.ts";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
-import { SWE_FLASH_OFF_CONFIGURATION, SWE_FLASH_OFF_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
+import { SWE_FLASH_OFF_CONFIGURATION, SWE_FLASH_OFF_PROFILE, SWE_FLASH_OFF_SINGLE_PROFILE } from "../../benchmarks/real-agent/swe-profile.ts";
 import { loadSweTask, swePrompt } from "../../benchmarks/real-agent/swebench.ts";
 import { readSweFlashOffInputs } from "../../benchmarks/real-agent/task-pair-authorization.ts";
 import { close, dockerImageAvailable, startStubProvider, textSse, toolCallSse, toolCallsSse } from "../fixtures/runner-support.ts";
@@ -39,6 +39,7 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 		return { instanceId, prompt: swePrompt(task.issue.problem_statement), line };
 	});
 	const calls: string[] = [];
+	let probeOutsideWorkspace = false;
 	const provider = await startStubProvider((body, response) => {
 		const messages = body.messages as Array<{ role: string; content: unknown }>;
 		const system = messages.find((message) => message.role === "system")?.content;
@@ -58,6 +59,11 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 			.toEqual(["edit", "find", "grep", "ls", "read", "write"]);
 		const toolResults = messages.filter((message) => message.role === "tool");
 		response.writeHead(200, { "Content-Type": "text/event-stream" });
+		if (probeOutsideWorkspace) {
+			expect(toolResults).toHaveLength(0);
+			response.end(toolCallSse("read", { path: join(root, "packages", "coding-agent", "package.json") }, 100, 10));
+			return;
+		}
 		if (task.instanceId === rootSearchId) {
 			if (toolResults.length === 0) {
 				// Replay the paid attempt's first tool turn against the same base commit.
@@ -81,11 +87,12 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 		expect(JSON.stringify(toolResults.at(-1)?.content)).toContain("Successfully");
 		response.end(textSse("Stub done.", 100, 10));
 	});
-	const run = async (suffix: string, overrides: string[] = []) => {
-		const id = `swe_flash_off_${suffix}`;
+	const run = async (suffix: string, overrides: string[] = [], single = false) => {
+		const id = single ? `swe_flash_single_${suffix}` : `swe_flash_off_${suffix}`;
 		const child = spawn(process.execPath, [
 			"--experimental-strip-types", join(root, "packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts"),
-			"--execute", "--comparison-profile", SWE_FLASH_OFF_PROFILE, "--swebench-mirror", mirror!,
+			"--execute", "--comparison-profile", single ? SWE_FLASH_OFF_SINGLE_PROFILE : SWE_FLASH_OFF_PROFILE,
+			"--swebench-mirror", mirror!, ...(single ? ["--swebench-id", rootSearchId] : []),
 			"--batch-id", id, "--output-dir", dir, "--local-stub-url", provider.url, ...overrides,
 		], {
 			cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
@@ -150,11 +157,60 @@ it.skipIf(!available)("runs all five Flash OFF instances with distinct admission
 		expect(JSON.parse(readFileSync(join(resultDir("mismatch", cellId), "input-admission.json"), "utf8"))).toMatchObject({
 			status: "denied", upstreamForwarded: false, previouslyForwarded: 0,
 		});
+
+		const singleInput = inputs[rootSearchId]!;
+		const singleExpected = join(dir, "single-expected.json");
+		writeFileSync(singleExpected, JSON.stringify({ [rootSearchId]: singleInput }), { flag: "wx" });
+		const singleStart = calls.length;
+		const single = await run("matched", ["--task-pair-expected-input", singleExpected], true);
+		const singleCell = instances[0]!.cellId;
+		const singleDir = (suffix: string) => join(dir, `swe_flash_single_${suffix}`, `swe_flash_single_${suffix}_${singleCell}`);
+		const readEvidence = (suffix: string, file: string) => JSON.parse(readFileSync(join(singleDir(suffix), file), "utf8"));
+		expect(single).toMatchObject({ stoppedReason: null, reservedMaximumUsd: 0.08,
+			limits: { maxRuns: 1, maxCostUsd: 0.08, maxBatchCostUsd: 0.08 },
+			batchLimits: { maxRequests: 20, maxTokens: 200_000, maxCostUsd: 0.08 },
+			cells: [{ id: singleCell, instanceId: rootSearchId, continuationReady: true,
+				result: { instanceId: rootSearchId, patchExportStatus: "exported", officialHarnessStatus: "not_run", resolved: null } }],
+		});
+		expect(calls.slice(singleStart)).toEqual([rootSearchId, rootSearchId, rootSearchId]);
+		expect(readdirSync(join(dir, single.batchId)).sort()).toEqual(["batch.json", `${single.batchId}_${singleCell}`]);
+		expect(readEvidence("matched", "swebench/input-admission.json")).toMatchObject({ status: "matched", input: singleInput });
+		expect(readEvidence("matched", "host-cleanup.json")).toMatchObject({
+			childClosed: true, childAbsent: true, containersRemoved: true, gatewayClosed: true,
+			gatewayActiveRequests: 0, reservedTokens: 0, reservedCostUsd: 0, privateRootRemoved: true,
+		});
+
+		const singleMismatch = join(dir, "single-mismatch.json");
+		writeFileSync(singleMismatch, JSON.stringify({ [rootSearchId]: { ...singleInput, firstRequestSha256: "0".repeat(64) } }), { flag: "wx" });
+		const blockedStart = calls.length;
+		expect(await run("mismatch", ["--task-pair-expected-input", singleMismatch], true)).toMatchObject({
+			stoppedReason: "task_pair_input_admission_failed", cells: [{ instanceId: rootSearchId, status: "execution_error" }],
+		});
+		expect(readEvidence("mismatch", "swebench/input-admission.json")).toMatchObject({
+			status: "denied", upstreamForwarded: false, previouslyForwarded: 0, reason: "TASK_PAIR_INPUT_FINGERPRINT_MISMATCH",
+		});
+
+		const tokenCap = join(dir, "single-token-cap.json");
+		writeFileSync(tokenCap, JSON.stringify({ maxRequests, maxTokens: 1, maxCostUsd, timeoutMs, maxBatchCostUsd: 0.08 }), { flag: "wx" });
+		await run("blocked", ["--swe-stub-limits", tokenCap], true);
+		expect(readEvidence("blocked", "swebench/gateway-final.json")).toMatchObject({
+			requestsCompleted: 0, denials: [expect.objectContaining({ code: "GATEWAY_TOKEN_BUDGET", upstreamForwarded: false })],
+		});
+		expect(calls).toHaveLength(blockedStart);
+
+		probeOutsideWorkspace = true;
+		const outside = await run("outside", ["--task-pair-expected-input", singleExpected], true);
+		expect(calls.slice(blockedStart)).toEqual([rootSearchId]);
+		expect(outside.cells[0].result).toMatchObject({
+			resolved: null, officialHarnessStatus: "not_run", safetyEvents: [expect.objectContaining({
+				classification: "isolation_boundary_stop", reasonCode: expect.stringMatching(/^(?:path-outside-workspace|SANDBOX_PATH_ESCAPE)$/u),
+			})],
+		});
 	} finally {
 		await close(provider.server);
 		if (!evidence) rmSync(dir, { recursive: true, force: true });
 	}
-}, 240_000);
+}, 360_000);
 
 afterAll(() => {
 	if (!available) return;
