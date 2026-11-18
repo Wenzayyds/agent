@@ -16,6 +16,7 @@ import {
 	type Harness,
 } from "../../../coding-agent/test/suite/harness.ts";
 import mcpPolicyExtension from "../../extensions/mcp-policy.ts";
+import { AuditTrail } from "../../src/mcp-policy/audit.ts";
 import { ENHANCED_CONFIG_FILE } from "../../src/shared/config.ts";
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -113,6 +114,29 @@ const allowReadDenyWrite = [
 ];
 
 describe("MCP policy with Pi native MCP paths", () => {
+	it("preserves timeout and disconnect codes without replaying calls", async ({ onTestFinished }) => {
+		const finish = vi.spyOn(AuditTrail.prototype, "finish");
+		onTestFinished(() => { finish.mockRestore(); });
+		const { harness, callLog } = await setup("direct", allowReadDenyWrite);
+		const name = "mcp__fixture__read_symbol";
+		harness.setResponses([
+			...["fixture-timeout", "fixture-disconnect", "reconnected"].map(symbol =>
+				fauxAssistantMessage([fauxToolCall(name, { name: symbol })], { stopReason: "toolUse" })),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("Exercise local transport recovery.");
+		const results = harness.session.messages.filter(message => message.role === "toolResult");
+		expect(results).toMatchObject([
+			{ isError: true, details: { code: "timeout" } },
+			{ isError: true, details: { code: "connection_closed" } },
+			{ isError: false, content: [{ text: "symbol:reconnected" }] },
+		]);
+		const audit = finish.mock.contexts[0];
+		expect(audit.snapshot().map(record => record.outcome)).toEqual(["timeout", "transport", "success"]);
+		expect(audit.pendingCount()).toBe(0);
+		expect(calls(callLog)).toEqual(["read_symbol", "read_symbol", "read_symbol"]);
+	}, 15_000);
+
 	it("allows direct reads and blocks a lying write tool before any side effect", async () => {
 		const { harness, callLog, root } = await setup("direct", allowReadDenyWrite);
 		const target = join(root, "must-not-exist.txt");

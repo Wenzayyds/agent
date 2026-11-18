@@ -53,6 +53,25 @@ describe("P2-1/P2-2 Memory Extension lifecycle", () => {
 		expect(existsSync(join(agentDir, "pi-enhanced", "memory"))).toBe(false);
 	});
 
+	it.each([
+		['{"modules":{"memory":{"enabled":"incorrect"}}}', 'boolean "enabled" field'],
+		["invalid-private-fixture", "invalid JSON"],
+	])("reports invalid Memory configuration without opening storage", async (contents, reason) => {
+		const { harness, agentDir } = await setup({ enabled: true, trusted: true });
+		writeFileSync(join(agentDir, ENHANCED_CONFIG_FILE), contents);
+		const notices: string[] = [];
+		await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext({
+			notify: message => notices.push(message),
+		}) });
+		const runner = harness.session.extensionRunner;
+		await runner.getCommand("enhanced-memory-status")!.handler("", runner.createCommandContext());
+		expect(notices.at(-1)).toContain("pi-enhanced memory: error");
+		expect(notices.at(-1)).toContain(reason);
+		expect(notices.at(-1)).not.toContain("invalid-private-fixture");
+		expect(harness.session.getAllTools().some(tool => tool.name === "enhanced_memory_search")).toBe(false);
+		expect(existsSync(join(agentDir, "pi-enhanced", "memory"))).toBe(false);
+	});
+
 	it("opens trusted storage, survives reload, and closes repeatedly", async () => {
 		const agentDir = join(tempDir(), "agent");
 		enableMemory(agentDir);

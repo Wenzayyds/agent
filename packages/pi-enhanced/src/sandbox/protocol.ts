@@ -1,4 +1,5 @@
 export const SANDBOX_PROTOCOL_VERSION = 1 as const;
+export const SANDBOX_RESTORE_CHECK = "pi-enhanced:sandbox:context-restore-check";
 export const SANDBOX_ALLOWED_TOOLS = ["read", "grep", "find", "ls", "write", "edit"] as const;
 
 export type SandboxToolName = (typeof SANDBOX_ALLOWED_TOOLS)[number];

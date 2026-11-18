@@ -16,7 +16,9 @@ import type { ImageContent, JsonValue, TextContent } from "@earendil-works/pi-ai
 import {
 	type CallToolResult,
 	type ContentBlock,
+	McpConnectionClosedError,
 	type McpRequestOptions,
+	McpTimeoutError,
 	type Tool as McpTool,
 	toLlmContent,
 } from "@earendil-works/pi-mcp";
@@ -57,6 +59,7 @@ export { READ_MCP_RESOURCE_TOOL };
 export interface McpToolDetails {
 	server: string;
 	tool: string;
+	code?: "timeout" | "connection_closed";
 	/** Temp file with the full text output, when the model-facing text was truncated. */
 	fullOutputPath?: string;
 }
@@ -335,16 +338,26 @@ export function createMcpToolDefinition(options: {
 		...(annotations ? { annotations } : {}),
 		...createMcpToolRenderers(label),
 		async execute(_toolCallId, params, signal, onUpdate) {
-			const client = await options.getClient();
-			const result = await client.callTool(tool.name, (params ?? {}) as Record<string, unknown>, {
-				signal,
-				timeoutMs: options.timeoutMs,
-				onProgress: (progress) => {
-					const total = progress.total === undefined ? "" : `/${progress.total}`;
-					const text = progress.message ?? `Progress ${progress.progress}${total}`;
-					onUpdate?.({ content: [{ type: "text", text }], details: { server, tool: tool.name } });
-				},
-			});
+			let result: CallToolResult;
+			try {
+				const client = await options.getClient();
+				result = await client.callTool(tool.name, (params ?? {}) as Record<string, unknown>, {
+					signal,
+					timeoutMs: options.timeoutMs,
+					onProgress: (progress) => {
+						const total = progress.total === undefined ? "" : `/${progress.total}`;
+						const text = progress.message ?? `Progress ${progress.progress}${total}`;
+						onUpdate?.({ content: [{ type: "text", text }], details: { server, tool: tool.name } });
+					},
+				});
+			} catch (error) {
+				if (!(error instanceof McpTimeoutError || error instanceof McpConnectionClosedError)) throw error;
+				return {
+					isError: true,
+					content: [{ type: "text", text: error.message }],
+					details: { server, tool: tool.name, code: error instanceof McpTimeoutError ? "timeout" : "connection_closed" },
+				};
+			}
 			return convertMcpResult(server, tool.name, result, { readableResources: options.readableResources?.() });
 		},
 	};

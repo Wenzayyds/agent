@@ -50,6 +50,8 @@ for await (const line of lines) {
 	} else if (message.method === "tools/call") {
 		const { name, arguments: args = {} } = message.params;
 		if (auditPath) appendFileSync(auditPath, `${JSON.stringify({ name })}\n`);
+		if (name === "read_symbol" && args.name === "fixture-timeout") continue;
+		if (name === "read_symbol" && args.name === "fixture-disconnect") process.exit(1);
 		if (name === "write_file" || name === "new_write") writeFileSync(args.path, args.content ?? "changed");
 		if (name === "refresh_tools") {
 			refreshed = true;

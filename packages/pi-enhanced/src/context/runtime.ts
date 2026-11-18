@@ -82,10 +82,10 @@ export class ContextRuntime {
 			let view = messages;
 			let activeTaskId: string | undefined;
 			let offloaded: ReadonlySet<string> | undefined;
-			if (this.offloadEnabled && canRestore) {
+			if (this.offloadEnabled && (canRestore || this.config.memoryInjection.enabled)) {
 				try {
 					activeTaskId = await this.activeTaskId(ctx);
-					if (activeTaskId) {
+					if (activeTaskId && canRestore) {
 						const projected = offloadProjection(
 							messages,
 							ctx,
@@ -106,7 +106,10 @@ export class ContextRuntime {
 				offloaded,
 				budget: this.config.budget,
 				...(contextWindow === undefined ? {} : { contextWindow }),
-				toolOutput: this.config.toolOutput,
+				// Keep redaction active when the original cannot be paged back in.
+				toolOutput: this.offloadEnabled && !canRestore
+					? { ...this.config.toolOutput, maximumTextCharacters: Infinity }
+					: this.config.toolOutput,
 			});
 			let output = selection.messages;
 			let injectedMemoryIds: readonly string[] = [];

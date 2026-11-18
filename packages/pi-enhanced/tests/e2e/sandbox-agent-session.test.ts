@@ -8,6 +8,8 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createHarness, getToolResult, type Harness } from "../../../coding-agent/test/suite/harness.ts";
 import { removeRunContainers } from "../../benchmarks/real-agent/runner-cleanup.ts";
+import { createContextExtension } from "../../src/context/extension.ts";
+import { CONTEXT_RESTORE } from "../../src/context/offload.ts";
 import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { createSandboxExtension } from "../../src/sandbox/extension.ts";
 import { createSandboxFixture, dockerImageAvailable, sandboxConfigForTesting } from "../fixtures/runner-support.ts";
@@ -65,6 +67,36 @@ describe.skipIf(!dockerAvailable)("real AgentSession Docker file tools", () => {
 			encoding: "utf8",
 			timeout: 10_000,
 		}).trim()).toBe("true");
+	});
+
+	it("keeps the full read result when the sandbox blocks Context restore", async () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "pi-context-agent-"));
+		externalRoots.push(agentDir);
+		writeFileSync(join(agentDir, "pi-enhanced.json"), JSON.stringify({ modules: { context: {
+			enabled: true, mode: "select", toolOutput: { enabled: true, offload: true, maximumTextCharacters: 600 },
+		} } }));
+		const harness = await createHarness({ extensionFactories: [
+			createContextExtension({ agentDir }),
+			createSandboxExtension(cwd => sandboxConfigForTesting({ workspace: cwd, runId: `context-${randomUUID()}` }), broker => brokers.push(broker)),
+		] });
+		harnesses.push(harness);
+		harness.settingsManager.setProjectTrusted(true);
+		const original = "a".repeat(900) + "middle-evidence" + "b".repeat(900);
+		writeFileSync(join(harness.tempDir, "fixture.txt"), original);
+		await harness.session.bindExtensions({});
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("read", { path: "fixture.txt" })], { stopReason: "toolUse" }),
+			request => {
+				const result = JSON.stringify(request.messages.find(message => message.role === "toolResult"));
+				expect(result).toContain(original);
+				expect(result).not.toMatch(/v1:[a-f0-9]{64}/u);
+				return fauxAssistantMessage([fauxToolCall(CONTEXT_RESTORE, { reference: "v1:" + "0".repeat(64) })], { stopReason: "toolUse" });
+			},
+			fauxAssistantMessage("Done"),
+		]);
+		await harness.session.prompt("Read the fixture.");
+		expect(harness.getPendingResponseCount()).toBe(0);
+		expect(getToolResult(harness, CONTEXT_RESTORE).isError).toBe(true);
 	});
 
 	it("dispatches all six overridden Pi tools through the restricted container", async () => {

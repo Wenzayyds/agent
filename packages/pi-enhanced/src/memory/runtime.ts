@@ -26,6 +26,7 @@ export interface MemoryRuntime extends MemoryRuntimeInfo {
 
 export interface StartMemoryRuntimeOptions extends Omit<ProjectScopeOptions, "platform" | "realpath"> {
 	enabled: boolean;
+	configurationErrors?: readonly string[];
 	intelligenceConfig?: MemoryIntelligenceConfig;
 	governanceConfig?: MemoryGovernanceConfig;
 	projectTrusted: boolean;
@@ -39,6 +40,7 @@ export interface StartMemoryRuntimeOptions extends Omit<ProjectScopeOptions, "pl
 }
 
 export async function startMemoryRuntime(options: StartMemoryRuntimeOptions): Promise<MemoryRuntime> {
+	if (options.configurationErrors?.length) return inertRuntime("error", options.configurationErrors.join("\n"));
 	if (!options.enabled) return inertRuntime("disabled");
 	if (!options.projectTrusted) return inertRuntime("blocked");
 

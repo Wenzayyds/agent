@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { registerAdaptiveRouter } from "../ccr/adaptive.ts";
 import { DockerSandboxBroker } from "./broker.ts";
 import { loadSandboxConfig, type SandboxConfig } from "./config.ts";
-import { SANDBOX_ALLOWED_TOOLS, type SandboxToolName } from "./protocol.ts";
+import { SANDBOX_ALLOWED_TOOLS, SANDBOX_RESTORE_CHECK, type SandboxToolName } from "./protocol.ts";
 import { isPytestConfig, pytestFileVersions } from "./pytest.ts";
 import { registerPytestTool, registerSandboxTools } from "./tools.ts";
 
@@ -49,6 +49,9 @@ export function createSandboxExtension(
 		}, () => policy.tests, (file) => {
 			try { return config && broker?.toRelative(resolve(config.workspace, file)); } catch { return undefined; }
 		}) : undefined;
+		pi.events.on(SANDBOX_RESTORE_CHECK, (deny) => {
+			if ((broker || adaptive) && typeof deny === "function") deny();
+		});
 		pi.on("tool_call", (event) => {
 			if (adaptive && (!broker || !runTestsActive || !config?.trusted))
 				return { block: true, reason: "CCR auto requires a trusted Sandbox and pytest policy" };

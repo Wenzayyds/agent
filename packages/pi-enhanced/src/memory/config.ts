@@ -80,7 +80,7 @@ function readPatch(path: string, errors: string[]): MemoryConfigPatch | undefine
 	try {
 		value = JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
-		errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+		errors.push(`${path}: ${error instanceof SyntaxError ? "invalid JSON" : "cannot read configuration file"}`);
 		return undefined;
 	}
 	if (!isRecord(value) || !isRecord(value.modules)) return undefined;

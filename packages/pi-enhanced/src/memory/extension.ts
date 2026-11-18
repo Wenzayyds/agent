@@ -59,6 +59,7 @@ function registerMemoryExtension(pi: ExtensionAPI, options: MemoryExtensionOptio
 		});
 		const next = await startMemoryRuntime({
 			enabled: loaded.config.enabled,
+			configurationErrors: loaded.errors,
 			intelligenceConfig: loaded.config.intelligence,
 			governanceConfig: loaded.config.governance,
 			projectTrusted: ctx.isProjectTrusted(),

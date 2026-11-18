@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { requestScopedMemoryReader } from "../memory/reader.ts";
+import { SANDBOX_RESTORE_CHECK } from "../sandbox/protocol.ts";
 import { requestScopedTaskReader } from "../task-manager/reader.ts";
 import { loadContextConfig } from "./config.ts";
 import type { ContextDiagnostics, ContextMessage, ContextModuleConfig, ContextRuntimeState } from "./contracts.ts";
@@ -134,7 +135,11 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 		const current = runtime;
 		if (!current) return undefined;
 		const hostRestore = options.hostRestore;
-		const messages = await current.transform(event.messages, ctx, pi.getActiveTools().includes(CONTEXT_RESTORE),
+		let restoreActive = pi.getActiveTools().includes(CONTEXT_RESTORE);
+		if (restoreActive && current.offloadEnabled) {
+			pi.events.emit(SANDBOX_RESTORE_CHECK, () => { restoreActive = false; });
+		}
+		const messages = await current.transform(event.messages, ctx, restoreActive,
 			hostRestore && {
 				page: hostRestore.page,
 				onResult: (result) => {
