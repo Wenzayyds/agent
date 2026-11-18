@@ -177,6 +177,8 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 		"identity",
 		"container",
 		"container-denial",
+		"grep-input",
+		"grep-worker-unavailable",
 		"symlink",
 		"unknown",
 	])("enforces %s through real Pi, gateway and Docker", { timeout: 120_000 }, async (mode, context) => {
@@ -186,6 +188,7 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 		const batchId = `batch_j_${mode}_test`;
 		let calls = 0;
 		let denialSeen = false;
+		const grepFeedback: string[] = [];
 		let firstContainer = "";
 		let faultBlocked: unknown;
 		const server = createServer((request, response) => {
@@ -202,7 +205,7 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 				}
 				let name: string | null = "ls";
 				let args: Record<string, unknown> = { path: ".." };
-				if (["identity", "container", "container-denial", "symlink"].includes(mode)) {
+				if (["identity", "container", "container-denial", "grep-worker-unavailable", "symlink"].includes(mode)) {
 					const ids = execFileSync(
 						"docker",
 						["ps", "--filter", `name=pi-enhanced-tools-${batchId}_m_inline`, "--format", "{{.ID}}"],
@@ -219,7 +222,16 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 						name = "read";
 						args = { path: "key.js" };
 					}
-					if (mode.startsWith("container")) {
+					if (mode === "grep-worker-unavailable") {
+						expect(inspected.State.Running).toBe(true);
+						execFileSync("docker", ["kill", ids], { stdio: "ignore", timeout: 10_000 });
+						expect(execFileSync("docker", ["inspect", ids, "--format", "{{.State.Running}} {{.State.ExitCode}}"], {
+							encoding: "utf8",
+							timeout: 10_000,
+						}).trim()).toBe("false 137");
+						name = "grep";
+						args = { pattern: "trim", path: "key.js" };
+					} else if (mode.startsWith("container")) {
 						execFileSync("docker", ["rm", "-f", ids], { stdio: "ignore", timeout: 10_000 });
 						if (mode === "container") {
 							name = "read";
@@ -230,6 +242,10 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 						symlinkSync(root, join(workspace, "escape"), process.platform === "win32" ? "junction" : "dir");
 						args = { path: "escape" };
 					}
+				} else if (mode === "grep-input") {
+					if (results.length) grepFeedback.push(JSON.stringify(results.at(-1)?.content));
+					name = calls <= 2 ? "grep" : null;
+					args = { pattern: calls === 1 ? "[" : "value\\.trim\\(", path: "key.js" };
 				} else if (mode === "write") {
 					name = "write";
 					args = { path: "../forbidden.txt", content: "must not write" };
@@ -297,7 +313,7 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 					CONTROLLED_IMAGE,
 					"--output-dir",
 					root,
-					...(mode !== "strict" ? ["--offline-denial-policy", policy] : []),
+					...(mode !== "strict" && !mode.startsWith("grep-") ? ["--offline-denial-policy", policy] : []),
 				],
 				{ PI_ENHANCED_RECOVER_READONLY_DENIALS: "1" },
 			);
@@ -328,7 +344,20 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 					join(process.env.PI_ENHANCED_BATCH_J_OUTPUT, `${mode}.json`),
 					JSON.stringify({ ...task, testProviderCalls: calls, runnerStderr: result.stderr }, null, 2),
 				);
-			if (mode === "recover") {
+			if (mode === "grep-input") {
+				expect(faultBlocked).toBeUndefined();
+				expect(calls).toBe(3);
+				expect(grepFeedback).toHaveLength(2);
+				expect(grepFeedback[0]).toContain("Invalid grep regular expression");
+				expect(grepFeedback[0]).toContain("literal");
+				expect(grepFeedback[1]).toContain("value.trim()");
+				expect(task.gateway).toMatchObject({ state: "ready", requestsCompleted: 3, requestsRejected: 0 });
+				expect(task.auditComplete).toBe(true);
+				expect(task.sandboxAudit.audit).toMatchObject([
+					{ toolName: "grep", status: "error", errorCode: "SANDBOX_INVALID_GREP_PATTERN" },
+					{ toolName: "grep", status: "ok" },
+				]);
+			} else if (mode === "recover") {
 				expect(denialSeen).toBe(true);
 				expect(calls).toBe(4);
 				expect(task).toMatchObject({
@@ -346,16 +375,29 @@ describe.skipIf(!available)("Batch J production Runner and crash audit", () => {
 				expect(calls).toBe(mode === "limit" ? 2 : 1);
 				expect(task.gateway.lastError).toBe("GATEWAY_ISOLATION_STOP");
 				expect(task.terminationClassification).toBe(
-					["container", "container-denial"].includes(mode) ? "sandbox_runtime_error" : "isolation_boundary_stop",
+					["container", "container-denial", "grep-worker-unavailable"].includes(mode)
+						? "sandbox_runtime_error"
+						: "isolation_boundary_stop",
 				);
 				expect(task.patchGenerated).toBe(false);
 				expect(task.verifierPassed).toBe(false);
 				if (["strict", "write", "symlink", "limit"].includes(mode)) expect(task.sandboxAudit.audit).toHaveLength(0);
-				if (mode === "container")
+				if (mode === "container" || mode === "grep-worker-unavailable")
 					expect(task.sandboxAudit.audit[0]).toMatchObject({
 						status: "error",
 						errorCode: "SANDBOX_INVALID_RESPONSE",
 					});
+			}
+			if (mode.startsWith("grep-")) {
+				expect(faultBlocked).toBeUndefined();
+				const id = task.sandboxAudit.evidence.containerId;
+				expect(id).toMatch(/^[a-f0-9]{64}$/u);
+				expect(task.sandboxAudit).toMatchObject({
+					integrity: "valid",
+					evidence: { network: "none", readOnlyRoot: true },
+				});
+				expect(task.sandboxAudit.audit.every((record: { containerId: string }) => record.containerId === id)).toBe(true);
+				expect(spawnSync("docker", ["inspect", id], { stdio: "ignore", timeout: 10_000 }).status).toBe(1);
 			}
 			expect(task.gateway.requestsStarted).toBe(calls);
 			expect(task.gateway.actualTotalTokens).toBe(calls * 110);

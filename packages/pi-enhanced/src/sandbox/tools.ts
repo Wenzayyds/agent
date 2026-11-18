@@ -316,7 +316,12 @@ async function executeGrep(
 			limit: input.limit,
 		},
 		{ requestId: `${id}:grep`, signal },
-	)) as { rows: GrepRow[]; matchLimitReached?: number };
+	).catch((error: unknown) => {
+		// The broker retains the worker's error code in the audit.
+		if (error instanceof Error && error.message === "SANDBOX_INVALID_GREP_PATTERN")
+			throw new Error("Invalid grep regular expression. Correct the pattern or set literal to true for plain text.");
+		throw error;
+	})) as { rows: GrepRow[]; matchLimitReached?: number };
 	if (result.rows.length === 0)
 		return { content: [{ type: "text" as const, text: "No matches found" }], details: undefined };
 	const text = process.env.PI_ENHANCED_SWE_SINGLE_COMPACT_GREP === "1"

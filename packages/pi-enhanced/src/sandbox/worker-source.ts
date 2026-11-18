@@ -175,8 +175,17 @@ async function operate(request) {
       const item = await target(args.path || '.', { allowDot: true });
       const limit = Math.max(1, Math.min(Number(args.limit) || 100, 1000));
       const context = Math.max(0, Math.min(Number(args.context) || 0, 20));
-      const expression = args.literal ? null : new RegExp(String(args.pattern), args.ignoreCase ? 'iu' : 'u');
-      const needle = args.ignoreCase ? String(args.pattern).toLocaleLowerCase() : String(args.pattern);
+      const pattern = String(args.pattern);
+      let expression = null;
+      if (!args.literal) {
+        try {
+          expression = new RegExp(pattern, args.ignoreCase ? 'iu' : 'u');
+        } catch (error) {
+          if (error instanceof SyntaxError) fail('SANDBOX_INVALID_GREP_PATTERN');
+          throw error;
+        }
+      }
+      const needle = args.ignoreCase ? pattern.toLocaleLowerCase() : pattern;
       const matcher = args.glob ? globRegex(String(args.glob)) : null;
       const stat = await fsp.stat(item.absolute);
       const entries = stat.isDirectory() ? await walk(item.absolute, 5000) : [{ rel: path.basename(item.absolute), absolute: item.absolute, directory: false }];
@@ -224,8 +233,9 @@ async function operate(request) {
     const result = await operate(request);
     process.stdout.write(JSON.stringify({ protocolVersion: PROTOCOL, runId: request.runId, requestId: request.requestId, toolName: request.toolName, status: 'ok', result: { ...result, execution: { pid: process.pid, cwd: ROOT } } }));
   } catch (error) {
-    process.stdout.write(JSON.stringify({ protocolVersion: PROTOCOL, runId: request && request.runId, requestId: request && request.requestId, toolName: request && request.toolName, status: 'error', errorCode: error && error.code && String(error.code).startsWith('SANDBOX_') ? error.code : 'SANDBOX_WORKER_ERROR', errorMessage: 'sandbox worker rejected the operation' }));
-    process.exitCode = 1;
+    const errorCode = error && error.code && String(error.code).startsWith('SANDBOX_') ? error.code : 'SANDBOX_WORKER_ERROR';
+    process.stdout.write(JSON.stringify({ protocolVersion: PROTOCOL, runId: request && request.runId, requestId: request && request.requestId, toolName: request && request.toolName, status: 'error', errorCode, errorMessage: 'sandbox worker rejected the operation' }));
+    if (errorCode !== 'SANDBOX_INVALID_GREP_PATTERN') process.exitCode = 1;
   }
 })();
 `;
