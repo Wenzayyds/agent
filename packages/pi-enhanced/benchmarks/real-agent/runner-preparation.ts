@@ -17,6 +17,7 @@ import {
 	TASK_PAIR_PROFILE,
 } from "./batch-l-profile.ts";
 import { type ControlledCell, LONG_REPORT_TASK, longReport, MEMORY_RULE, TASK_STEPS } from "./controlled-cases.ts";
+import { CONTRACT_FILE, CONTRACT_TEXT } from "./config-contract.ts";
 import { digest } from "./evaluation-identity.ts";
 import type { EvaluationPlan } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_INSTRUCTIONS, NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
@@ -27,6 +28,7 @@ import { prepareSweWorkspace, type SweTask } from "./swe-workspace.ts";
 import type { SwePytestPolicy } from "./swe-test-feedback.ts";
 import type { TaskPairAuthorization, TaskPairInput } from "./task-pair-authorization.ts";
 export interface ExperimentTask {
+	contractSource?: "file" | "mcp";
 	id: string;
 	category: string;
 	prompt: string;
@@ -81,6 +83,7 @@ export function prepareWorkspace(
 	}
 	mkdirSync(cwd);
 	generate(task.id, cwd);
+	if (task.contractSource === "file") writeFileSync(join(cwd, CONTRACT_FILE), CONTRACT_TEXT);
 	if (v3Evaluation && task.id === "memory-guided-regression") {
 		writeFileSync(join(cwd, "project-rule.txt"), V3_MEMORY_RULE + "\n");
 		writeFileSync(join(cwd, "diagnostics.txt"), "Trace entry from the index checker.\n".repeat(30) +
@@ -112,7 +115,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		join(agentDir, "settings.json"),
 		JSON.stringify({
 			defaultProjectTrust: "always",
-			...(cell || task.swebench || context.testFeedback || context.recoveryPhase ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
+			...(cell || task.contractSource || task.swebench || context.testFeedback || context.recoveryPhase ? { retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } } } : {}),
 		}),
 	);
 	writeFileSync(
@@ -120,9 +123,11 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 		JSON.stringify({
 			modules: {
 				"mcp-policy": {
-					enabled: false,
-					defaultAction: "ask",
-					rules: [],
+					enabled: Boolean(task.contractSource),
+					defaultAction: task.contractSource ? "deny" : "ask",
+					rules: task.contractSource === "mcp"
+						? [{ id: "contract", server: "fixture", tool: "get_config_contract", action: "allow" }]
+						: [],
 					nativeToolGuard: { enabled: true, workspaceMutationAction: "allow", protectProjectMetadata: true },
 				},
 				memory: { enabled: switches.memory },

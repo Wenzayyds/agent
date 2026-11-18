@@ -11,6 +11,7 @@ import { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { assertSandboxWorkspaceIdentity, loadSandboxConfig } from "../../src/sandbox/config.ts";
 import { TASK_PAIR_CONFIGURATION, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import { type BudgetGatewayStatus, startBudgetGateway } from "./budget-gateway.ts";
+import { configureContractServer, contractEvidenceFetch, contractTools } from "./config-contract.ts";
 import { verifyPatchInDocker } from "./docker-verifier.ts";
 import { EvaluationTelemetry } from "./evaluation-telemetry.ts";
 import { gatewayModelsConfig, isolatedAgentEnvironment } from "./gateway-integration.ts";
@@ -86,6 +87,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	const handshakeNonce = process.env.PI_ENHANCED_SWE_STUB_PID_NONCE;
 	if (pidHandshake && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(handshakeNonce ?? ""))
 		throw new Error("SWE_STUB_PID_HANDSHAKE_NONCE_INVALID");
+	const contractSource = task.contractSource;
 	const controlled = Boolean(cell || task.swebench);
 	const { provider, model, apiKeyEnv } = plan;
 	const taskPair = context.comparisonProfile === TASK_PAIR_PROFILE;
@@ -110,6 +112,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		tempDir: root,
 		evaluation: {
 			PI_ENHANCED_EVAL_RUN_ID: plan!.runId,
+			...(contractSource ? { PI_ENHANCED_CONFIG_CONTRACT_SOURCE: contractSource } : {}),
 			...(context.recoveryPhase && seededTaskId ? {
 				PI_ENHANCED_V3_TASK_ID: seededTaskId,
 				PI_ENHANCED_V3_RECOVERY_PHASE: context.recoveryPhase,
@@ -207,7 +210,8 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		get telemetry() {
 			return admission?.denied ? undefined : telemetry;
 		},
-		...(admission ? { fetch: admission.fetch } : {}),
+		...(admission ? { fetch: admission.fetch } : contractSource
+			? { fetch: contractEvidenceFetch(join(runOutput, "contract-wire.jsonl"), contractSource) } : {}),
 		runId: plan!.runId,
 		...(seededTaskId && (localStubUrl || context.jointRecovery) ? {
 			persistence: {
@@ -245,7 +249,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		"--extension",
 		testFeedback
 			? join(here, task.id === "config-default" ? "config-default-test-feedback.ts" : "single-file-test-feedback.ts")
-			: swePytest ? join(here, "swe-test-feedback.ts") : join(packageRoot, "extensions", "sandbox.ts"),
+			: contractSource ? join(here, "config-contract.ts") : swePytest ? join(here, "swe-test-feedback.ts") : join(packageRoot, "extensions", "sandbox.ts"),
 	];
 	if (controlled)
 		extensionArgs.push(
@@ -277,6 +281,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			beginResumedRun(context, gatewayAtStart!, gateway.deadlineAt);
 			startTelemetry();
 		}
+		if (contractSource === "mcp") configureContractServer(agentDir, containerOwner);
 		writeFileSync(join(agentDir, "models.json"), JSON.stringify(gatewayModelsConfig(gateway.url)));
 		if (controlled) childEnvironment.PI_ENHANCED_CONTROLLED_GATEWAY_URL = gateway.url;
 		child = await runAgentProcess(
@@ -290,8 +295,8 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 				provider!,
 				"--model",
 				model!,
-				...(batchL || task.swebench || testFeedback ? ["--thinking", "off"] : []),
-				...(testFeedback
+				...(batchL || task.swebench || testFeedback || contractSource ? ["--thinking", "off"] : []),
+				...(contractSource ? ["--no-builtin-tools", "--tools", contractTools(contractSource).join(",")] : testFeedback
 					? [
 							"--no-extensions",
 							"--no-builtin-tools",
@@ -301,7 +306,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 					: swePytest ? ["--no-extensions", "--no-builtin-tools"] : ["--tools", ["read", "grep", "find", "ls", "write", "edit", ...moduleTools].join(",")]),
 				...extensionArgs,
 				...(context.recoveryPhase ? ["--session", resumeSessionPath(root)] : ["--no-session"]),
-				"--no-mcp",
+				...(contractSource === "mcp" ? [] : ["--no-mcp"]),
 				"--no-skills",
 				"--no-context-files",
 				context.recoveryPhase === "resume"
@@ -336,7 +341,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 						}
 					: {}),
 				env: childEnvironment,
-				...(testFeedback || gateway.deadlineAt !== undefined ? { onTimeout: () => gateway.stop("GATEWAY_RUN_TIMEOUT") } : {}),
+				...(testFeedback || contractSource || gateway.deadlineAt !== undefined ? { onTimeout: () => gateway.stop("GATEWAY_RUN_TIMEOUT") } : {}),
 				...(controlled || testFeedback
 					? {
 							stopOnBoundaryFailure: () => {
@@ -369,7 +374,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		({ gatewayStatus, containersRemoved } = await finalizeAgentExecution(
 			gateway,
 			controlled && !admission?.denied ? join(runOutput!, task.id) : undefined,
-			controlled || testFeedback || context.v3Evaluation ? () => removeRunContainers(containerOwner) : undefined,
+			controlled || testFeedback || context.v3Evaluation || contractSource ? () => removeRunContainers(containerOwner) : undefined,
 			executionFailure,
 		));
 	}
@@ -406,7 +411,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		reservedTokens: gatewayStatus.reservedTokens,
 		reservedCostUsd: gatewayStatus.reservedCostUsd,
 	};
-	const verification = task.swebench ? null : await verifyPatchInDocker(task.id, verifierScope);
+	const verification = task.swebench ? null : await verifyPatchInDocker(contractSource ? "config-contract" : task.id, verifierScope);
 	return {
 		child,
 		hostLifecycle,

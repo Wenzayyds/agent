@@ -14,6 +14,7 @@ import {
 	LONG_REPORT_TASK,
 	MEMORY_TASK_PROMPT,
 } from "./controlled-cases.ts";
+import { CONTRACT_PROMPT, contractTools } from "./config-contract.ts";
 import { digest } from "./evaluation-identity.ts";
 import { buildEvaluationPlan, preflightView } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
@@ -158,6 +159,16 @@ export async function main(): Promise<void> {
 	const readonlyModuleTools =
 		v3Evaluation || batchL || (cell ? cell.treatment && cell.module !== "context" : process.argv.includes("--readonly-module-tools"));
 	const taskId = cell?.taskId ?? argument("--task-id");
+	const contractSource = argument("--config-contract-source");
+	const realContract = process.argv.includes("--real-config-contract");
+	if (realContract && (!contractSource || localStubUrl || process.env.PI_ENHANCED_REAL_MODEL_EVAL !== "1"))
+		throw new Error("EVAL_CONFIG_CONTRACT_REAL_SCOPE_REQUIRED");
+	if (process.argv.includes("--config-contract-source") && (
+		(contractSource !== "file" && contractSource !== "mcp") || taskId !== "config-default" ||
+		(!realContract && (!localStubUrl || !isLoopbackUrl(localStubUrl))) || !execute || cell || comparisonProfile || sweId || v3Evaluation ||
+		readonlyModuleTools || (argument("--variant") ?? "baseline") !== "baseline" || (argument("--condition") ?? "cold") !== "cold" ||
+		process.argv.includes("--single-file-test-feedback") || process.argv.includes("--config-default-test-feedback")
+	)) throw new Error("EVAL_CONFIG_CONTRACT_STUB_SCOPE_REQUIRED");
 	const singleFileTestFeedback = process.argv.includes("--single-file-test-feedback");
 	const configDefaultTestFeedback = process.argv.includes("--config-default-test-feedback");
 	const baselineFixture = !cell && !sweId && !comparisonProfile &&
@@ -191,6 +202,9 @@ export async function main(): Promise<void> {
 				(task) => (cell?.module === "memory" ? { ...task, prompt: MEMORY_TASK_PROMPT } : task),
 			);
 	if (selectedTasks.length === 0) throw new Error("EVAL_UNKNOWN_TASK");
+	if (contractSource === "file" || contractSource === "mcp") {
+		selectedTasks[0] = { ...selectedTasks[0]!, contractSource, prompt: CONTRACT_PROMPT };
+	}
 	const requiredLimits = swe?.configuration.limits ?? TASK_PAIR_LIMITS;
 	const sweLimits = swe?.configuration.limits ?? SWE_TASK_LIMITS;
 	const input = {
@@ -243,7 +257,8 @@ export async function main(): Promise<void> {
 			encoding: "utf8",
 		}).trim();
 		process.stdout.write(
-			`${JSON.stringify({ repositoryCommit, ...preflightView(input, testFeedback ? selectedTasks.length : manifest.tasks.length, testFeedback) }, null, 2)}\n`,
+			`${JSON.stringify({ repositoryCommit, ...preflightView(input, testFeedback || contractSource ? selectedTasks.length : manifest.tasks.length, testFeedback),
+				...(contractSource === "file" || contractSource === "mcp" ? { contractSource, tools: contractTools(contractSource) } : {}) }, null, 2)}\n`,
 		);
 		process.exit(0);
 	}
@@ -286,6 +301,11 @@ export async function main(): Promise<void> {
 		if (existsSync(projectEnv)) loadEnvFile(projectEnv);
 	}
 	const plan = execute ? buildEvaluationPlan(input, process.env) : undefined;
+	if (contractSource && (!plan || plan.provider !== "deepseek" || plan.model !== "deepseek-flash" ||
+		plan.apiKeyEnv !== (realContract ? "DEEPSEEK_API_KEY" : "MOCK_PROVIDER_KEY") || plan.sandboxImage !== CONTROLLED_IMAGE ||
+		plan.budgetEnforcement !== "local_hard_gateway" || plan.maxTasks !== 1 || plan.maxCallsPerTask > 8 ||
+		plan.maxTokensPerTask > 40_000 || plan.maxTotalCostUsd > 0.03 || plan.timeoutMs > 180_000))
+		throw new Error("EVAL_CONFIG_CONTRACT_LIMIT_INVALID");
 	if (v3Evaluation && (!plan || plan.maxTasks !== 1 || plan.apiKeyEnv !== (jointRecovery && !localStubUrl ? "DEEPSEEK_API_KEY" : "MOCK_PROVIDER_KEY") ||
 		plan.sandboxImage !== CONTROLLED_IMAGE || plan.budgetEnforcement !== "local_hard_gateway" ||
 		plan.maxCallsPerTask > CONTROLLED_LIMITS.maxRequests ||
@@ -450,6 +470,7 @@ export async function main(): Promise<void> {
 				runOutput,
 				batchL,
 				swebench: Boolean(swebench),
+				contractSource: contractSource === "file" || contractSource === "mcp" ? contractSource : undefined,
 				testFeedback,
 			},
 			results,

@@ -9,6 +9,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { openMemoryService } from "../../src/memory/service.ts";
 import { createTaskStorageScope } from "../../src/task-manager/provider.ts";
+import { CONTRACT_FILE, CONTRACT_PROMPT, CONTRACT_SYSTEM_PROMPT, CONTRACT_TEXT, CONTRACT_TOOL } from "../../benchmarks/real-agent/config-contract.ts";
 import { writeV3Matrix } from "../fixtures/v3-matrix.ts";
 import {
 	assertIsolatedMount,
@@ -45,6 +46,76 @@ afterEach(async () => {
 });
 
 describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-agent runner", () => {
+	it.each(["file", "mcp"] as const)("isolates the %s contract and edits only after receiving its bytes", async source => {
+		const root = mkdtempSync(join(tmpdir(), "config-contract-"));
+		roots.push(root);
+		const runId = "config_contract_" + source;
+		const clueTool = source === "file" ? "read" : CONTRACT_TOOL;
+		const bodies: Record<string, unknown>[] = [];
+		const provider = await startProvider((body, response) => {
+			bodies.push(body);
+			const messages = body.messages as { role: string; content: string; tool_call_id?: string }[];
+			const clue = messages.find(m => m.tool_call_id === "call-" + clueTool + "-20");
+			const config = messages.find(m => m.tool_call_id === "call-read-30")?.content;
+			const defaultValue = clue?.content?.match(/缺省时取 (\d+) 毫秒/)?.[1];
+			const turns = [
+				() => toolCallSse(source === "file" ? CONTRACT_TOOL : "read", source === "file" ? {} : { path: CONTRACT_FILE }, 10, 5),
+				() => toolCallSse(clueTool, source === "file" ? { path: CONTRACT_FILE } : {}, 20, 5),
+				() => clue?.content === CONTRACT_TEXT ? toolCallSse("read", { path: "config.js" }, 30, 5) : textSse("missing contract", 30, 5),
+				() => defaultValue && config?.includes("input.timeoutMs || 1000")
+					? toolCallSse("edit", { path: "config.js", edits: [{ oldText: "input.timeoutMs || 1000", newText: "input.timeoutMs ?? " + defaultValue }] }, 40, 5)
+					: textSse("missing source or default", 40, 5),
+				() => textSse("done", 50, 5),
+			];
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(turns[bodies.length - 1]?.() ?? textSse("stop", 60, 5));
+		});
+		const result = await runRunner(provider.url, root, image, runId, false, undefined, 60_000,
+			["--task-id", "config-default", "--config-contract-source", source]);
+		expect(result.status, result.stderr).toBe(0);
+		const report = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		const names = (bodies[0]?.tools as { function: { name: string } }[]).map(t => t.function.name).sort();
+		expect(names).toEqual(["read", "edit", ...(source === "mcp" ? [CONTRACT_TOOL] : [])].sort());
+		const initial = bodies[0].messages as { role: string; content: string | { text: string }[] }[];
+		expect(initial.map(m => [m.role, typeof m.content === "string" ? m.content : m.content.map(part => part.text).join("")]))
+			.toEqual([["system", CONTRACT_SYSTEM_PROMPT], ["user", CONTRACT_PROMPT]]);
+		expect(JSON.stringify(bodies.slice(0, 2))).not.toContain("5000");
+		expect(bodies).toHaveLength(5);
+		const responseFor = (i: number, id: string) => (bodies[i].messages as { tool_call_id?: string; content: string }[])
+			.find(m => m.tool_call_id === id)?.content;
+		expect(responseFor(1, "call-" + (source === "file" ? CONTRACT_TOOL : "read") + "-10")).toMatch(source === "mcp" ? /blocked read: path-resolution-failed|outside the configured Sandbox scope/i : /not found|unknown|not available/i);
+		expect(responseFor(2, "call-" + clueTool + "-20")).toBe(CONTRACT_TEXT);
+		const wire = readFileSync(join(root, runId, "contract-wire.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+		expect(wire).toHaveLength(bodies.length);
+		expect(wire[2].messages).toContainEqual({ role: "tool", callId: "call-" + clueTool + "-20",
+			sha256: createHash("sha256").update(CONTRACT_TEXT).digest("hex") });
+		expect(responseFor(3, "call-read-30")).toContain("input.timeoutMs || 1000");
+		expect(report).toMatchObject({ contractSource: source, verifierPassed: true, runStatus: "completed", auditComplete: true,
+			verification: { cleanup: "removed" }, hostLifecycle: { containersRemoved: true, reservedTokens: 0, gatewayActiveRequests: 0 } });
+		expect(report.verification.evidence).toMatchObject({ network: "none", readOnlyRoot: true });
+		expect(report.toolTrace).toContainEqual(expect.objectContaining({ phase: "end", toolName: clueTool, toolCallId: "call-" + clueTool + "-20", isError: false }));
+		const patch = readFileSync(join(root, runId, "config-default", "patch.diff"), "utf8");
+		expect(patch.match(/^diff --git .*$/gm)).toEqual(["diff --git a/config.js b/config.js"]);
+		expect(patch).toContain("+export const loadConfig = input => ({ timeoutMs: input.timeoutMs ?? 5000 });");
+	}, 90_000);
+
+	it.each(["file", "mcp"])("refuses an over-budget %s contract turn before forwarding", async source => {
+		const root = mkdtempSync(join(tmpdir(), "config-contract-budget-"));
+		roots.push(root);
+		let forwarded = 0;
+		const provider = await startProvider((_body, response) => {
+			forwarded++;
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(toolCallSse("read", { path: "config.js" }, 10, 5));
+		});
+		const runId = "contract_budget_" + source;
+		const result = await runRunner(provider.url, root, image, runId, false, undefined, 60_000,
+			["--task-id", "config-default", "--config-contract-source", source], false, undefined, 1);
+		expect(result.status, result.stderr).toBe(0);
+		const report = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		expect(forwarded).toBe(1);
+		expect(report.gateway.denials).toMatchObject([{ code: "GATEWAY_REQUEST_LIMIT", upstreamForwarded: false }]);
+		expect(report).toMatchObject({ verifierPassed: false, runStatus: "budget_stopped", gateway: { requestsRejected: 1 } });
+	}, 90_000);
+
 	it("uses the production fixture path through stub provider, gateway, Pi CLI, Docker, patch, and hidden verifier", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi enhanced runner 中文 "));
 		roots.push(root);
@@ -1032,6 +1103,7 @@ function runRunner(
 	scratch?: string,
 	maxCalls = 8,
 ): Promise<{ status: number | null; stdout: string; stderr: string; pid?: number; killed: boolean }> {
+	const contract = extraArgs.includes("--config-contract-source");
 	const jointRecovery = extraArgs.includes("--v3-joint-recovery");
 	const v3 = jointRecovery || extraArgs.includes("--v3-evaluation");
 	const args = [
@@ -1050,11 +1122,11 @@ function runRunner(
 		"--api-key-env",
 		"MOCK_PROVIDER_KEY",
 		"--max-total-cost-usd",
-		feedbackTask || v3 ? "0.03" : "0.10",
+		feedbackTask || v3 || contract ? "0.03" : "0.10",
 		"--max-tasks",
 		"1",
 		"--max-tokens-per-task",
-		feedbackTask ? "20000" : jointRecovery ? "48000" : v3 ? "40000" : "200000",
+		feedbackTask ? "20000" : jointRecovery ? "48000" : v3 || contract ? "40000" : "200000",
 		"--max-calls-per-task",
 		String(maxCalls),
 		"--timeout-ms",

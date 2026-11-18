@@ -37,6 +37,7 @@ export function createSandboxExtension(
 	adaptive = false,
 	registerTests?: (pi: ExtensionAPI, config: SandboxConfig, isActive: () => boolean) => void,
 	fileToolDescriptions?: Partial<Record<SandboxToolName, string>>,
+	toolScope?: { reads: readonly string[]; edits: readonly string[]; readonlyMcpTool?: `mcp__${string}__${string}` },
 ): (pi: ExtensionAPI) => void {
 	return (pi) => {
 		let broker: DockerSandboxBroker | undefined;
@@ -53,6 +54,14 @@ export function createSandboxExtension(
 			if ((broker || adaptive) && typeof deny === "function") deny();
 		});
 		pi.on("tool_call", (event) => {
+			if (toolScope) {
+				const path = "path" in event.input ? event.input.path : undefined;
+				const allowed = (event.toolName === "read" && typeof path === "string" && toolScope.reads.includes(path)) ||
+					(event.toolName === "edit" && typeof path === "string" && toolScope.edits.includes(path)) ||
+					event.toolName === toolScope.readonlyMcpTool;
+				if (!broker || !config?.trusted || !allowed) return { block: true, reason: "Tool or path outside the configured Sandbox scope" };
+				return;
+			}
 			if (adaptive && (!broker || !runTestsActive || !config?.trusted))
 				return { block: true, reason: "CCR auto requires a trusted Sandbox and pytest policy" };
 			if (

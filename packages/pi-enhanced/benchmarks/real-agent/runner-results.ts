@@ -11,6 +11,7 @@ import { isHardBudgetStop } from "./budget-gateway.ts";
 import { batchLGroup, batchLReferences } from "./batch-l-profile.ts";
 import { longReport, MEMORY_RULE, TASK_STEPS } from "./controlled-cases.ts";
 import type { SafetyEvent } from "./controlled-stop.ts";
+import { contractTools } from "./config-contract.ts";
 import { digest } from "./evaluation-identity.ts";
 import {
 	budgetExceeded,
@@ -186,7 +187,8 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 		agentReportedUsage,
 		gateway: gatewayEvidence(gatewayStatus),
 		sandboxAudit,
-		...(testFeedback || context.v3Evaluation ? { hostLifecycle } : {}),
+		...(task.contractSource ? { contractSource: task.contractSource } : {}),
+		...(testFeedback || context.v3Evaluation || task.contractSource ? { hostLifecycle } : {}),
 		...(deadlineAt === undefined ? {} : { budgetDeadlineAt: deadlineAt }),
 		...(context.v3Evaluation ? {
 			v3Evaluation: {
@@ -255,7 +257,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 					toolFailures,
 				}
 			: {}),
-		...(context.testFeedback
+		...(context.testFeedback || task.contractSource
 			? {
 					toolTrace: events
 						.filter((event) => event.type === "tool_execution_start" || event.type === "tool_execution_end")
@@ -454,6 +456,7 @@ export function saveRunReport(
 		runOutput?: string;
 		batchL: boolean;
 		swebench?: boolean;
+		contractSource?: "file" | "mcp";
 		testFeedback?: boolean;
 	},
 	results: Record<string, unknown>[],
@@ -482,7 +485,8 @@ export function saveRunReport(
 			? {
 					mode: "docker-file-tools",
 					image: plan.sandboxImage,
-					tools: ["read", "grep", "find", "ls", "write", "edit", ...(options.testFeedback ? ["run_tests"] : [])],
+					tools: options.contractSource ? contractTools(options.contractSource)
+						: ["read", "grep", "find", "ls", "write", "edit", ...(options.testFeedback ? ["run_tests"] : [])],
 					network: "none",
 					failClosed: true,
 				}
@@ -512,7 +516,7 @@ export function saveRunReport(
 		Object.assign(report.summary, {
 			evaluationPassed: ran.filter((item) => item.evaluationAccepted === true).length,
 		});
-	if (!localStubUrl && !batchL && !options.swebench && !options.testFeedback)
+	if (!localStubUrl && !batchL && !options.swebench && !options.testFeedback && !options.contractSource)
 		writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 	return report.summary;

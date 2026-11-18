@@ -38,6 +38,10 @@ const TASKS: Record<string, { program: string; expected: unknown }> = {
 		program: "const m=await import('./index.js');return [m.formatName('pi')];",
 		expected: ["PI"],
 	},
+	"config-contract": {
+		program: `const config = await import('./config.js');return [${configObservations.join(",")},config.loadConfig({timeoutMs:0}).timeoutMs];`,
+		expected: [...CONFIG_CHECKS.map(({ expected }) => expected), 0],
+	},
 	"config-default": {
 		program: `const config = await import('./config.js');return [${configObservations.join(",")}];`,
 		expected: CONFIG_CHECKS.map(({ expected }) => expected),
