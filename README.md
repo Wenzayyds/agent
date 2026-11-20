@@ -24,6 +24,8 @@ Use Pi [interactively](packages/coding-agent/docs/usage.md), automate it in [pri
 
 This fork adds scoped context, verified project memory, and task checkpoints to the Pi agent loop. See the [Pi Enhanced README and joint-recovery demo](packages/pi-enhanced/README.md#v3-联合恢复-demo).
 
+The previous Python wzAgent project is archived in [legacy/wzagent](legacy/wzagent/README.md).
+
 ## Getting started
 
 Install the command-line interface:

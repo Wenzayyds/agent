@@ -1,0 +1,26 @@
+# LangChain 核心生态
+langchain>=0.1.0
+langgraph>=0.0.26
+langchain-openai>=0.0.5
+langchain-community>=0.0.19
+
+# 通义千问依赖
+dashscope>=1.14.0
+
+# Web UI
+chainlit>=1.0.0
+
+# 配置管理
+python-dotenv>=1.0.0
+
+# 搜索工具
+duckduckgo-search>=4.4.3
+
+# RAG 和语义缓存依赖
+langchain-huggingface>=0.0.1
+faiss-cpu>=1.7.4
+sentence-transformers>=2.3.0
+transformers>=4.36.0
+
+# 其他工具
+pydantic>=2.0.0
