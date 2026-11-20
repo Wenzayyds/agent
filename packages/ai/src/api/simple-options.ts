@@ -54,6 +54,7 @@ export function buildBaseOptions(
 		headers: options?.headers,
 		identity: options?.identity,
 		onPayload: options?.onPayload,
+		beforeSend: options?.beforeSend,
 		onResponse: options?.onResponse,
 		onProviderStreamEvent: options?.onProviderStreamEvent,
 		timeoutMs: options?.timeoutMs,

@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-03T10:43:11.980Z",
+  "evaluationClass": "real_model_coding_agent_task",
+  "runId": "compare_20261103_memory_guided_regression_baseline",
+  "variant": "baseline",
+  "condition": "memory_seeded",
+  "model": {
+    "provider": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "authorization": "explicit",
+  "sandbox": {
+    "mode": "docker-file-tools",
+    "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+    "tools": [
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "write",
+      "edit"
+    ],
+    "network": "none",
+    "failClosed": true
+  },
+  "limits": {
+    "maxTotalCostUsd": 0.03,
+    "maxTasks": 1,
+    "maxTokensPerTask": 20000,
+    "maxCallsPerTask": 8,
+    "timeoutMs": 180000,
+    "concurrency": 1,
+    "budgetEnforcement": "local_hard_gateway"
+  },
+  "summary": {
+    "total": 1,
+    "run": 1,
+    "passed": 0,
+    "notRun": 0,
+    "observedCostUsd": 0.002457,
+    "patchPassed": 1,
+    "normallyCompleted": 0,
+    "budgetStopped": 1
+  },
+  "results": [
+    {
+      "taskId": "memory-guided-regression",
+      "category": "memory_context",
+      "experimentClass": "real_model_coding_agent_task",
+      "repositoryCommit": "e3fb275c0eecbe4e0dab009fb0ecb3b95ff388d7",
+      "status": "budget_exceeded",
+      "verifierPassed": true,
+      "hiddenTestExitCode": 0,
+      "agentExitCode": 0,
+      "timedOut": false,
+      "usage": {
+        "calls": 3,
+        "tokens": 6996,
+        "costUsd": 0.002457
+      },
+      "agentReportedUsage": {
+        "calls": 3,
+        "tokens": 6996,
+        "costUsd": 0.001064616
+      },
+      "gateway": {
+        "state": "ready",
+        "requestsStarted": 3,
+        "requestsCompleted": 3,
+        "requestsRejected": 4,
+        "requestAttempts": 7,
+        "actualInputTokens": 6598,
+        "actualOutputTokens": 398,
+        "actualTotalTokens": 6996,
+        "actualCostUsd": 0.002457,
+        "committedTokenUpperBound": 6996,
+        "committedCostUpperBoundUsd": 0.002457,
+        "lastError": null,
+        "denials": [
+          {
+            "runId": "compare_20261103_memory_guided_regression_baseline",
+            "requestSequence": 4,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6996,
+            "committedTokenUpperBound": 6996,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.002457,
+            "committedCostUpperBoundUsd": 0.002457,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_memory_guided_regression_baseline",
+            "requestSequence": 5,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6996,
+            "committedTokenUpperBound": 6996,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.002457,
+            "committedCostUpperBoundUsd": 0.002457,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_memory_guided_regression_baseline",
+            "requestSequence": 6,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6996,
+            "committedTokenUpperBound": 6996,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.002457,
+            "committedCostUpperBoundUsd": 0.002457,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_memory_guided_regression_baseline",
+            "requestSequence": 7,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6996,
+            "committedTokenUpperBound": 6996,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.002457,
+            "committedCostUpperBoundUsd": 0.002457,
+            "reservedCostUsd": 0
+          }
+        ]
+      },
+      "sandboxAudit": {
+        "schemaVersion": 1,
+        "runId": "compare_20261103_memory_guided_regression_baseline-memory-guided-regression",
+        "workspaceSha256": "f29b87803cbe8befc08e7871b922dc95b5ee9c36f1743acfd04d6138c9ff14e9",
+        "evidence": {
+          "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+          "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+          "network": "none",
+          "readOnlyRoot": true,
+          "user": "1000:1000",
+          "mounts": [
+            {
+              "destination": "/workspace",
+              "readWrite": true
+            }
+          ]
+        },
+        "audit": [
+          {
+            "requestId": "call_00_ora0kdgpYWsSJMHR2rjR6749:exists:0",
+            "toolName": "ls",
+            "operation": "exists",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 306.772
+          },
+          {
+            "requestId": "call_01_OVmiKi7sklZ8on4SwYVc0077:grep",
+            "toolName": "grep",
+            "operation": "grep",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 400.486
+          },
+          {
+            "requestId": "call_00_ora0kdgpYWsSJMHR2rjR6749:stat:1",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 223.76
+          },
+          {
+            "requestId": "call_00_ora0kdgpYWsSJMHR2rjR6749:readdir:2",
+            "toolName": "ls",
+            "operation": "readdir",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 199.335
+          },
+          {
+            "requestId": "call_00_ora0kdgpYWsSJMHR2rjR6749:stat:3",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 263.685
+          },
+          {
+            "requestId": "call_00_ora0kdgpYWsSJMHR2rjR6749:stat:4",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 216.208
+          },
+          {
+            "requestId": "call_01_ET_u2fp52mKmps9gUXrzqYz4538:read",
+            "toolName": "read",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 389.603
+          },
+          {
+            "requestId": "call_00_ET_bU7XzKx2gDyWsRkRoT5c1570:read",
+            "toolName": "read",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 408.588
+          },
+          {
+            "requestId": "call_00_H2rIU2TFoxxg8T47YMAH0609:mkdir",
+            "toolName": "write",
+            "operation": "mkdir",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 218.623
+          },
+          {
+            "requestId": "call_00_H2rIU2TFoxxg8T47YMAH0609:write",
+            "toolName": "write",
+            "operation": "write_file",
+            "status": "ok",
+            "containerId": "244b09d7b00895382094f3b42a1ef40dee059ffec946b824e568c36d6f8b2cc1",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 228.717
+          }
+        ]
+      },
+      "costClass": "gateway_measured",
+      "patchSha256": "76d16403d2fcdf881f2ea16a093482d7a846e8ba63a05787c7fc20d31633345b",
+      "durationMs": 21331.076,
+      "patchStatus": "passed",
+      "runStatus": "budget_stopped",
+      "moduleTools": [],
+      "moduleToolEvents": [],
+      "contextEnabled": false,
+      "usageSource": "local_hard_gateway",
+      "agentReportedUsageSource": "stdout_final_assistant_messages_diagnostic_only"
+    }
+  ]
+}

@@ -179,6 +179,8 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	 * Return undefined to keep the payload unchanged.
 	 */
 	onPayload?: (payload: unknown, model: TModel) => unknown | undefined | Promise<unknown | undefined>;
+	/** Synchronous disclosure check at each transport handoff, including retries. Throw to prevent dispatch. */
+	beforeSend?: () => void;
 	/**
 	 * Optional callback invoked after an HTTP response is received.
 	 */
@@ -584,6 +586,8 @@ export interface UserMessage {
 
 export interface AssistantMessage {
 	role: "assistant";
+	/** Local request provenance. Provider serializers must never forward it. */
+	requestProvenance?: Record<string, JsonValue>;
 	content: (TextContent | ThinkingContent | ToolCall)[];
 	api: Api;
 	provider: ProviderId;

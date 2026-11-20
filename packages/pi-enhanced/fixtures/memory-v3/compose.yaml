@@ -1,0 +1,27 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.5@sha256:0fb8897412abc81d1c0430a899b9a81eb8328aa634e7242d1bc804c1fe8fe863
+    ports:
+      - "127.0.0.1:${PI_MEMORY_V3_QDRANT_PORT:-6333}:6333"
+    networks:
+      - memory
+    volumes:
+      - index:/qdrant/storage
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -ec
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/6333
+          printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          read -r status <&3
+          [[ "$$status" == "HTTP/1.1 200 "* ]]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+networks:
+  memory:
+    driver: bridge
+volumes:
+  index:

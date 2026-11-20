@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pi-enhanced-memory-intelligence"
+version = "0.1.0"
+description = "Optional local retrieval worker for Pi Enhanced Memory"
+requires-python = ">=3.11"
+dependencies = ["numpy==2.5.2"]
+
+[project.optional-dependencies]
+neural = ["sentence-transformers==5.1.2"]
+test = ["pytest==9.0.3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

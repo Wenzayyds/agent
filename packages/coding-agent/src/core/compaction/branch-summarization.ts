@@ -85,6 +85,8 @@ export interface GenerateBranchSummaryOptions {
 	reserveTokens?: number;
 	/** Optional session stream function. Used to preserve SDK request behavior without mutating agent state. */
 	streamFn?: StreamFn;
+	/** Project the raw transcript before serializing or deriving file references. */
+	projectMessages?: (messages: AgentMessage[]) => AgentMessage[];
 	/** Retry policy for transient summarization errors. Reuses coding-agent's `settings.retry`. */
 	retry?: RetryPolicy;
 	/** Optional callbacks for retry reporting (e.g. TUI retry indicators). */
@@ -307,6 +309,7 @@ export async function generateBranchSummary(
 		replaceInstructions,
 		reserveTokens = 16384,
 		streamFn,
+		projectMessages,
 		retry,
 		callbacks,
 	} = options;
@@ -315,7 +318,12 @@ export async function generateBranchSummary(
 	const contextWindow = model.contextWindow || 128000;
 	const tokenBudget = contextWindow - reserveTokens;
 
-	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
+	const prepared = prepareBranchEntries(entries, tokenBudget);
+	const messages = projectMessages?.(prepared.messages) ?? prepared.messages;
+	const fileOps = messages === prepared.messages ? prepared.fileOps : createFileOps();
+	if (messages !== prepared.messages) {
+		for (const message of messages) extractFileOpsFromMessage(message, fileOps);
+	}
 
 	if (messages.length === 0) {
 		return { summary: "No content to summarize" };

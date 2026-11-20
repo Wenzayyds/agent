@@ -1,0 +1,25 @@
+{
+	"extends": "../../tsconfig.json",
+	"include": [
+		"benchmarks/real-agent/**/*.ts",
+		"benchmarks/knowledge/flash-comparison.ts",
+		"scripts/ci/test-manifest.ts",
+		"tests/unit/batch-j-policy-audit.test.ts",
+		"tests/e2e/batch-j-runner.test.ts",
+		"tests/e2e/docker-verifier.test.ts",
+		"tests/e2e/batch-l-comparison.test.ts",
+		"tests/e2e/batch-n-observability.test.ts",
+		"tests/e2e/swebench-stub.test.ts",
+		"tests/e2e/swebench-policy.test.ts",
+		"tests/unit/swebench.test.ts",
+		"tests/unit/task-v2.test.ts",
+		"tests/unit/evaluation-telemetry.test.ts",
+		"tests/e2e/real-agent-runner-e2e.test.ts",
+		"tests/unit/docker-ci-evidence.test.ts",
+		"tests/fixtures/sandbox-audit-child.ts",
+		"tests/e2e/budget-recovery.test.ts",
+		"tests/fixtures/budget-recovery-child.ts",
+		"../coding-agent/src/utils/highlight-js.d.ts"
+	],
+	"exclude": ["**/dist/**"]
+}

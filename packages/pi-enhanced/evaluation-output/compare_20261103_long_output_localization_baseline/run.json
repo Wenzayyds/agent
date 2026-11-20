@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-03T10:43:55.782Z",
+  "evaluationClass": "real_model_coding_agent_task",
+  "runId": "compare_20261103_long_output_localization_baseline",
+  "variant": "baseline",
+  "condition": "memory_seeded",
+  "model": {
+    "provider": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "authorization": "explicit",
+  "sandbox": {
+    "mode": "docker-file-tools",
+    "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+    "tools": [
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "write",
+      "edit"
+    ],
+    "network": "none",
+    "failClosed": true
+  },
+  "limits": {
+    "maxTotalCostUsd": 0.03,
+    "maxTasks": 1,
+    "maxTokensPerTask": 20000,
+    "maxCallsPerTask": 8,
+    "timeoutMs": 180000,
+    "concurrency": 1,
+    "budgetEnforcement": "local_hard_gateway"
+  },
+  "summary": {
+    "total": 1,
+    "run": 1,
+    "passed": 0,
+    "notRun": 0,
+    "observedCostUsd": 0.0023840999999999997,
+    "patchPassed": 1,
+    "normallyCompleted": 0,
+    "budgetStopped": 1
+  },
+  "results": [
+    {
+      "taskId": "long-output-localization",
+      "category": "long_output",
+      "experimentClass": "real_model_coding_agent_task",
+      "repositoryCommit": "83d86974294438270463bad9e990b0e424a60fdb",
+      "status": "budget_exceeded",
+      "verifierPassed": true,
+      "hiddenTestExitCode": 0,
+      "agentExitCode": 0,
+      "timedOut": false,
+      "usage": {
+        "calls": 3,
+        "tokens": 6906,
+        "costUsd": 0.0023840999999999997
+      },
+      "agentReportedUsage": {
+        "calls": 3,
+        "tokens": 6906,
+        "costUsd": 0.0010293479999999998
+      },
+      "gateway": {
+        "state": "ready",
+        "requestsStarted": 3,
+        "requestsCompleted": 3,
+        "requestsRejected": 4,
+        "requestAttempts": 7,
+        "actualInputTokens": 6559,
+        "actualOutputTokens": 347,
+        "actualTotalTokens": 6906,
+        "actualCostUsd": 0.0023840999999999997,
+        "committedTokenUpperBound": 6906,
+        "committedCostUpperBoundUsd": 0.0023840999999999997,
+        "lastError": null,
+        "denials": [
+          {
+            "runId": "compare_20261103_long_output_localization_baseline",
+            "requestSequence": 4,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6906,
+            "committedTokenUpperBound": 6906,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023840999999999997,
+            "committedCostUpperBoundUsd": 0.0023840999999999997,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_long_output_localization_baseline",
+            "requestSequence": 5,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6906,
+            "committedTokenUpperBound": 6906,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023840999999999997,
+            "committedCostUpperBoundUsd": 0.0023840999999999997,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_long_output_localization_baseline",
+            "requestSequence": 6,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6906,
+            "committedTokenUpperBound": 6906,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023840999999999997,
+            "committedCostUpperBoundUsd": 0.0023840999999999997,
+            "reservedCostUsd": 0
+          },
+          {
+            "runId": "compare_20261103_long_output_localization_baseline",
+            "requestSequence": 7,
+            "code": "GATEWAY_TOKEN_BUDGET",
+            "upstreamForwarded": false,
+            "requestsStarted": 3,
+            "actualTotalTokens": 6906,
+            "committedTokenUpperBound": 6906,
+            "reservedTokens": 0,
+            "actualCostUsd": 0.0023840999999999997,
+            "committedCostUpperBoundUsd": 0.0023840999999999997,
+            "reservedCostUsd": 0
+          }
+        ]
+      },
+      "sandboxAudit": {
+        "schemaVersion": 1,
+        "runId": "compare_20261103_long_output_localization_baseline-long-output-localization",
+        "workspaceSha256": "f7c961f9ee9cf18a81334f198fa8507545ea6d3ec39a57e0ce1d52451f00a878",
+        "evidence": {
+          "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+          "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+          "network": "none",
+          "readOnlyRoot": true,
+          "user": "1000:1000",
+          "mounts": [
+            {
+              "destination": "/workspace",
+              "readWrite": true
+            }
+          ]
+        },
+        "audit": [
+          {
+            "requestId": "call_00_ioWSFGYH9fgJn7gtvZxt3485:exists:0",
+            "toolName": "ls",
+            "operation": "exists",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 247.53
+          },
+          {
+            "requestId": "call_01_usDh0taEritBHKRqkSAa1457:grep",
+            "toolName": "grep",
+            "operation": "grep",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 329.697
+          },
+          {
+            "requestId": "call_00_ioWSFGYH9fgJn7gtvZxt3485:stat:1",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 185.239
+          },
+          {
+            "requestId": "call_00_ioWSFGYH9fgJn7gtvZxt3485:readdir:2",
+            "toolName": "ls",
+            "operation": "readdir",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 196.689
+          },
+          {
+            "requestId": "call_00_ioWSFGYH9fgJn7gtvZxt3485:stat:3",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 179.007
+          },
+          {
+            "requestId": "call_00_ioWSFGYH9fgJn7gtvZxt3485:stat:4",
+            "toolName": "ls",
+            "operation": "stat",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 160.073
+          },
+          {
+            "requestId": "call_00_ET_t4RNpRrf38a2qhhJGWfi1356:read",
+            "toolName": "read",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 377.565
+          },
+          {
+            "requestId": "call_01_ET_qX02UbLar82IvWO66mfI0925:read",
+            "toolName": "read",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 374.858
+          },
+          {
+            "requestId": "call_00_GcMqydkeVKGnWm77rNjs9528:access",
+            "toolName": "edit",
+            "operation": "access",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 267.748
+          },
+          {
+            "requestId": "call_00_GcMqydkeVKGnWm77rNjs9528:read",
+            "toolName": "edit",
+            "operation": "read_file",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 210.145
+          },
+          {
+            "requestId": "call_00_GcMqydkeVKGnWm77rNjs9528:write",
+            "toolName": "edit",
+            "operation": "write_file",
+            "status": "ok",
+            "containerId": "8e71517b1b4b2c6b5725e60142ab86e212ece0fddc81f883b862d6d601bb177b",
+            "image": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+            "durationMs": 210.959
+          }
+        ]
+      },
+      "costClass": "gateway_measured",
+      "patchSha256": "bb7a40c294b9c4b72a93988476df72ad62a512298afa33f6868a019f887e2c27",
+      "durationMs": 20851.698,
+      "patchStatus": "passed",
+      "runStatus": "budget_stopped",
+      "moduleTools": [],
+      "moduleToolEvents": [],
+      "contextEnabled": false,
+      "usageSource": "local_hard_gateway",
+      "agentReportedUsageSource": "stdout_final_assistant_messages_diagnostic_only"
+    }
+  ]
+}

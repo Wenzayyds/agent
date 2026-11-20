@@ -1,0 +1,2768 @@
+{
+  "schemaVersion": 1,
+  "status": "pending_remote_authorization",
+  "source": {
+    "head": "774fa52d8fc39cb9125a99895938729b4ee815e5",
+    "branch": "pi-agent",
+    "uncommitted": true
+  },
+  "authorization": {
+    "realProviderKeyRead": false,
+    "paidModelCalls": 0,
+    "newRealExperiments": 0,
+    "gitAdd": false,
+    "gitCommit": false,
+    "gitPush": false,
+    "workflowDispatch": false,
+    "release": false,
+    "publish": false,
+    "scope": "Target repository index/branch; existing tests create commits only in new synthetic temporary fixture repositories."
+  },
+  "candidates": [
+    {
+      "path": ".github/workflows/pi-enhanced-ci.yml",
+      "ownership": [
+        "Batch N",
+        "版本收口"
+      ],
+      "reason": "Windows/Linux/Docker 离线入口、Telemetry E2E 与当前身份基线；排除历史 worktree 副本",
+      "sha256": "04c65eb6b0b08994141f4f28fd2c9a59a1b0adb2a35abf26def6619d1344101a"
+    },
+    {
+      "path": "HANDOFF.md",
+      "ownership": [
+        "Cleanup",
+        "版本收口"
+      ],
+      "reason": "保留既有工作记录并注明报告仅本地归档；追加本轮授权边界和准入状态",
+      "sha256": "8af31faf8b8d6384cb1a86d0f7bb7605b92d9970e3381e9788f51ae711a3ab97"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/budget-gateway.ts",
+      "ownership": [
+        "Batch N",
+        "Cleanup"
+      ],
+      "reason": "可选最终结算观测；保留原预留/拒绝/失败关闭逻辑，去除未用私有计数器",
+      "sha256": "2c45b866593442d371682ae7469bb9d60c7c0a7023a864633f1792949bfd786c"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/context-probe.ts",
+      "ownership": [
+        "Batch N"
+      ],
+      "reason": "受信任开关下的有界 Context 视图元数据，不改变裁剪输出",
+      "sha256": "c4aee1f4db87e1f2fe61c07450f811d766279cf5aa955db38cb4c9e1c7b7fa49"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/evaluation-policy.ts",
+      "ownership": [
+        "Cleanup"
+      ],
+      "reason": "复用一次 stdout 解析，保留历史状态字段与预算判定",
+      "sha256": "3bbfba0804dda14d121ea99901f83dccfac7b49cdce2a5a6e911c6bf49cc9fbc"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/evaluation-telemetry.ts",
+      "ownership": [
+        "Batch N",
+        "版本收口"
+      ],
+      "reason": "有界请求/工具关联、Usage 对账及恢复读取；私有化内部常量",
+      "sha256": "d4aa94e902f314e7f6479958f20bea83b7649214ec289721020d30033ff2a3c6"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/run-controlled.ts",
+      "ownership": [
+        "Batch N",
+        "Cleanup"
+      ],
+      "reason": "批次观测开关、公平性及完整性验收，复用 peer 查询",
+      "sha256": "e6c4fa97108b031a07c6f6d769dd02a7f2d12171e1ed906f089c059b8a5315a1"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/run-real-agent.ts",
+      "ownership": [
+        "Batch N",
+        "Cleanup",
+        "核心结构整理",
+        "版本收口"
+      ],
+      "reason": "命令行授权与阶段调度；新增直接执行保护，避免导入触发任务",
+      "sha256": "dd01b098366079fee639c7f640ed138b6ed84fb8c0c6f7136c87eb437705b84a"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/runner-execution.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "隔离环境、Gateway/Pi 生命周期、停止清理与独立 Docker 验证",
+      "sha256": "92e6b95464bef68194f9dd839cc2e07f7fd1a577f85cbe80dd36e95b60692fd9"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/runner-preparation.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "合成失败夹具、模块配置及 Memory/Task 种子准备",
+      "sha256": "9936e0e046673c9b67a0713c038b8bcd30333136c8a7951a46c038944a81c36d"
+    },
+    {
+      "path": "packages/pi-enhanced/benchmarks/real-agent/runner-results.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "结果解释、独立状态、触达、审计保存及汇总",
+      "sha256": "a970be5182f2ea8c27bc626f363e9a4ed917cead736ff0dffe23e0474c7315a4"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/version-freeze-results.json",
+      "ownership": [
+        "版本收口"
+      ],
+      "reason": "本轮结构化验收和 CI 必需的完整测试身份基线",
+      "sha256": null
+    },
+    {
+      "path": "packages/pi-enhanced/docs/version-freeze-verification.md",
+      "ownership": [
+        "版本收口"
+      ],
+      "reason": "本轮唯一核心验收说明、候选/排除及授权边界",
+      "sha256": "0c95edf494257348b628fc935ce4cb2f251572aebafc3cf64301a69cbc997798"
+    },
+    {
+      "path": "packages/pi-enhanced/scripts/ci/require-docker-evidence.ts",
+      "ownership": [
+        "Batch N"
+      ],
+      "reason": "Linux Docker 必须实跑新增生产 Runner/Telemetry 用例，不接受 skip 代替",
+      "sha256": "fda2ff45d6048b03afb1f0574c39e4c3df7f3da8bc68130615927711d5b87043"
+    },
+    {
+      "path": "packages/pi-enhanced/src/context/extension.ts",
+      "ownership": [
+        "Batch N"
+      ],
+      "reason": "可选观测回调；异常不影响 Context 输出",
+      "sha256": "f2ac05e2309592e78140c772d09726df9a723c8e0f4c9f2ef97d297ff0defe56"
+    },
+    {
+      "path": "packages/pi-enhanced/src/sandbox/extension.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "迁出仅测试使用的配置 helper；Sandbox 权限边界保持",
+      "sha256": "53790ae69c2557a20f55c44f81d30b368adfc9604b68c25cace0cd24bd758c41"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/e2e/batch-n-observability.test.ts",
+      "ownership": [
+        "Batch N"
+      ],
+      "reason": "生产六格 on/off、越界和请求九拒绝场景；不替代真实模型评测",
+      "sha256": "1196e0b7e8eb324a399106bba2e31488b9a336eabffff2cc0ed636f33caf02ce"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/e2e/docker-verifier.test.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "共享安全夹具和挂载断言，保留恶意补丁负向场景",
+      "sha256": "1c1f0fee79d900fe103cf2f526eec47ebc06f5cf2f897df5285f75a43228c460"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "共享 Stub、SSE、Docker 探测；保留真实联合执行链",
+      "sha256": "d23ba641371c1c4279623e51eb990c0e9191b65e3fef6eb73a27595d6fe625b7"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "共享 Stub 与挂载断言，保留真实生产 Runner 和独立验证",
+      "sha256": "bfd6083d493bd084be646ba943328110ada9722cf447f43db703007855cf7549"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "迁移测试 helper/Docker 探测；保留六工具及安装包 E2E",
+      "sha256": "99c28ad97ad87d01da0d6659a778afafbba83ec1609d468beb498a55330c10fe"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/fixtures/runner-support.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "共享测试专用夹具、loopback Stub 和容器证据断言，无全局注册表",
+      "sha256": "036cf7ed62482264670f93d379ab88e21c433e4af1f0f9b374c27ae5d12d69e4"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/fixtures/sandbox-audit-child.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "强杀审计子进程改用测试目录配置 helper",
+      "sha256": "9fedd782f7f4b21cf5b70d22457b31b4f286c222e69f1e4703e963abed0b284c"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/unit/batch-j-policy-audit.test.ts",
+      "ownership": [
+        "核心结构整理"
+      ],
+      "reason": "迁移共享工作区夹具；保留审计一致性和安全拒绝",
+      "sha256": "f1a8d53845e8090f38a3d65ee6291fcacd3db7ff41b15c9edf14754a4abb6ab4"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/unit/ci-workflow.test.ts",
+      "ownership": [
+        "版本收口"
+      ],
+      "reason": "离线与付费 Workflow 边界；固定当前基线引用与历史副本排除",
+      "sha256": "8aaf5e2dc90878c1807b9034da3b34c5a47b44e99479dbc42cc905bc885756c1"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/unit/docker-ci-evidence.test.ts",
+      "ownership": [
+        "Batch N"
+      ],
+      "reason": "验证新增 Docker 必跑套件与缺失/跳过拒绝",
+      "sha256": "4e4ea8dc14cc6a2eaff0fa92fd4d4cca90a5cc1f2b30c6f0f5ae52e6c7fb9bd7"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/unit/evaluation-telemetry.test.ts",
+      "ownership": [
+        "Batch N"
+      ],
+      "reason": "请求结算、关联未知、泄漏/上限、写入失败与中断持久化回归",
+      "sha256": "b8ffee676e9ddd090538b28aefcf48527c34793a7bcbfa204137d9c31f518547"
+    },
+    {
+      "path": "packages/pi-enhanced/tests/unit/real-agent-policy.test.ts",
+      "ownership": [
+        "Cleanup",
+        "版本收口"
+      ],
+      "reason": "一次解析一致性及四阶段导入不执行/不读 Key 的真实子进程回归",
+      "sha256": "13664ff8ec2683e19f249865741d8d18cea705d58fc30205520407fd0ac23653"
+    },
+    {
+      "path": "packages/pi-enhanced/tsconfig.evaluation.json",
+      "ownership": [
+        "Batch N"
+      ],
+      "reason": "评测源码和新增持久化测试的类型检查范围",
+      "sha256": "24c907e27b4e88ac77890424766ccee5b6315ce24bb6a3cd6c46a08f168cf7c5"
+    }
+  ],
+  "candidateHashNote": "Self-containing report hash is intentionally null; the external final candidates.json records all exact final hashes.",
+  "excluded": [
+    {
+      "path": "packages/pi-enhanced/docs/batch-d-baseline-audit.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-d-test-manifest-final.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-d-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-budget-gateway-design.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-ci-release-review.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-gate-report.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-interface-audit.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-joint-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-real-model-results.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-test-manifest.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-h-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-gateway-denial-audit.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-known-limitations.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-real-model-pilot.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-real-model-results.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-root-cause-audit.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-runner-integration-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-test-manifest.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-i-workspace-identity-design.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-j-results.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-j-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/controlled-comparison-20261103.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/controlled-six-test-manifest.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/full-offline-fix-test-manifest.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/full-offline-module-evidence.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/full-offline-root-cause-and-fix.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/hybrid-architecture.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/next-controlled-comparison-plan.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p3-task-compat-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p4-hardening-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p4-known-limitations.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p4-schema-migration.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p4-task-design.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p4-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p5-evaluation-design.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p5-evaluation-results.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p5-real-model-results.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/p5-real-model-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/release-candidate-checklist.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/verifier-safety-results.json",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/verifier-safety-verification.md",
+      "category": "此前用户已有的历史文档删除",
+      "reason": "保持原状；不纳入本工程提交，不恢复也不删除其他文件"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-n-results.json",
+      "category": "此前验收报告",
+      "reason": "保持本地原件；CI 已改读本轮身份基线，无需重复提交旧报告"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/batch-n-verification.md",
+      "category": "此前验收报告",
+      "reason": "保持本地原件；CI 已改读本轮身份基线，无需重复提交旧报告"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/cleanup-results.json",
+      "category": "此前验收报告",
+      "reason": "保持本地原件；CI 已改读本轮身份基线，无需重复提交旧报告"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/cleanup-verification.md",
+      "category": "此前验收报告",
+      "reason": "保持本地原件；CI 已改读本轮身份基线，无需重复提交旧报告"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/core-structure-results.json",
+      "category": "此前验收报告",
+      "reason": "保持本地原件；CI 已改读本轮身份基线，无需重复提交旧报告"
+    },
+    {
+      "path": "packages/pi-enhanced/docs/core-structure-verification.md",
+      "category": "此前验收报告",
+      "reason": "保持本地原件；CI 已改读本轮身份基线，无需重复提交旧报告"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/context-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/gateway-final.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/patch.diff",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/result.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/sandbox-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/run.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/batch.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/context-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/gateway-final.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/patch.diff",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/result.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/sandbox-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/run.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/context-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/gateway-final.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/patch.diff",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/result.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/sandbox-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/run.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/context-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/gateway-final.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/patch.diff",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/result.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/sandbox-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/run.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/context-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/gateway-final.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/patch.diff",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/result.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/sandbox-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/run.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/context-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/gateway-final.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/patch.diff",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/result.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/sandbox-audit.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    },
+    {
+      "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/run.json",
+      "category": "真实实验数据",
+      "reason": "原始付费实验证据仅本地保留，禁止纳入代码提交"
+    }
+  ],
+  "alwaysExclude": [
+    ".env",
+    "真实 Provider Key",
+    "数据库/SQLite",
+    "Session JSONL",
+    "日志",
+    "模型缓存",
+    ".artifacts/**",
+    "evaluation-output/**"
+  ],
+  "typescript": {
+    "count": 243,
+    "passed": 240,
+    "failed": 0,
+    "skipped": 3,
+    "identities": [
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit controls six-cell fatal without retries or budget increases",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit controls six-cell recover without retries or budget increases",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces container through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces container-denial through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces edit through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces limit through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces recover through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces strict through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces symlink through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces unknown through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces write through real Pi, gateway and Docker",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit recovers after-operation durable Docker events after SIGKILL in a fresh process",
+      "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit recovers operation-in-flight durable Docker events after SIGKILL in a fresh process",
+      "tests/e2e/batch-l-comparison.test.ts :: Batch L paired comparison uses equal prompts, inputs and tool schemas, measures activation, and blocks unapproved real execution",
+      "tests/e2e/batch-n-observability.test.ts :: Batch N production telemetry runs paired six-cell Stub with trusted tool correlation and identical patches when disabled",
+      "tests/e2e/controlled-batch.test.ts :: Six-cell production batch runs all six through Pi and Docker with module controls, truncation, and no retries",
+      "tests/e2e/controlled-batch.test.ts :: Six-cell production batch stops the batch immediately on gateway failure and retains unused cells",
+      "tests/e2e/controlled-batch.test.ts :: Six-cell production batch stops the batch immediately on isolation failure and retains unused cells",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier denies host data, credentials, project writes, root writes and outbound networking",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier does not run host code when the pinned verifier image is missing",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for early exit zero without persisting raw output",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for exception without persisting raw output",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for infinite loop without persisting raw output",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for invalid JSON without persisting raw output",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for output flood without persisting raw output",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for wrong value without persisting raw output",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier rejects a replaced workspace before running any verifier container",
+      "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier runs the real assertion inputs with read-only Docker evidence and cleans up",
+      "tests/e2e/gateway-sandbox-e2e.test.ts :: Batch H model gateway plus Docker tools routes every model turn through the budget gateway and every file operation through Docker",
+      "tests/e2e/mcp-components.test.ts :: locked external MCP components negotiates with @upstash/context7-mcp@4.4.4 and reaches its query endpoint",
+      "tests/e2e/mcp-components.test.ts :: Serena 2.1.0 official Docker image finds a real symbol and its references through stdio MCP",
+      "tests/e2e/package-worker.test.ts :: P2 release package packs, installs, and starts the bundled worker from a path containing spaces",
+      "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner fails the Docker preflight before the local provider receives a request",
+      "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner keeps early-exit patch execution inside the production verifier container",
+      "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner keeps isolated-attack patch execution inside the production verifier container",
+      "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner reaches verified Memory and read-only Task tools through the production pilot",
+      "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner uses the production fixture path through stub provider, gateway, Pi CLI, Docker, patch, and hidden verifier",
+      "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools dispatches all six overridden Pi tools through the restricted container",
+      "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools fails closed when the pinned image is unavailable",
+      "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools loads the installed sandbox extension and executes read through AgentSession",
+      "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools rejects path escape and container failure without a host fallback",
+      "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools runs an earlier tool_call guard before the worker and blocks unknown tools",
+      "tests/e2e/task-crash-recovery.test.ts :: P4 real process interruption recovery reopens a killed child, detects the unknown write and workspace drift, and never replays it",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle falls back to TS-only selection when the Memory reader is unavailable",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle invalidates diagnostics on tree changes and restarts cleanly on resume",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle keeps the native request unchanged for 'disabled' with trusted=true",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle keeps the native request unchanged for 'observe' with trusted=true",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle keeps the native request unchanged for 'select' with trusted=false",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle preserves tool structure when another Context handler runs after",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle preserves tool structure when another Context handler runs before",
+      "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle selects a request view, preserves tool pairing, and never changes the Session JSONL",
+      "tests/integration/context-lifecycle.test.ts :: P3 verified Memory integration excludes archived, expired, stale, deleted, and candidate records through the real Reader",
+      "tests/integration/context-lifecycle.test.ts :: P3 verified Memory integration injects only verified Episodic Memory before the latest user and maps it to a low-trust user message",
+      "tests/integration/context-lifecycle.test.ts :: P3 verified Memory integration optionally injects the current bound Task without changing the user message structure",
+      "tests/integration/core-memory-lifecycle.test.ts :: P2-4 Core Memory lifecycle does no Memory file I/O in 'blocked' state",
+      "tests/integration/core-memory-lifecycle.test.ts :: P2-4 Core Memory lifecycle does no Memory file I/O in 'disabled' state",
+      "tests/integration/core-memory-lifecycle.test.ts :: P2-4 Core Memory lifecycle does not create Core files until explicit use and survives repeated runtime open/close",
+      "tests/integration/data-backup-restore.test.ts :: project SQLite backup and offline restore backs up and restores Memory and Task databases with scope and integrity checks",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths allows direct reads and blocks a lying write tool before any side effect",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths asks through dialog-capable UI and reload clears session audit state",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths blocks a codemode nested write and records that the call was nested",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths blocks a user-rejected approval before the server sees the call",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths fails closed when policy configuration is invalid",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths handles repeated shutdown without leaking lifecycle errors",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths keeps policy enforcement after tool_search loads a deferred tool",
+      "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths treats a newly announced tool as unknown and denies it without UI",
+      "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle allows batch delete preview but refuses to apply it",
+      "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle archives reversibly, excludes archived records from default search/snapshots, and tracks usage without revision churn",
+      "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle blocks conflict consolidation and creates a traceable candidate for an approved compression",
+      "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle keeps expired records inspectable but out of default retrieval",
+      "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle upgrades v1 data, supports an explicit v2 rollback, and upgrades again without losing records",
+      "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle uses proposal revisions as CAS and keeps different project scopes isolated",
+      "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority automatically falls back to FTS5 when the Python worker fails",
+      "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority combines lexical and vector rankings with deterministic reciprocal-rank fusion",
+      "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority discards a failed worker and rebuilds the snapshot on the next query",
+      "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority does not let a stale Python candidate revive a deleted authoritative record",
+      "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority sends only verified records and revalidates worker IDs, revisions and hashes",
+      "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool exposes one bounded verified-only tool and returns controlled failures after shutdown",
+      "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool keeps governance commands user-gated and makes archive reversible while delete needs two confirmations",
+      "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool keeps only status and does not open storage when enabled=false trusted=true",
+      "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool keeps only status and does not open storage when enabled=true trusted=false",
+      "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool runs save, confirm, search, review, Recall, and Core operations through existing services",
+      "tests/integration/memory-interaction.test.ts :: P2-6 ScopedMemoryReader broker acquires the reader when the requesting Extension starts before Memory",
+      "tests/integration/memory-interaction.test.ts :: P2-6 ScopedMemoryReader broker does not publish a reader for disabled Memory",
+      "tests/integration/memory-interaction.test.ts :: P2-6 ScopedMemoryReader broker hands a verified-only reader to a peer Extension and invalidates it across lifecycles",
+      "tests/integration/memory-lifecycle.test.ts :: P2-1/P2-2 Memory Extension lifecycle does not create a Memory data directory when enabled=false trusted=true",
+      "tests/integration/memory-lifecycle.test.ts :: P2-1/P2-2 Memory Extension lifecycle does not create a Memory data directory when enabled=true trusted=false",
+      "tests/integration/memory-lifecycle.test.ts :: P2-1/P2-2 Memory Extension lifecycle opens trusted storage, survives reload, and closes repeatedly",
+      "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider keeps core CRUD and literal search available when FTS5 is explicitly unavailable",
+      "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider migrates core tables, initializes FTS, and keeps multiple sources on one stable record",
+      "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider persists across reopen and reports lock contention with a stable error",
+      "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider reports a corrupt database instead of treating it as empty",
+      "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider reports stale writers and content-key conflicts without overwriting records",
+      "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider rolls back core migration artifacts when a non-FTS schema error occurs",
+      "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider separates optimistic revision from content revision and removes related rows",
+      "tests/integration/memory-reference-search.test.ts :: Memory reference query fallback reproduces long-query FTS misses and retries a code identifier without exposing candidates",
+      "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary allows an explicitly approved workspace write and intercepts nested codemode writes",
+      "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary allows only canonical workspace write/edit in explicit user evaluation mode while Shell stays closed",
+      "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary blocks absolute, traversal, protected, and junction-escaped writes even when approval would succeed",
+      "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary blocks untrusted writes before the file tool creates anything",
+      "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary fails closed for Shell without a dialog-capable UI",
+      "tests/integration/p0-regression.test.ts :: P0 package regression keeps four independent root entries without built-in command conflicts",
+      "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence does not instantiate Recall or touch Session content in 'blocked' state",
+      "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence does not instantiate Recall or touch Session content in 'disabled' state",
+      "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence invalidates the old adapter and binds a replacement runtime to the new Session",
+      "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence uses public SessionManager reads without changing a persisted JSONL file",
+      "tests/integration/task-lifecycle.test.ts :: P4 Task Extension lifecycle creates, persists, observes an explicitly bound tool, checkpoints, and recovers without replay",
+      "tests/integration/task-lifecycle.test.ts :: P4 Task Extension lifecycle does not create storage or expose task tools when enabled=false trusted=true",
+      "tests/integration/task-lifecycle.test.ts :: P4 Task Extension lifecycle does not create storage or expose task tools when enabled=true trusted=false",
+      "tests/integration/task-memory-candidate.test.ts :: Task to Memory candidate bridge accepts only the bound session and project, is idempotent, and never creates verified Memory",
+      "tests/unit/audit.test.ts :: MCP audit trail bounds calls whose tool_result is lost and finalizes the oldest as unknown",
+      "tests/unit/audit.test.ts :: MCP audit trail classifies only machine-readable result signals and leaves ambiguous errors unknown",
+      "tests/unit/audit.test.ts :: MCP audit trail completes denied calls without waiting for a tool result and clears session state",
+      "tests/unit/audit.test.ts :: MCP audit trail keeps a fixed-capacity redacted record list with parent call ids",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit caps pending and completed records before dispatching further operations",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_ISOLATION_STOP without rewriting legacy runStatus",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_TOKEN_BUDGET without rewriting legacy runStatus",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_UPSTREAM_HTTP_503 without rewriting legacy runStatus",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_USAGE_MISSING without rewriting legacy runStatus",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit detects altered and truncated snapshots without repairing or inventing evidence",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit distinguishes lexical parent traversal from symlink escape, metadata and invalid paths",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit does not treat a replacement workspace as the original binding",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit fails closed on journal write errors and cannot subsequently declare a complete audit",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit is disabled by default and rejects real-provider, project and malformed configuration",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit keeps normal agent completion separate from failed verification",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit persists intent, then completion, and marks only an explicit shutdown complete",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit refuses audit files inside the model workspace and existing authoritative files",
+      "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit rejects even checksummed inconsistent sequences and unfinished completion",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway accepts only authenticated isolation-stop signals and never forwards them upstream",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway allows only one concurrent request and fails closed when usage is missing",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway does not treat malformed provider usage as a free completed request",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway forces the provider request through loopback, clamps output, and accounts usage",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway keeps incomplete client disconnects failed closed with a distinct cause and full reservation",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway rejects invalid final usage instead of retaining an earlier valid sample",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway rejects wrong credentials, models, request counts, and token reservations",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway settles usage at SSE DONE before a client closes a still-open upstream stream",
+      "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway times out the upstream and preserves the full reservation",
+      "tests/unit/ci-workflow.test.ts :: Batch G CI authorization boundaries keeps ordinary push and pull request CI offline and secret-free",
+      "tests/unit/ci-workflow.test.ts :: Batch G CI authorization boundaries keeps paid evaluation behind workflow dispatch, environment approval, and the sandbox gate",
+      "tests/unit/config.test.ts :: layered MCP policy configuration allows only user-level opt-in for automated workspace mutations",
+      "tests/unit/config.test.ts :: layered MCP policy configuration does not let a trusted project disable user policy or override an explicit user deny",
+      "tests/unit/config.test.ts :: layered MCP policy configuration fails closed for invalid policy, duplicate ids, and unsafe default allow",
+      "tests/unit/config.test.ts :: layered MCP policy configuration ignores project policy until the project is trusted",
+      "tests/unit/config.test.ts :: Memory Governance configuration uses bounded explicit maintenance thresholds and fails closed for unknown settings",
+      "tests/unit/config.test.ts :: P0 shared configuration regression keeps all four modules disabled by default and independently switchable",
+      "tests/unit/config.test.ts :: P2-8 memory intelligence configuration fails the memory module closed for invalid or unknown intelligence settings",
+      "tests/unit/config.test.ts :: P2-8 memory intelligence configuration keeps Python retrieval disabled and lexical by default",
+      "tests/unit/config.test.ts :: P2-8 memory intelligence configuration uses a bounded trusted-project override and ignores it before trust",
+      "tests/unit/config.test.ts :: P3 Context configuration defaults to disabled observe mode with every mutating feature off",
+      "tests/unit/config.test.ts :: P3 Context configuration fails Context closed for unknown or out-of-range settings",
+      "tests/unit/config.test.ts :: P3 Context configuration loads bounded Context settings only from a trusted project",
+      "tests/unit/context-memory-source.test.ts :: P3 verified Memory injection inserts bounded low-trust data before the latest user request and redacts secrets",
+      "tests/unit/context-memory-source.test.ts :: P3 verified Memory injection is idempotent and does not duplicate content already visible in history",
+      "tests/unit/context-memory-source.test.ts :: P3 verified Memory injection rejects archived, expired, changed, deleted, and late stale search results at the injection boundary",
+      "tests/unit/context-selector.test.ts :: P3 Context selector does not truncate an unmatched result, image output, or unfinished tool call",
+      "tests/unit/context-selector.test.ts :: P3 Context selector keeps compaction summaries even when the estimated target cannot be reached",
+      "tests/unit/context-selector.test.ts :: P3 Context selector removes old complete turns but always keeps the latest user request",
+      "tests/unit/context-selector.test.ts :: P3 Context selector truncates only paired, text-only tool results without changing IDs or roles",
+      "tests/unit/context-task-source.test.ts :: P3 active Task injection injects a bounded redacted low-trust summary before the latest user",
+      "tests/unit/context-task-source.test.ts :: P3 active Task injection rejects a stale async snapshot, wrong binding, terminal state, and duplicate injection",
+      "tests/unit/controlled-policy.test.ts :: Controlled six-cell experiment gates fixes six independent cells and reserves no more than the authorized total",
+      "tests/unit/controlled-policy.test.ts :: Controlled six-cell experiment gates requires all three CI jobs for exactly the current commit",
+      "tests/unit/controlled-policy.test.ts :: Controlled six-cell experiment gates stops on gateway failures, missing usage, denied requests, and isolation changes",
+      "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore keeps the old document when atomic replacement fails and removes the temporary file",
+      "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore never modifies AGENTS.md content, hash, or timestamp",
+      "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore rejects a junction or symbolic-link directory that escapes the project",
+      "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore rejects unsupported names, duplicate create, missing update, large content, and credentials",
+      "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore supports explicit CRUD for exactly three fixed Markdown documents",
+      "tests/unit/docker-ci-evidence.test.ts :: Linux Docker CI evidence requirements accepts only actually executed critical suites and cases",
+      "tests/unit/docker-ci-evidence.test.ts :: Linux Docker CI evidence requirements rejects missing verifier or identity evidence",
+      "tests/unit/docker-ci-evidence.test.ts :: Linux Docker CI evidence requirements rejects skipped Docker tests even when Vitest exits successfully",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability bounds events and handles telemetry write failure without changing tools or gateway",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability classifies requested ranges and post-edit reads without claiming clipping causation",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability detects interrupted metadata from a real terminated child",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability does not mistake query echoes, free text or inactive records for the verified fixture seed",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability keeps duplicate response identities unknown rather than aligning by time",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability keeps missing response identities unknown rather than aligning by time",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability leaves malformed usage unknown and existing budget failure closed",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability leaves missing usage unknown and existing budget failure closed",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability leaves timeout usage unknown and existing budget failure closed",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability links parallel tools by response ID with reversed return order and deterministic Broker children",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability marks missing results and orphan returns incomplete",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability never persists raw payloads, paths, arguments, response IDs or secrets",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability preserves explicit nested parent IDs without inventing a new model request",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability rejects cross-run provider events, duplicate tool events and late callbacks",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability rejects foreign-run tool envelopes and marks late callbacks durably incomplete",
+      "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability settles distinct per-request usage once and records ninth rejection with null usage",
+      "tests/unit/gateway-integration.test.ts :: Batch H gateway integration boundary does not expose any real provider key to the Pi child",
+      "tests/unit/gateway-integration.test.ts :: Batch H gateway integration boundary overrides the built-in DeepSeek base URL and resolves only the gateway token",
+      "tests/unit/memory-output-safety.test.ts :: Memory path redaction recognizes Windows drive paths regardless of case and slash style",
+      "tests/unit/memory-project-scope.test.ts :: P2-1 lifecycle gate closes an enabled trusted backend exactly once",
+      "tests/unit/memory-project-scope.test.ts :: P2-1 lifecycle gate returns 'blocked' without resolving a scope or opening storage",
+      "tests/unit/memory-project-scope.test.ts :: P2-1 lifecycle gate returns 'disabled' without resolving a scope or opening storage",
+      "tests/unit/memory-project-scope.test.ts :: P2-1 project scope keeps repository root and subdirectory as separate workspace scopes",
+      "tests/unit/memory-project-scope.test.ts :: P2-1 project scope normalizes Windows path case for identity without changing the displayed canonical path",
+      "tests/unit/memory-project-scope.test.ts :: P2-1 project scope uses the canonical absolute workspace path and separates same-named directories",
+      "tests/unit/memory-service.test.ts :: P2-3 MemoryService always saves untrusted input as candidate and defaults search to verified",
+      "tests/unit/memory-service.test.ts :: P2-3 MemoryService invalidates old evidence after content changes and detects stale writers",
+      "tests/unit/memory-service.test.ts :: P2-3 MemoryService rejects secrets without echoing them and enforces review transitions",
+      "tests/unit/memory-service.test.ts :: P2-3 MemoryService requires a successful interactive confirmation and keeps contentRevision stable across status changes",
+      "tests/unit/memory-service.test.ts :: P2-3 MemoryService verifies only an exact observed file excerpt and records the real file hash",
+      "tests/unit/policy.test.ts :: MCP policy evaluation asks for unknown tools and ignores untrusted read-only annotations",
+      "tests/unit/policy.test.ts :: MCP policy evaluation does not modify the read-only arguments object",
+      "tests/unit/policy.test.ts :: MCP policy evaluation gives an explicit deny precedence over a tool allow",
+      "tests/unit/policy.test.ts :: MCP policy evaluation parses valid MCP names and rejects non-MCP or incomplete names",
+      "tests/unit/policy.test.ts :: MCP policy evaluation uses tool rules before server rules and fixes same-tier order by priority then declaration",
+      "tests/unit/prompt-injection-boundaries.test.ts :: Batch F low-trust prompt injection boundaries does not promote malicious tool output or break its call/result structure",
+      "tests/unit/prompt-injection-boundaries.test.ts :: Batch F low-trust prompt injection boundaries keeps malicious Task text low-trust and rejects wrong session provenance",
+      "tests/unit/prompt-injection-boundaries.test.ts :: Batch F low-trust prompt injection boundaries maps malicious verified Memory to a redacted model-side user reference, never system",
+      "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client accepts only an absolute Python override and keeps paths with spaces as one spawn argument",
+      "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client bounds startup time when a worker never answers",
+      "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client rejects invalid stdout instead of treating it as retrieval data",
+      "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client reports a missing Python executable as unavailable",
+      "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client uses the real local worker without returning memory content",
+      "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate accepts only one concurrent task and bounded numeric limits",
+      "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate fails closed before reading or invoking a provider when any gate is missing",
+      "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate imports all Runner stages without starting tasks or reading a provider key",
+      "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate preflight never reads a key and logs redact secrets and usage",
+      "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate stops on calls, tokens, or cost and classifies timeout and process errors separately",
+      "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol allows only explicitly enabled read-only module tools alongside Docker file tools",
+      "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol does not accept a workspace path that merely shares a textual prefix",
+      "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol is disabled by default without registering an implicit trusted workspace",
+      "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol rejects a mismatched run root and an ordinary project outside the controlled root",
+      "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol rejects stale, cross-run, cross-tool, and oversized worker responses",
+      "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol reproduces the H3 sibling-temp rejection and accepts only the runner root handoff",
+      "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol requires bounded identifiers and a pinned image",
+      "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter extracts text only and redacts credentials, private keys, and private paths",
+      "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter keeps pre-compaction text in raw mode but follows the native projection",
+      "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter refuses to label a Session from another workspace with the current project scope",
+      "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter rejects invalid input and becomes unusable after close",
+      "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter reports scan, source, hit, result, and total byte limits",
+      "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter searches only the current branch and follows an immediate leaf switch",
+      "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter uses context edits only in model-visible mode and preserves the source entry",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery creates a checkpoint and distinguishes completed, failed, pending, and unknown steps",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery does not accept model claims or settlement as completion evidence",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery fails closed on a busy or corrupt Task database without changing other module storage",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery hashes configured and Git-changed files within bounded workspace observation",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery isolates equal directory names by canonical project identity and rejects a newer schema",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery marks an interrupted mutating attempt for reconciliation and never allows automatic replay",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery persists a DAG, rejects cycles, and enforces plan CAS",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery tracks parallel, nested, blocked, out-of-order, duplicate, and missing-end tool events by real ids",
+      "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery upgrades an existing schema v1 database to v2 without losing tasks"
+    ],
+    "missingPriorIdentities": [],
+    "newIdentities": [
+      "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate imports all Runner stages without starting tasks or reading a provider key"
+    ],
+    "assertions": [
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit controls six-cell recover without retries or budget increases",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit controls six-cell fatal without retries or budget increases",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces recover through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces strict through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces write through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces edit through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces limit through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
+        "status": "skipped"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces container through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces container-denial through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces symlink through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces unknown through real Pi, gateway and Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit recovers after-operation durable Docker events after SIGKILL in a fresh process",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit recovers operation-in-flight durable Docker events after SIGKILL in a fresh process",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-l-comparison.test.ts :: Batch L paired comparison uses equal prompts, inputs and tool schemas, measures activation, and blocks unapproved real execution",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/batch-n-observability.test.ts :: Batch N production telemetry runs paired six-cell Stub with trusted tool correlation and identical patches when disabled",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/controlled-batch.test.ts :: Six-cell production batch runs all six through Pi and Docker with module controls, truncation, and no retries",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/controlled-batch.test.ts :: Six-cell production batch stops the batch immediately on gateway failure and retains unused cells",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/controlled-batch.test.ts :: Six-cell production batch stops the batch immediately on isolation failure and retains unused cells",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier runs the real assertion inputs with read-only Docker evidence and cleans up",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for wrong value without persisting raw output",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for early exit zero without persisting raw output",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for invalid JSON without persisting raw output",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for exception without persisting raw output",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for infinite loop without persisting raw output",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier fails closed for output flood without persisting raw output",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier denies host data, credentials, project writes, root writes and outbound networking",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier rejects a replaced workspace before running any verifier container",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/docker-verifier.test.ts :: Isolated hidden verifier does not run host code when the pinned verifier image is missing",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/gateway-sandbox-e2e.test.ts :: Batch H model gateway plus Docker tools routes every model turn through the budget gateway and every file operation through Docker",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/mcp-components.test.ts :: locked external MCP components negotiates with @upstash/context7-mcp@4.4.4 and reaches its query endpoint",
+        "status": "skipped"
+      },
+      {
+        "identity": "tests/e2e/mcp-components.test.ts :: Serena 2.1.0 official Docker image finds a real symbol and its references through stdio MCP",
+        "status": "skipped"
+      },
+      {
+        "identity": "tests/e2e/package-worker.test.ts :: P2 release package packs, installs, and starts the bundled worker from a path containing spaces",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner uses the production fixture path through stub provider, gateway, Pi CLI, Docker, patch, and hidden verifier",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner fails the Docker preflight before the local provider receives a request",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner keeps early-exit patch execution inside the production verifier container",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner keeps isolated-attack patch execution inside the production verifier container",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/real-agent-runner-e2e.test.ts :: Batch I production real-agent runner reaches verified Memory and read-only Task tools through the production pilot",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools dispatches all six overridden Pi tools through the restricted container",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools rejects path escape and container failure without a host fallback",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools runs an earlier tool_call guard before the worker and blocks unknown tools",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools fails closed when the pinned image is unavailable",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/sandbox-agent-session.test.ts :: real AgentSession Docker file tools loads the installed sandbox extension and executes read through AgentSession",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/e2e/task-crash-recovery.test.ts :: P4 real process interruption recovery reopens a killed child, detects the unknown write and workspace drift, and never replays it",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle keeps the native request unchanged for 'disabled' with trusted=true",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle keeps the native request unchanged for 'observe' with trusted=true",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle keeps the native request unchanged for 'select' with trusted=false",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle selects a request view, preserves tool pairing, and never changes the Session JSONL",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle preserves tool structure when another Context handler runs before",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle preserves tool structure when another Context handler runs after",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle falls back to TS-only selection when the Memory reader is unavailable",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 Context Extension lifecycle invalidates diagnostics on tree changes and restarts cleanly on resume",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 verified Memory integration optionally injects the current bound Task without changing the user message structure",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 verified Memory integration injects only verified Episodic Memory before the latest user and maps it to a low-trust user message",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/context-lifecycle.test.ts :: P3 verified Memory integration excludes archived, expired, stale, deleted, and candidate records through the real Reader",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/core-memory-lifecycle.test.ts :: P2-4 Core Memory lifecycle does no Memory file I/O in 'disabled' state",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/core-memory-lifecycle.test.ts :: P2-4 Core Memory lifecycle does no Memory file I/O in 'blocked' state",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/core-memory-lifecycle.test.ts :: P2-4 Core Memory lifecycle does not create Core files until explicit use and survives repeated runtime open/close",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/data-backup-restore.test.ts :: project SQLite backup and offline restore backs up and restores Memory and Task databases with scope and integrity checks",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths allows direct reads and blocks a lying write tool before any side effect",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths keeps policy enforcement after tool_search loads a deferred tool",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths blocks a codemode nested write and records that the call was nested",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths treats a newly announced tool as unknown and denies it without UI",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths asks through dialog-capable UI and reload clears session audit state",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths blocks a user-rejected approval before the server sees the call",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths fails closed when policy configuration is invalid",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/mcp-policy.test.ts :: MCP policy with Pi native MCP paths handles repeated shutdown without leaking lifecycle errors",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle upgrades v1 data, supports an explicit v2 rollback, and upgrades again without losing records",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle archives reversibly, excludes archived records from default search/snapshots, and tracks usage without revision churn",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle keeps expired records inspectable but out of default retrieval",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle blocks conflict consolidation and creates a traceable candidate for an approved compression",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle uses proposal revisions as CAS and keeps different project scopes isolated",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-governance.test.ts :: Memory Governance schema and lifecycle allows batch delete preview but refuses to apply it",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority sends only verified records and revalidates worker IDs, revisions and hashes",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority combines lexical and vector rankings with deterministic reciprocal-rank fusion",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority automatically falls back to FTS5 when the Python worker fails",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority discards a failed worker and rebuilds the snapshot on the next query",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-intelligence.test.ts :: P2-8 TypeScript memory intelligence authority does not let a stale Python candidate revive a deleted authoritative record",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool keeps only status and does not open storage when enabled=false trusted=true",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool keeps only status and does not open storage when enabled=true trusted=false",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool runs save, confirm, search, review, Recall, and Core operations through existing services",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool keeps governance commands user-gated and makes archive reversible while delete needs two confirmations",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 Memory commands and read-only model tool exposes one bounded verified-only tool and returns controlled failures after shutdown",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 ScopedMemoryReader broker hands a verified-only reader to a peer Extension and invalidates it across lifecycles",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 ScopedMemoryReader broker does not publish a reader for disabled Memory",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-interaction.test.ts :: P2-6 ScopedMemoryReader broker acquires the reader when the requesting Extension starts before Memory",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-lifecycle.test.ts :: P2-1/P2-2 Memory Extension lifecycle does not create a Memory data directory when enabled=false trusted=true",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-lifecycle.test.ts :: P2-1/P2-2 Memory Extension lifecycle does not create a Memory data directory when enabled=true trusted=false",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-lifecycle.test.ts :: P2-1/P2-2 Memory Extension lifecycle opens trusted storage, survives reload, and closes repeatedly",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider migrates core tables, initializes FTS, and keeps multiple sources on one stable record",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider keeps core CRUD and literal search available when FTS5 is explicitly unavailable",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider separates optimistic revision from content revision and removes related rows",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider reports stale writers and content-key conflicts without overwriting records",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider rolls back core migration artifacts when a non-FTS schema error occurs",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider persists across reopen and reports lock contention with a stable error",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-provider.test.ts :: P2-2 LocalMemoryProvider reports a corrupt database instead of treating it as empty",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/memory-reference-search.test.ts :: Memory reference query fallback reproduces long-query FTS misses and retries a code identifier without exposing candidates",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary blocks untrusted writes before the file tool creates anything",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary fails closed for Shell without a dialog-capable UI",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary blocks absolute, traversal, protected, and junction-escaped writes even when approval would succeed",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary allows an explicitly approved workspace write and intercepts nested codemode writes",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/native-tool-guard.test.ts :: native tool guard pre-execution boundary allows only canonical workspace write/edit in explicit user evaluation mode while Shell stays closed",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/p0-regression.test.ts :: P0 package regression keeps four independent root entries without built-in command conflicts",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence does not instantiate Recall or touch Session content in 'disabled' state",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence does not instantiate Recall or touch Session content in 'blocked' state",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence uses public SessionManager reads without changing a persisted JSONL file",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/session-recall-lifecycle.test.ts :: P2-5 Session Recall lifecycle and persistence invalidates the old adapter and binds a replacement runtime to the new Session",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/task-lifecycle.test.ts :: P4 Task Extension lifecycle does not create storage or expose task tools when enabled=false trusted=true",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/task-lifecycle.test.ts :: P4 Task Extension lifecycle does not create storage or expose task tools when enabled=true trusted=false",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/task-lifecycle.test.ts :: P4 Task Extension lifecycle creates, persists, observes an explicitly bound tool, checkpoints, and recovers without replay",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/integration/task-memory-candidate.test.ts :: Task to Memory candidate bridge accepts only the bound session and project, is idempotent, and never creates verified Memory",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/audit.test.ts :: MCP audit trail keeps a fixed-capacity redacted record list with parent call ids",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/audit.test.ts :: MCP audit trail completes denied calls without waiting for a tool result and clears session state",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/audit.test.ts :: MCP audit trail bounds calls whose tool_result is lost and finalizes the oldest as unknown",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/audit.test.ts :: MCP audit trail classifies only machine-readable result signals and leaves ambiguous errors unknown",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit is disabled by default and rejects real-provider, project and malformed configuration",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit distinguishes lexical parent traversal from symlink escape, metadata and invalid paths",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit persists intent, then completion, and marks only an explicit shutdown complete",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit detects altered and truncated snapshots without repairing or inventing evidence",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit fails closed on journal write errors and cannot subsequently declare a complete audit",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit rejects even checksummed inconsistent sequences and unfinished completion",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit refuses audit files inside the model workspace and existing authoritative files",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit caps pending and completed records before dispatching further operations",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit does not treat a replacement workspace as the original binding",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_ISOLATION_STOP without rewriting legacy runStatus",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_TOKEN_BUDGET without rewriting legacy runStatus",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_USAGE_MISSING without rewriting legacy runStatus",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit classifies GATEWAY_UPSTREAM_HTTP_503 without rewriting legacy runStatus",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/batch-j-policy-audit.test.ts :: Batch J trusted policy and durable audit keeps normal agent completion separate from failed verification",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway accepts only authenticated isolation-stop signals and never forwards them upstream",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway forces the provider request through loopback, clamps output, and accounts usage",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway rejects wrong credentials, models, request counts, and token reservations",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway allows only one concurrent request and fails closed when usage is missing",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway times out the upstream and preserves the full reservation",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway settles usage at SSE DONE before a client closes a still-open upstream stream",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway keeps incomplete client disconnects failed closed with a distinct cause and full reservation",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway does not treat malformed provider usage as a free completed request",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/budget-gateway.test.ts :: Batch H hard budget gateway rejects invalid final usage instead of retaining an earlier valid sample",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/ci-workflow.test.ts :: Batch G CI authorization boundaries keeps ordinary push and pull request CI offline and secret-free",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/ci-workflow.test.ts :: Batch G CI authorization boundaries keeps paid evaluation behind workflow dispatch, environment approval, and the sandbox gate",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: P0 shared configuration regression keeps all four modules disabled by default and independently switchable",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: P2-8 memory intelligence configuration keeps Python retrieval disabled and lexical by default",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: P2-8 memory intelligence configuration uses a bounded trusted-project override and ignores it before trust",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: P2-8 memory intelligence configuration fails the memory module closed for invalid or unknown intelligence settings",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: Memory Governance configuration uses bounded explicit maintenance thresholds and fails closed for unknown settings",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: P3 Context configuration defaults to disabled observe mode with every mutating feature off",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: P3 Context configuration loads bounded Context settings only from a trusted project",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: P3 Context configuration fails Context closed for unknown or out-of-range settings",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: layered MCP policy configuration allows only user-level opt-in for automated workspace mutations",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: layered MCP policy configuration does not let a trusted project disable user policy or override an explicit user deny",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: layered MCP policy configuration ignores project policy until the project is trusted",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/config.test.ts :: layered MCP policy configuration fails closed for invalid policy, duplicate ids, and unsafe default allow",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-memory-source.test.ts :: P3 verified Memory injection inserts bounded low-trust data before the latest user request and redacts secrets",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-memory-source.test.ts :: P3 verified Memory injection is idempotent and does not duplicate content already visible in history",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-memory-source.test.ts :: P3 verified Memory injection rejects archived, expired, changed, deleted, and late stale search results at the injection boundary",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-selector.test.ts :: P3 Context selector removes old complete turns but always keeps the latest user request",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-selector.test.ts :: P3 Context selector keeps compaction summaries even when the estimated target cannot be reached",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-selector.test.ts :: P3 Context selector truncates only paired, text-only tool results without changing IDs or roles",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-selector.test.ts :: P3 Context selector does not truncate an unmatched result, image output, or unfinished tool call",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-task-source.test.ts :: P3 active Task injection injects a bounded redacted low-trust summary before the latest user",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/context-task-source.test.ts :: P3 active Task injection rejects a stale async snapshot, wrong binding, terminal state, and duplicate injection",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/controlled-policy.test.ts :: Controlled six-cell experiment gates fixes six independent cells and reserves no more than the authorized total",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/controlled-policy.test.ts :: Controlled six-cell experiment gates stops on gateway failures, missing usage, denied requests, and isolation changes",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/controlled-policy.test.ts :: Controlled six-cell experiment gates requires all three CI jobs for exactly the current commit",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore supports explicit CRUD for exactly three fixed Markdown documents",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore rejects unsupported names, duplicate create, missing update, large content, and credentials",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore rejects a junction or symbolic-link directory that escapes the project",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore keeps the old document when atomic replacement fails and removes the temporary file",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/core-memory.test.ts :: P2-4 CoreMemoryStore never modifies AGENTS.md content, hash, or timestamp",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/docker-ci-evidence.test.ts :: Linux Docker CI evidence requirements accepts only actually executed critical suites and cases",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/docker-ci-evidence.test.ts :: Linux Docker CI evidence requirements rejects skipped Docker tests even when Vitest exits successfully",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/docker-ci-evidence.test.ts :: Linux Docker CI evidence requirements rejects missing verifier or identity evidence",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability does not mistake query echoes, free text or inactive records for the verified fixture seed",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability rejects foreign-run tool envelopes and marks late callbacks durably incomplete",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability links parallel tools by response ID with reversed return order and deterministic Broker children",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability keeps missing response identities unknown rather than aligning by time",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability keeps duplicate response identities unknown rather than aligning by time",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability preserves explicit nested parent IDs without inventing a new model request",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability marks missing results and orphan returns incomplete",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability rejects cross-run provider events, duplicate tool events and late callbacks",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability classifies requested ranges and post-edit reads without claiming clipping causation",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability never persists raw payloads, paths, arguments, response IDs or secrets",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability bounds events and handles telemetry write failure without changing tools or gateway",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability detects interrupted metadata from a real terminated child",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability settles distinct per-request usage once and records ninth rejection with null usage",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability leaves missing usage unknown and existing budget failure closed",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability leaves malformed usage unknown and existing budget failure closed",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/evaluation-telemetry.test.ts :: Batch N metadata-only observability leaves timeout usage unknown and existing budget failure closed",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/gateway-integration.test.ts :: Batch H gateway integration boundary overrides the built-in DeepSeek base URL and resolves only the gateway token",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/gateway-integration.test.ts :: Batch H gateway integration boundary does not expose any real provider key to the Pi child",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-output-safety.test.ts :: Memory path redaction recognizes Windows drive paths regardless of case and slash style",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-project-scope.test.ts :: P2-1 project scope uses the canonical absolute workspace path and separates same-named directories",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-project-scope.test.ts :: P2-1 project scope normalizes Windows path case for identity without changing the displayed canonical path",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-project-scope.test.ts :: P2-1 project scope keeps repository root and subdirectory as separate workspace scopes",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-project-scope.test.ts :: P2-1 lifecycle gate returns 'disabled' without resolving a scope or opening storage",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-project-scope.test.ts :: P2-1 lifecycle gate returns 'blocked' without resolving a scope or opening storage",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-project-scope.test.ts :: P2-1 lifecycle gate closes an enabled trusted backend exactly once",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-service.test.ts :: P2-3 MemoryService always saves untrusted input as candidate and defaults search to verified",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-service.test.ts :: P2-3 MemoryService requires a successful interactive confirmation and keeps contentRevision stable across status changes",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-service.test.ts :: P2-3 MemoryService invalidates old evidence after content changes and detects stale writers",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-service.test.ts :: P2-3 MemoryService verifies only an exact observed file excerpt and records the real file hash",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/memory-service.test.ts :: P2-3 MemoryService rejects secrets without echoing them and enforces review transitions",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/policy.test.ts :: MCP policy evaluation gives an explicit deny precedence over a tool allow",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/policy.test.ts :: MCP policy evaluation uses tool rules before server rules and fixes same-tier order by priority then declaration",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/policy.test.ts :: MCP policy evaluation asks for unknown tools and ignores untrusted read-only annotations",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/policy.test.ts :: MCP policy evaluation does not modify the read-only arguments object",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/policy.test.ts :: MCP policy evaluation parses valid MCP names and rejects non-MCP or incomplete names",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/prompt-injection-boundaries.test.ts :: Batch F low-trust prompt injection boundaries maps malicious verified Memory to a redacted model-side user reference, never system",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/prompt-injection-boundaries.test.ts :: Batch F low-trust prompt injection boundaries keeps malicious Task text low-trust and rejects wrong session provenance",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/prompt-injection-boundaries.test.ts :: Batch F low-trust prompt injection boundaries does not promote malicious tool output or break its call/result structure",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client accepts only an absolute Python override and keeps paths with spaces as one spawn argument",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client uses the real local worker without returning memory content",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client bounds startup time when a worker never answers",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client rejects invalid stdout instead of treating it as retrieval data",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/python-worker-client.test.ts :: P2-8 Python memory worker client reports a missing Python executable as unavailable",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate imports all Runner stages without starting tasks or reading a provider key",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate fails closed before reading or invoking a provider when any gate is missing",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate accepts only one concurrent task and bounded numeric limits",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate preflight never reads a key and logs redact secrets and usage",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/real-agent-policy.test.ts :: Batch F real model authorization and budget gate stops on calls, tokens, or cost and classifies timeout and process errors separately",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol is disabled by default without registering an implicit trusted workspace",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol allows only explicitly enabled read-only module tools alongside Docker file tools",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol requires bounded identifiers and a pinned image",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol reproduces the H3 sibling-temp rejection and accepts only the runner root handoff",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol rejects a mismatched run root and an ordinary project outside the controlled root",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol rejects stale, cross-run, cross-tool, and oversized worker responses",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/sandbox-protocol.test.ts :: Docker sandbox protocol does not accept a workspace path that merely shares a textual prefix",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter searches only the current branch and follows an immediate leaf switch",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter keeps pre-compaction text in raw mode but follows the native projection",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter uses context edits only in model-visible mode and preserves the source entry",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter extracts text only and redacts credentials, private keys, and private paths",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter reports scan, source, hit, result, and total byte limits",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter rejects invalid input and becomes unusable after close",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/session-recall.test.ts :: P2-5 SessionRecallAdapter refuses to label a Session from another workspace with the current project scope",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery persists a DAG, rejects cycles, and enforces plan CAS",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery does not accept model claims or settlement as completion evidence",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery marks an interrupted mutating attempt for reconciliation and never allows automatic replay",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery creates a checkpoint and distinguishes completed, failed, pending, and unknown steps",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery hashes configured and Git-changed files within bounded workspace observation",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery isolates equal directory names by canonical project identity and rejects a newer schema",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery fails closed on a busy or corrupt Task database without changing other module storage",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery upgrades an existing schema v1 database to v2 without losing tasks",
+        "status": "passed"
+      },
+      {
+        "identity": "tests/unit/task-manager.test.ts :: P4 Task plan, state, evidence, and recovery tracks parallel, nested, blocked, out-of-order, duplicate, and missing-end tool events by real ids",
+        "status": "passed"
+      }
+    ]
+  },
+  "tests": {
+    "final": {
+      "file": ".artifacts/version-freeze/regression-final.json",
+      "collected": 243,
+      "passed": 240,
+      "failed": 0,
+      "skipped": 3
+    },
+    "initialWithoutDocker": {
+      "file": ".artifacts/version-freeze/regression.json",
+      "collected": 243,
+      "passed": 201,
+      "failed": 0,
+      "skipped": 42
+    },
+    "defectReproduction": {
+      "file": ".artifacts/version-freeze/import-before.json",
+      "collected": 5,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 4
+    },
+    "fixChecks": {
+      "file": ".artifacts/version-freeze/fix-tests.json",
+      "collected": 7,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0
+    },
+    "python": {
+      "passed": 15,
+      "failed": 0,
+      "evidence": ".artifacts/version-freeze/python.log"
+    },
+    "candidateInstall": {
+      "file": ".artifacts/version-freeze/candidate-install.json",
+      "collected": 6,
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0
+    },
+    "skips": [
+      {
+        "identity": "tests/e2e/batch-j-runner.test.ts :: Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
+        "status": "skipped",
+        "reason": "Mounted-directory replacement is Linux-only",
+        "mustRunJob": "docker-isolation on ubuntu-latest"
+      },
+      {
+        "identity": "tests/e2e/mcp-components.test.ts :: locked external MCP components negotiates with @upstash/context7-mcp@4.4.4 and reaches its query endpoint",
+        "status": "skipped",
+        "reason": "External MCP deliberately disabled; no key/endpoint use",
+        "mustRunJob": "Separately authorized external integration; not enabled in these secret-free CI jobs"
+      },
+      {
+        "identity": "tests/e2e/mcp-components.test.ts :: Serena 2.1.0 official Docker image finds a real symbol and its references through stdio MCP",
+        "status": "skipped",
+        "reason": "External MCP deliberately disabled; no key/endpoint use",
+        "mustRunJob": "Separately authorized external integration; not enabled in these secret-free CI jobs"
+      }
+    ]
+  },
+  "review": {
+    "runtimeImportCycles": 0,
+    "cliImportGuard": "red/green real child test; no Provider keys supplied",
+    "budgetGatewayExecutableJsUnchanged": true,
+    "executionExecutableJsUnchanged": true,
+    "stageProtection": [
+      "CLI retains preflight/authorization before env loading",
+      "No host tool/Verifier fallback added",
+      "Separate runStatus/patchStatus/auditComplete/evaluationAccepted preserved",
+      "Telemetry opt-in and observer error handling remain unchanged",
+      "Test helper has no global mutable registry"
+    ],
+    "unusedExports": {
+      "madePrivate": [
+        "TELEMETRY_VERSION",
+        "MAX_TELEMETRY_BYTES"
+      ],
+      "keptWithEvidence": [
+        {
+          "name": "ModuleSwitches",
+          "reason": "TS4058 proves exported result declaration depends on naming this public type; export restored, not a dead runtime helper"
+        }
+      ]
+    },
+    "archiveBoundary": "42 preexisting document deletions, six old reports and all historical evaluation-output remain unchanged/excluded"
+  },
+  "dependencyGraph": {
+    "scope": "Pi Enhanced local runtime imports, not Pi Core/third-party internal cycles",
+    "runtimeModules": 29,
+    "cycles": []
+  },
+  "changesThisRound": [
+    "Guard CLI main so importing any of four Runner modules does not start tasks or read .env; red/green child test added",
+    "CI uses current version-freeze-results.json identities, not the full historical N report; excludes .artifacts copies",
+    "Two internal telemetry constants made private; ModuleSwitches kept exported because its name is needed by emitted public return types",
+    "Format exactly candidate TypeScript files; no budget or isolation semantic changes"
+  ],
+  "history": {
+    "protected": 116,
+    "allUnchanged": true,
+    "files": [
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/context-audit.json",
+        "sha256": "180a2d41f1e3b05b61fd3a086650eae8876b8a91d2ce5644c354cbe108ebbcc3",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/gateway-final.json",
+        "sha256": "ad1e25f8993d644b1d799e27021ccd7ecdea2c6566799a179b6581d32288bb4d",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/patch.diff",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/result.json",
+        "sha256": "3b45a3b9ed60e661ef02e76cbc4870f5b8b2d0d1f81e1f01d992740580c711f9",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/memory-guided-regression/sandbox-audit.json",
+        "sha256": "0949900be12dc43ed7658a98381198d467af244e7e89770ca115f56a9e68196a",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/approved_six_20261103_m_inline/run.json",
+        "sha256": "4123015af49c2ca03203ec5547b3064693166ded9f8dd6a31ffdc9dab65a8b08",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/approved_six_20261103/batch.json",
+        "sha256": "edaaf4a89a2cf8d849c9dd4ba9b926228fb12043a2b155cc3971f410fcf6d420",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch.json",
+        "sha256": "7dd414e13f599229f80db0c6cf7d83a3c508fb0d7dc3d36ff0314888ade4ab09",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/context-audit.json",
+        "sha256": "180a2d41f1e3b05b61fd3a086650eae8876b8a91d2ce5644c354cbe108ebbcc3",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/gateway-final.json",
+        "sha256": "4f2fc4ad3f216a102ea80defa5e0783c13bd3dc261be85ea9333c9b16bff9d55",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/patch.diff",
+        "sha256": "bb7a40c294b9c4b72a93988476df72ad62a512298afa33f6868a019f887e2c27",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/result.json",
+        "sha256": "1d0b4913afacf2eadf00e48bdd6deca67515167aa45a17dffbc5bad84c195f97",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/controlled-long-report/sandbox-audit.json",
+        "sha256": "3154a34c9ffaa3508458429ae78f355ffe2a1cd43f1bf4bd5a0a905758b01aa9",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_off/run.json",
+        "sha256": "8939fabd914fb8f016798891cb5e420b3255804fe58658a0163d70157e5a99e9",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/context-audit.json",
+        "sha256": "c09ba8f2766465de66c9bb718796811091234a2ed886cd5303d5eada57b27134",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/gateway-final.json",
+        "sha256": "181635888f1bed94a553a90c3a94bd179b61b7081a933d4b0c37f36e678689ca",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/patch.diff",
+        "sha256": "bb7a40c294b9c4b72a93988476df72ad62a512298afa33f6868a019f887e2c27",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/result.json",
+        "sha256": "fa4d2f9754ad954d2b349bc8db45c5ae03c3a9b671ab3f6bfee8ce5b50166954",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/controlled-long-report/sandbox-audit.json",
+        "sha256": "ffc560cf4c04790e407c440b419f9685a76d3cb27203f6f99b779959b0961e0b",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_c_on/run.json",
+        "sha256": "74b652c2517587684c15f4b7bf4b8eb050ee53d2ecf75211c9bdc1d2730f48c8",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/context-audit.json",
+        "sha256": "180a2d41f1e3b05b61fd3a086650eae8876b8a91d2ce5644c354cbe108ebbcc3",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/gateway-final.json",
+        "sha256": "ad07292dc72c67aed0eaf32001959c029648968c323fc858dd171ed28b8f8413",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/patch.diff",
+        "sha256": "76d16403d2fcdf881f2ea16a093482d7a846e8ba63a05787c7fc20d31633345b",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/result.json",
+        "sha256": "ef13af6b66319ae0468c6f078220185cce911ca9371544f4465ddbbff741724a",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/memory-guided-regression/sandbox-audit.json",
+        "sha256": "890e8a59d134762a1fc37bf24ba9e5525767dc39f654fbcef224961954198766",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_inline/run.json",
+        "sha256": "28e278d1861ce509b86603e22a259e87fbf437782ea6e9a3ba16484a5eae1e7d",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/context-audit.json",
+        "sha256": "180a2d41f1e3b05b61fd3a086650eae8876b8a91d2ce5644c354cbe108ebbcc3",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/gateway-final.json",
+        "sha256": "5cbfaf71d4e6c6570f39a8b8682c7aeb1e65d441ca60c6306186320b0e38b0a9",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/patch.diff",
+        "sha256": "76d16403d2fcdf881f2ea16a093482d7a846e8ba63a05787c7fc20d31633345b",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/result.json",
+        "sha256": "0e5d7a774cc303a7e973e59702d6dedae722130f998153162bb451fd511a715a",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/memory-guided-regression/sandbox-audit.json",
+        "sha256": "e7866628431e30a1426de4d51ae455a23f88fcdc08680f0569ae0bd4eed20eef",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_m_memory/run.json",
+        "sha256": "15a85bede55ae531ff270f095a4710f184a0954a0011b1bb9b7a318dc6fbfa8e",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/context-audit.json",
+        "sha256": "180a2d41f1e3b05b61fd3a086650eae8876b8a91d2ce5644c354cbe108ebbcc3",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/gateway-final.json",
+        "sha256": "00672a6fdef6a7ea08a2cd58c5bb7a1ae4d8b03676671e33d78e1ebce51f8a83",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/patch.diff",
+        "sha256": "f01df8b6560ea82f77a0cb63822c4a5e59f5374e1f4df4f922a78a12513b2792",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/result.json",
+        "sha256": "64a499994aa3b90468244ab4c123eb27a0c0f353be67db15da00506935246343",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/cross-file-export/sandbox-audit.json",
+        "sha256": "4bb3032a49a7d0025ff4b651973d5a6957eec04ad85a31b99895d47ce78e8217",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/batch_l_20261104_01/batch_l_20261104_01_t_task/run.json",
+        "sha256": "b167c030981ab32a3303387dd38e6f87ab58b8398882162669037fc97dfdb881",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_baseline/long-output-localization/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_baseline/long-output-localization/patch.diff",
+        "sha256": "bb7a40c294b9c4b72a93988476df72ad62a512298afa33f6868a019f887e2c27",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_baseline/long-output-localization/result.json",
+        "sha256": "38a9d372d8944cc53d7ccaa82d1069c2cdb7b7c7caa6812616e77989b314e127",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_baseline/long-output-localization/sandbox-audit.json",
+        "sha256": "09b9705a1cb50334383c5462aa5ed22f5ad8bd60e7c98e0b848334dda901de25",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_baseline/run.json",
+        "sha256": "ff87320e57dd979aa5ce2f10783014d36f4f908a7ece9d7c0dd8b7ab1040000d",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_full/long-output-localization/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_full/long-output-localization/patch.diff",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_full/long-output-localization/result.json",
+        "sha256": "dfec7293a7514b6b2b1bcaa0a8f0b005b9c46a8a7828b22e76af93af8b780bec",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_full/long-output-localization/sandbox-audit.json",
+        "sha256": "fe650b8f198db9f810a7fb4a61721a2bad01c492285740b51fc4683a54a13b1f",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_long_output_localization_full/run.json",
+        "sha256": "b275793a98c44550994737993c6ba4caec7b7e64e68e345e23c5555c42a66cb9",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_baseline/memory-guided-regression/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_baseline/memory-guided-regression/patch.diff",
+        "sha256": "76d16403d2fcdf881f2ea16a093482d7a846e8ba63a05787c7fc20d31633345b",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_baseline/memory-guided-regression/result.json",
+        "sha256": "f489cf9fe73c2d0d76f5da466ee5ccf921cce3abe464574d576b622d1945a08e",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_baseline/memory-guided-regression/sandbox-audit.json",
+        "sha256": "8d9ecd3d401c32d7593dd91f14201c32048aedeb1cc49b528b85bc97dde7f055",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_baseline/run.json",
+        "sha256": "47794ea015afa446fe0c6e3925b94452c717918d6573e736dfaf9767a2befd0b",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_full/memory-guided-regression/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_full/memory-guided-regression/patch.diff",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_full/memory-guided-regression/result.json",
+        "sha256": "1bd4fd57ea095c5b1b266d779f2ba40acfee30a2ab1048f56cdd36e0d968e313",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_full/memory-guided-regression/sandbox-audit.json",
+        "sha256": "a9f07b024f37021072f351890d1c24e1b094194cefd7361490cfc9f399c0ba52",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/compare_20261103_memory_guided_regression_full/run.json",
+        "sha256": "1a4efdceb4568fede5c64aaf6ca2ac4db8883a2f8f5b885fef81d43cc0ef124d",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_h3_deepseek_20261103/run.json",
+        "sha256": "265dd2408f602523f547d8fe9136f9ab7d79232b0a8b0b32510a325949c95332",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_h3_deepseek_20261103/single-file-off-by-one/agent.stderr.log",
+        "sha256": "98db9702412d6386e419a97bae9c234f9c5afb306bbca015c081bee2ef8b0f71",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_h3_deepseek_20261103/single-file-off-by-one/patch.diff",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_h3_deepseek_20261103/single-file-off-by-one/result.json",
+        "sha256": "d32ee01ff0606b0adccf1c6b1dff715835df34b302047cea7697058a1b1574f4",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_i5_deepseek_20261103/run.json",
+        "sha256": "a2a7bbe783112a31e94b9a0b9cfdd76a71cd05c5d3e7b637982f9466362bbc53",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_i5_deepseek_20261103/single-file-off-by-one/agent.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_i5_deepseek_20261103/single-file-off-by-one/patch.diff",
+        "sha256": "5fa0153b3fef99b46b88d914995710c3b2d57a70be13315c2abb8bd37c50bdd0",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_i5_deepseek_20261103/single-file-off-by-one/result.json",
+        "sha256": "9c75e4a2037a178721181e92872525bdb4892f62445c883ce465a1c76aba2f91",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/evaluation-output/pilot_i5_deepseek_20261103/single-file-off-by-one/sandbox-audit.json",
+        "sha256": "d01f07cad6342402b84d8df5998b6b1777d56c88eb2bdef4b8687ae700cb03dc",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/append-handoff.mjs",
+        "sha256": "aab15485074da83bdbd64294b346bedb620198f89e917dedf1f4185aba92066d",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/baseline.json",
+        "sha256": "c39dce6f02b053459c4321ab1ba85e8bdeff04cc9805056d74b76488fbb00601",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/batch_n_negative.json",
+        "sha256": "9aa04f75393fa004d20af7f52f20056f6dc3cbeeac7d6f47ac392662afbc8b29",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/batch_n_request_limit.json",
+        "sha256": "705ef363439a1ba7166a7e123fb5bdd04828e09f7ad0c86017f301c66d8cb9ab",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/batch_n_trace_off.json",
+        "sha256": "4b8c4dd43b217c563449cfc1190c45fe2d73c727d70077a6109e801f2edfd1a4",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/batch_n_trace_on.json",
+        "sha256": "cb52fd0b1c03a5642d24f3c15af0ca24a38f3f0e1eeeac6a3ba9562122dfe4af",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/biome-new-files.log",
+        "sha256": "32a8b8de11922ecf7b26761aa6db9ed8e0958499c276f7b0ee16f87a191065f1",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/biome-new-files.mjs",
+        "sha256": "1e6bd8a09072ce72cc3c6fe2409cc24e0b2b5ff75de67f6bb641a33c297ae224",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/biome-readonly.mjs",
+        "sha256": "ed66a5a6d117ecc5bdddaad0bb8fe2a656266572807cae23c820819450b9152c",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/build-offline.log",
+        "sha256": "a6cc7388598a437bae16faee8e209531d1eb67dab49c177f6e07914704973696",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/check-new-files.mjs",
+        "sha256": "0bf841bb75c39721584f338e926e4fa07d268801788eb05a39e0f6d97dd89b8d",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/collect-results.mjs",
+        "sha256": "2fe713626fbe6db30aeedc33fdbb6ef93485ec74751695b3b7f8754b230092a6",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/collection-summary.json",
+        "sha256": "2f97d0634c5d51a9a564b2c8b98edac548a0f2e271c39f1f696f652d01f05748",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/e2e-first.json",
+        "sha256": "8415cd7b89e4fd58e5f35edbb22e39f05909e918ad17e150711e288ddfc615a8",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/finalize-results.mjs",
+        "sha256": "cfca99b2cb06caf0e478f9cb04c510f1c5be8a345a9a3828c9cf55102b93a5b6",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/gateway-malformed.json",
+        "sha256": "ba1c2063e020dd78eb17c9bdd051ca4799dbc44e148b828253b5f0a7ecb0062a",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/gateway-missing.json",
+        "sha256": "22b53b3b9f0596790eb879440cc6b5201e55f10a4ff682ee33339ddd519580ca",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/gateway-timeout.json",
+        "sha256": "724ab49aacc449a553470318cee53ac4ba472bdd230e7915ca77b44bac99dbf2",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/n0-audit.json",
+        "sha256": "f7e1e4bcdb64c9f17128e6a772a32949f918ea58a084fd10e89b57facd648e2a",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/pack-leak-check.log",
+        "sha256": "f2387d248a0d6b3d6a924598a6459b33a62ee4dd89cd4bc3dcf8c7ee452b2d97",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/prepare-readonly-check.mjs",
+        "sha256": "a1969223cc2dc79e48e1becf0e0b932e807031b228006f21911d4e680a95e9a5",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/prepare.mjs",
+        "sha256": "6490a912ea100c7d65ad0642f11de902eac4ac48ad89d09120cd00c7a640152d",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/python-pytest.log",
+        "sha256": "1c4e0c4945ea268c3bc11a7a613907555ed512b9eeaf46afe02b9e771b929bcc",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/python-tests.log",
+        "sha256": "6edd3b52abf185e1147d76f906b9f54c093ebe5c94ae2c95acc9712ea8db484f",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/regression-acceptance.json",
+        "sha256": "63e68a2d3bdfbddad42b7d5963c07c4ca58b78ea3dd477967bd47adc99e6c3f9",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/regression-final.json",
+        "sha256": "21b793ea7173a1ca04227eff3bc556d83e102cd2931c4313d9fe489643ca2ec2",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/static-checks-final.log",
+        "sha256": "eb3e8dbc0256eff00ea4bc97c5a56f79786a6576f748b82241a09cb2cedad827",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/static-checks.log",
+        "sha256": "eb3e8dbc0256eff00ea4bc97c5a56f79786a6576f748b82241a09cb2cedad827",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/static-checks.ps1",
+        "sha256": "b1cab037e64222ffc07365aa86e981d9541a295d9a9fd3268c282a63bc5be7f3",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/supplemental.json",
+        "sha256": "40b1b9b49a7bf70a619aea1a5ff2ad192c6e415ece4d11ca3ae3e2f902be1864",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/telemetry-acceptance.json",
+        "sha256": "0cb5d6c015cd1f4de13ef97f1b9815cddc6093baabd770db3448e0eabd2e7b06",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/test-manifest.json",
+        "sha256": "00ad8af0d88c51764a72fd672dc3e2d8a9eb0a56b34669cc2f0b7feb2dd10c56",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/unit-final.json",
+        "sha256": "efdcf61efb32506c01c970df1b95910d5804c4547bc527b592747c4025730938",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-n/unit-first.json",
+        "sha256": "59d758cf621dd9355a1cb2727c51263c0d47dea7e8d113718f55caed315528b5",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-m/batch-m-results.json",
+        "sha256": "b51f619a999ea25788a010fc629b04dcf020709f94e92077d5d21d7330dd54b4",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-m/batch-m-verification.md",
+        "sha256": "d41642a46dcca3197cc6af1a4df608de0a8addfe4dce8b12eaa02713f0198dde",
+        "unchanged": true
+      },
+      {
+        "path": ".artifacts/batch-m/write-report.mjs",
+        "sha256": "377bdff019f8d2aeb96c58dd3ed42e5e63d3797ae67c6a6c4b27e8836290a070",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/docs/batch-n-results.json",
+        "sha256": "16b655436982e45524394bff6dd9331bc2a1569afa5a88215bbf2c3d9dd10919",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/docs/batch-n-verification.md",
+        "sha256": "eb0ed89413379dda5c0b9d0284fcf999779b5c6ea3d656ea5e6c79dce9e143cb",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/docs/cleanup-results.json",
+        "sha256": "67f4c86b430999cf4e3904804a28558e577efe37f56913e3946765f25f7e2be7",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/docs/cleanup-verification.md",
+        "sha256": "d6898d9df4b565a40a1fe462f4992bacc90502cf45205ce4c3e5ce0e1371216e",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/docs/core-structure-results.json",
+        "sha256": "811b61ce46dbcea5102422558fcefaec1d57d3744b9ce6cb913c63b92ce61c71",
+        "unchanged": true
+      },
+      {
+        "path": "packages/pi-enhanced/docs/core-structure-verification.md",
+        "sha256": "ac706740db93abc041b12bf3564557aca449a8faa882592250a08918c40c13dc",
+        "unchanged": true
+      }
+    ],
+    "priorDocumentDeletions": 42,
+    "noExistingFileDeletedOrRestored": true
+  },
+  "checks": {
+    "rootReadonlyStatic": {
+      "status": "passed",
+      "evidence": ".artifacts/version-freeze/static-checks.log"
+    },
+    "evaluationTypes": {
+      "status": "passed",
+      "evidence": ".artifacts/version-freeze/evaluation-types.log"
+    },
+    "biome": {
+      "status": "passed",
+      "candidateTsFiles": 24,
+      "diagnostics": 0,
+      "evidence": ".artifacts/version-freeze/biome-candidates.log"
+    },
+    "offlineBuild": {
+      "status": "passed",
+      "evidence": ".artifacts/version-freeze/build.log"
+    },
+    "candidatePack": {
+      "status": "passed",
+      "entries": 152,
+      "forbidden": 0,
+      "contentLeaks": 0,
+      "evidence": ".artifacts/version-freeze/candidate-pack.log"
+    },
+    "candidateInstall": {
+      "file": ".artifacts/version-freeze/candidate-install.json",
+      "collected": 6,
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0
+    },
+    "stubComparison": {
+      "status": "passed",
+      "evidence": ".artifacts/version-freeze/stub-comparison.json"
+    },
+    "sensitiveCandidateScan": {
+      "status": "passed",
+      "candidateCount": 29,
+      "unsafePathCount": 0,
+      "secretPatternMatchCount": 0,
+      "unsafePaths": [],
+      "secretMatchPaths": [],
+      "indexEmpty": true,
+      "realKeyFilesOpened": false,
+      "scope": "exact candidate paths and existing package scanner; not an assertion about arbitrary user data outside this list"
+    },
+    "testManifestCli": {
+      "status": "passed",
+      "evidence": ".artifacts/version-freeze/test-manifest.json"
+    },
+    "diffCheck": {
+      "status": "passed",
+      "scope": "candidate tracked differences and explicit new paths; no git add used"
+    },
+    "formalOfflineEntrypoints": {
+      "status": "passed",
+      "location": "isolated candidate snapshot; original historical reports untouched",
+      "p5": {
+        "classification": "deterministic_tool_replay",
+        "passed": 8,
+        "failed": 0,
+        "passRate": 1
+      },
+      "agentDryRun": {
+        "total": 5,
+        "run": 0,
+        "passed": 0,
+        "notRun": 5,
+        "observedCostUsd": 0,
+        "patchPassed": 0,
+        "normallyCompleted": 0,
+        "budgetStopped": 0,
+        "modelCalls": 0
+      },
+      "quality": {
+        "classification": "20 synthetic records / 8 queries / local LSA; not Agent success rate",
+        "metrics": {
+          "lexical": {
+            "recallAt5": 0.125,
+            "mrrAt5": 0.125
+          },
+          "semantic": {
+            "recallAt5": 0.75,
+            "mrrAt5": 0.75
+          },
+          "hybrid": {
+            "recallAt5": 0.75,
+            "mrrAt5": 0.75
+          }
+        }
+      },
+      "evidence": [
+        ".artifacts/version-freeze/evaluate-p5.log",
+        ".artifacts/version-freeze/evaluate-dry-run.log",
+        ".artifacts/version-freeze/evaluate-quality.log"
+      ]
+    },
+    "candidateOverlay": {
+      "status": "passed",
+      "files": 29,
+      "method": "HEAD archive plus exact candidate overlay; local dependencies/dist only, no Git metadata or index changes",
+      "evidence": ".artifacts/version-freeze/candidate-overlay.json"
+    },
+    "privacyNote": "Source candidate and package shape scans do not open .env or Provider credential files."
+  },
+  "remoteCi": {
+    "status": "not_run",
+    "authorization": "not_granted",
+    "requiredJobs": [
+      {
+        "name": "offline-engineering (windows-latest)",
+        "status": "not_run"
+      },
+      {
+        "name": "offline-engineering (ubuntu-latest)",
+        "status": "not_run"
+      },
+      {
+        "name": "docker-isolation",
+        "status": "not_run"
+      }
+    ],
+    "workflow": "configured_only",
+    "currentCommitRemoteEvidence": false,
+    "oldGreenRunsUsed": false
+  },
+  "admission": {
+    "localReviewReady": true,
+    "localRegressionReady": true,
+    "candidatePackReady": true,
+    "candidateInstallReady": true,
+    "stubEquivalent": true,
+    "readyForRemoteCi": true,
+    "approvalRequired": "Exact path git add, staged diff/secret review, normal commit and push require new explicit permission; any failed remote run requires preservation and separate permission before another push."
+  },
+  "limitations": [
+    "Current source is not committed; remote acceptance has not happened",
+    "Linux mounted-workspace identity case must actually pass in Linux Docker job",
+    "Two external MCP cases remain outside secret-free offline jobs",
+    "Current host first lacked Docker; first 42 skips are preserved, final 3 skips are not counted as passes",
+    "Old reports and original deletion state remain local and excluded; archives were not deleted to make the worktree clean"
+  ],
+  "generatedOn": "2026-11-04"
+}

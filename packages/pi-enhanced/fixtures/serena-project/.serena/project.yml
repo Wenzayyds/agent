@@ -1,0 +1,30 @@
+project_name: "pi-enhanced-serena-fixture"
+language_servers:
+  - python
+ignore_all_files_in_gitignore: true
+ignored_paths: []
+read_only: true
+excluded_tools: []
+included_optional_tools: []
+initial_prompt: "P1 Serena Docker symbol-query fixture."
+encoding: utf-8
+fixed_tools:
+  - find_symbol
+  - find_referencing_symbols
+base_modes:
+default_modes:
+symbol_info_budget:
+language_backend:
+read_only_memory_patterns: []
+line_ending:
+ignored_memory_patterns: []
+ls_specific_settings: {}
+added_modes:
+activation_command:
+activation_command_timeout: 180.0
+ls_workspace_folders:
+  - "."
+ls_additional_workspace_folders: []
+included_apis: []
+excluded_apis: []
+agent_interface:

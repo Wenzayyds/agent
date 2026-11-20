@@ -411,12 +411,31 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const requestOptions = buildRequestOptions(options);
+			const runner = extensionRunnerRef.current;
+			const transport = runner?.hasHandlers("model_request_fetch")
+				? await runner.resolveModelRequestFetch({
+						type: "model_request_fetch",
+						model,
+						beforeSend: options?.beforeSend,
+					})
+				: undefined;
+			if (transport) {
+				if (
+					model.api !== "openai-completions" ||
+					modelRuntime.getRegisteredProviderConfig(model.provider)?.streamSimple ||
+					modelRuntime.getRegisteredNativeProvider(model.provider)
+				)
+					throw new Error("Selected model adapter cannot use the protected request transport");
+				requestOptions.fetch = transport;
+				requestOptions.transport = "sse";
+				requestOptions.cacheRetention = "none";
+			}
 			// Compaction and summaries use their own routing ids; only session requests
 			// replace the cache entry, so warming restarts from them. Keep warming while
 			// the current transcript still extends the request's prefix. Agent state may
 			// shallow-copy the messages array or refresh the model object without changing
 			// the provider request, so top-level object identity is not a valid cache key.
-			if (options?.sessionId === sessionManager.getSessionId()) {
+			if (!transport && options?.sessionId === sessionManager.getSessionId()) {
 				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
 			}
 			return modelRuntime.streamSimple(model, context, requestOptions);

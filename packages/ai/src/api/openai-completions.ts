@@ -37,6 +37,7 @@ import type {
 } from "../types.ts";
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { guardedFetch } from "../utils/guarded-fetch.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -358,7 +359,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				apiKey,
 				options?.headers,
 				options?.identity,
-				options?.fetch,
+				guardedFetch(options?.fetch, options?.beforeSend),
 				cacheSessionId,
 				compat,
 			);

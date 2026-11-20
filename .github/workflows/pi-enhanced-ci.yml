@@ -1,0 +1,114 @@
+# Offline version-freeze validation: Windows, Linux and Docker.
+name: Pi Enhanced CI
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths: ["packages/pi-enhanced/**", ".github/workflows/pi-enhanced-ci.yml"]
+  push:
+    paths: ["packages/pi-enhanced/**", ".github/workflows/pi-enhanced-ci.yml"]
+
+jobs:
+  offline-engineering:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: npm ci
+      - run: python -m pip install numpy pytest
+      - run: node --version && npm --version && python --version && python -c "import numpy; print(numpy.__version__)"
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-metadata.json
+      - run: npm run hydrate:model-data
+      - run: npm run build:offline
+      - run: npm run check --workspace=@wz-agent/pi-enhanced
+      - run: npm run check:evaluation --workspace=@wz-agent/pi-enhanced
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit packages/pi-enhanced/tests/integration packages/pi-enhanced/tests/e2e --exclude '**/.artifacts/**' --maxWorkers=1 --testTimeout=30000 --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-vitest.json
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/test-manifest.ts packages/pi-enhanced/.ci-vitest.json packages/pi-enhanced/docs/version-freeze-results.json packages/pi-enhanced/.ci-test-manifest.json
+      - run: python -m pytest packages/pi-enhanced/python/memory-intelligence/tests -q
+        env:
+          PYTHONPATH: packages/pi-enhanced/python/memory-intelligence/src
+      - run: npm run evaluate:real-agent --workspace=@wz-agent/pi-enhanced -- --preflight
+      - run: npm run check:pack --workspace=@wz-agent/pi-enhanced
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          include-hidden-files: true
+          name: pi-enhanced-${{ runner.os }}-${{ github.sha }}
+          path: |
+            packages/pi-enhanced/ci-metadata.json
+            packages/pi-enhanced/.ci-vitest.json
+            packages/pi-enhanced/.ci-test-manifest.json
+
+  docker-isolation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run hydrate:model-data
+      - run: npm run build:offline
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-docker-metadata.json --docker
+      - run: docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+      - name: Build pinned pytest image and run real pytest tool checks
+        shell: bash
+        working-directory: packages/pi-enhanced
+        run: |
+          set -euo pipefail
+          docker build --pull -f scripts/pytest.Dockerfile -t pi-enhanced-pytest:ci scripts
+          export PI_TEST_PYTEST_IMAGE="$(docker image inspect pi-enhanced-pytest:ci --format '{{.Id}}')"
+          [[ "$PI_TEST_PYTEST_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
+          npm exec vitest -- --run tests/e2e/pytest-tool.test.ts --maxWorkers=1 --reporter=default
+      - name: Prepare pinned public Astropy Git mirror
+        shell: bash
+        run: |
+          mirror="$RUNNER_TEMP/pi-enhanced-astropy.git"
+          git init --bare "$mirror"
+          git -C "$mirror" remote add origin https://github.com/astropy/astropy.git
+          git -C "$mirror" -c core.hooksPath=/dev/null fetch --depth=1 --no-tags origin \
+            298ccb478e6bf092953bca67a3d29dc6c35f6752 19cc80471739bcb67b7e8099246b391c355023ee \
+            7269fa3e33e8d02485a647da91a5a2a60a06af61 fa4e8d1cd279acf9b24560813c8652494ccd5922 \
+            a3f4ae6cd24d5ecdf49f213d77b3513dd509a06c
+          echo "PI_ENHANCED_SWE_LOCAL_MIRROR=$mirror" >> "$GITHUB_ENV"
+          mkdir -p packages/pi-enhanced/swe-stub
+      - run: npm run smoke:docker --workspace=@wz-agent/pi-enhanced
+      - run: npm run check:evaluation --workspace=@wz-agent/pi-enhanced
+      - run: node -e "require('node:fs').mkdirSync('packages/pi-enhanced/batch-j-stub', {recursive:true})"
+      - run: npm exec vitest -- --run packages/pi-enhanced/tests/unit/sandbox-protocol.test.ts packages/pi-enhanced/tests/unit/budget-gateway.test.ts packages/pi-enhanced/tests/unit/gateway-integration.test.ts packages/pi-enhanced/tests/unit/evaluation-telemetry.test.ts packages/pi-enhanced/tests/e2e/sandbox-agent-session.test.ts packages/pi-enhanced/tests/e2e/gateway-sandbox-e2e.test.ts packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.test.ts packages/pi-enhanced/tests/unit/controlled-policy.test.ts packages/pi-enhanced/tests/e2e/controlled-batch.test.ts packages/pi-enhanced/tests/unit/batch-j-policy-audit.test.ts packages/pi-enhanced/tests/e2e/batch-j-runner.test.ts packages/pi-enhanced/tests/e2e/docker-verifier.test.ts packages/pi-enhanced/tests/e2e/batch-l-comparison.test.ts packages/pi-enhanced/tests/e2e/batch-n-observability.test.ts packages/pi-enhanced/tests/e2e/swebench-stub.test.ts packages/pi-enhanced/tests/e2e/swebench-policy.test.ts --exclude '**/.artifacts/**' --maxWorkers=1 --testTimeout=30000 --reporter=default --reporter=json --outputFile=packages/pi-enhanced/.ci-sandbox-vitest.json
+        env:
+          PI_ENHANCED_SIX_EVIDENCE_PATH: packages/pi-enhanced/controlled-six-stub.json
+          PI_ENHANCED_BATCH_J_OUTPUT: packages/pi-enhanced/batch-j-stub
+          PI_ENHANCED_VERIFIER_RUNNER_EVIDENCE_DIR: packages/pi-enhanced/batch-j-stub
+          PI_ENHANCED_BATCH_L_STUB_EVIDENCE: packages/pi-enhanced/batch-j-stub/batch-l-stub.json
+          PI_ENHANCED_BATCH_N_EVIDENCE: packages/pi-enhanced/batch-j-stub
+          PI_ENHANCED_TASK_PAIR_STUB_EVIDENCE: packages/pi-enhanced/batch-j-stub
+          PI_ENHANCED_SWE_STUB_EVIDENCE: packages/pi-enhanced/swe-stub
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/require-docker-evidence.ts packages/pi-enhanced/.ci-sandbox-vitest.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-enhanced-docker-${{ github.sha }}
+          include-hidden-files: true
+          path: |
+            packages/pi-enhanced/ci-docker-metadata.json
+            packages/pi-enhanced/.ci-sandbox-vitest.json
+            packages/pi-enhanced/docs/batch-f-sandbox-smoke.json
+            packages/pi-enhanced/controlled-six-stub.json
+            packages/pi-enhanced/batch-j-stub
+            packages/pi-enhanced/swe-stub

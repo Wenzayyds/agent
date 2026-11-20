@@ -1,0 +1,38 @@
+// One reviewed relevant document per query.
+export const corpus = [
+	["cache", "Redis automatically removes cached items when their lifetime ends."],
+	["retry", "Transient HTTP failures use exponential backoff with randomized jitter."],
+	["rollout", "生产发布必须经过人工审批。"],
+	["backup", "Database recovery uses archived transaction logs and a recent snapshot."],
+	["locks", "CAS validates the expected revision before updating a memory record."],
+	["workspace", "项目身份根据规范化的工作区路径得出。"],
+	["redact", "The sanitizer masks access tokens before tool output reaches the prompt."],
+	["telemetry", "Structured logs record bounded diagnostic categories and wall time."],
+	["migrate", "SQLite migrations run in one transaction to preserve old memory rows."],
+	["worker", "The local worker keeps the embedding model resident across requests."],
+	["search", "全文检索使用 SQLite FTS5 索引。"],
+	["sandbox", "The isolated test container has no access to the host network."],
+	["flags", "Feature flags are read when the application starts."],
+	["metrics", "Dashboard charts display weekly deployment frequency."],
+	["session", "The session tree uses the active leaf to represent the selected branch."],
+	["test", "集成测试使用临时数据库，测试结束后清理。"],
+	["styles", "Dashboard icons use blue accents and labels use sentence case."],
+	["fallback", "向量服务暂时不可用时，查询会降级到关键词检索。"],
+] as const;
+
+export const queries = [
+	["Redis automatically", "cache"],
+	["exponential backoff", "retry"],
+	["active leaf", "session"],
+	["全文检索", "search"],
+	["临时数据库", "test"],
+	["How are stale cache entries evicted?", "cache"],
+	["Who must authorize a production rollout?", "rollout"],
+	["谁能批准上线？", "rollout"],
+	["数据库崩溃后可以用哪些历史记录还原？", "backup"],
+	["How do we stop an older revision overwriting a newer edit?", "locks"],
+	["What hides API secrets in command results?", "redact"],
+	["Do we reload the encoder every time a query arrives?", "worker"],
+	["语义搜索挂了还怎么查资料？", "fallback"],
+	["怎么区分不同仓库的记忆？", "workspace"],
+] as const;

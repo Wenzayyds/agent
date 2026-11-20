@@ -1,4 +1,10 @@
 node_modules
+packages/pi-enhanced/python/**/.venv/
+packages/pi-enhanced/python/**/__pycache__/
+packages/pi-enhanced/python/**/*.pyc
+packages/pi-enhanced/python/**/.pytest_cache/
+packages/pi-enhanced/python/**/models/
+packages/pi-enhanced/python/**/indexes/
 dist/
 .artifacts/
 *.log

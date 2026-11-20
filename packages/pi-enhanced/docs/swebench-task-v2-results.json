@@ -1,0 +1,1693 @@
+{
+  "upstream": {
+    "swebench": {
+      "commit": "726c5461e2ef52d83cf1ea2107870a8bb3328d57",
+      "license": "MIT",
+      "paths": [
+        "swebench/harness/run_evaluation.py",
+        "swebench/harness/grading.py",
+        "swebench/harness/reporting.py"
+      ],
+      "installed": true,
+      "licenseEvidence": "upstream-v4/LICENSE",
+      "licenseSha256": "2bd2e08df7147f67a69b42c10efae09bd4bf119df397371036187d5dd1b02f57",
+      "release": "v4.1.0"
+    },
+    "langchainjs": {
+      "commit": "a7c960fd1a1fa3d32717965311168667980e77a3",
+      "license": "MIT",
+      "paths": [
+        "libs/langchain/src/agents/middleware/todoListMiddleware.ts"
+      ],
+      "licenseEvidence": "upstream/langchain-license",
+      "licenseSha256": "4ec67e4ca6e6721dba849b2ca82261597c86a61ee214bbf21416006b7b2d0478"
+    },
+    "agent-framework": {
+      "commit": "924a6e50ec0336f3c965ee8b1151c54085888b6e",
+      "license": "MIT",
+      "paths": [
+        "python/packages/orchestrations/agent_framework_orchestrations/_magentic.py"
+      ],
+      "licenseEvidence": "upstream/microsoft-license",
+      "licenseSha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    }
+  },
+  "dataset": {
+    "dataset": "princeton-nlp/SWE-bench_Verified",
+    "split": "test",
+    "revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+    "parquetSha256": "a45b1fe4e2f0c8390b2b2938ac83e92ed5979000856808f3679c07812e9e6dcd"
+  },
+  "fixedInstances": [
+    {
+      "instance_id": "astropy__astropy-12907",
+      "repo": "astropy/astropy",
+      "base_commit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
+      "role": "gold",
+      "problem_sha256": "c01334ec1b21a089c650cf2e7b96ab974469076bf1260d23885799e1f0a7551f"
+    },
+    {
+      "instance_id": "astropy__astropy-13033",
+      "repo": "astropy/astropy",
+      "base_commit": "298ccb478e6bf092953bca67a3d29dc6c35f6752",
+      "role": "candidate",
+      "problem_sha256": "a295c83e68ff62290947b0796b75659b94621b7f2340d6f0055512d04be3f1d1"
+    },
+    {
+      "instance_id": "astropy__astropy-13453",
+      "repo": "astropy/astropy",
+      "base_commit": "19cc80471739bcb67b7e8099246b391c355023ee",
+      "role": "candidate",
+      "problem_sha256": "be929904c3062b54da2fa3ad7de338bd7f1f41a5aa48e64bec41f244d6e17c5a"
+    },
+    {
+      "instance_id": "astropy__astropy-14365",
+      "repo": "astropy/astropy",
+      "base_commit": "7269fa3e33e8d02485a647da91a5a2a60a06af61",
+      "role": "candidate",
+      "problem_sha256": "615252d5c44819451977588671ce903d3a21c41a8bf011738e2aee39218d56c6"
+    }
+  ],
+  "gold": {
+    "harnessCommit": "726c5461e2ef52d83cf1ea2107870a8bb3328d57",
+    "datasetRevision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+    "instanceId": "astropy__astropy-12907",
+    "baseCommit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
+    "role": "gold",
+    "preflight": {
+      "reasons": [],
+      "architecture": "x86_64",
+      "cpu": 24,
+      "memoryBytes": 16466989056,
+      "freeBytes": 151521910784,
+      "storage": "F:\\DockerDesktopWSL\\disk"
+    },
+    "officialResolved": true,
+    "imageDigest": "sha256:e082963099ed7d5a5f75a0be46e338be36faae33b2cba5289a9ddbd505997f1f",
+    "status": "resolved",
+    "harnessActuallyRan": true,
+    "exitCode": 0,
+    "timedOut": false,
+    "evaluationClass": "gold_environment_probe",
+    "runId": "pi_a45b1fe4e2f0_15f4ce12782c42bc8a75b417e61eeded",
+    "resolved": true,
+    "reportPath": ".artifacts/swebench-task-v2/gold-linux-amd64/gold.pi_a45b1fe4e2f0_15f4ce12782c42bc8a75b417e61eeded.json",
+    "evaluatorImage": "python@sha256:65bd3d9f1d7fa268dd1909973ba7eb4bdf41f6dcf2cfbe76ba9528b170f3fd79",
+    "paidModelRequests": 0,
+    "evidence": ".artifacts/swebench-task-v2/gold-linux-amd64/outcome.json",
+    "testCounts": {
+      "failToPassPassed": 2,
+      "failToPassFailed": 0,
+      "passToPassPassed": 13,
+      "passToPassFailed": 0
+    }
+  },
+  "officialHarnessEnvironmentValidated": true,
+  "agentToolImage": {
+    "reference": "docker.io/library/node:20-alpine",
+    "digest": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+    "verifiedByDockerE2E": true
+  },
+  "taskV2": {
+    "defaultEnabled": false,
+    "hostAndProjectTrustRequired": true,
+    "maxReplans": 2,
+    "maxSessionPlanUpdates": 32,
+    "maxSteps": 12,
+    "maxInputBytes": 8192,
+    "schemaChanged": false,
+    "replanIsAppendOnly": true,
+    "independentJudgeRequests": 0,
+    "attributableAdditionalTokens": null,
+    "processInterruptionRecoveryVerified": true
+  },
+  "providerCredentialHandling": {
+    "status": "unknown_for_initial_third_party_import",
+    "reason": "Initial v5 compatibility import used upstream load_dotenv before it was disabled. Whether provider credentials were loaded into that child process is unknown; no values were printed or recorded. Subsequent Python probes and evaluator execution explicitly disable dotenv. No model API was called.",
+    "finalEvaluatorDotenvDisabled": true
+  },
+  "evaluationProtocol": "swebench_verified_source_restricted_v1",
+  "schemaVersion": 2,
+  "baseCommit": "0ba05f6418780dcb4e9cb3e696536c42cd8ae6ae",
+  "branch": "pi-agent",
+  "status": "offline_verified_pending_review",
+  "actualPaidModelRequests": 7,
+  "actualCostUsd": 0.0145866,
+  "providerKeyRead": true,
+  "newCommit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+  "remoteCi": {
+    "status": "configured_only_not_run_for_modified_source",
+    "lastVerifiedCommit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+    "lastVerifiedRunId": 42382223747
+  },
+  "officialScore": null,
+  "previousCi": {
+    "commit": "0ba05f6418780dcb4e9cb3e696536c42cd8ae6ae",
+    "runId": 42356930905,
+    "jobs": {
+      "Windows": "success",
+      "Linux": "success",
+      "Docker": "success"
+    },
+    "evidence": ".artifacts/swebench-task-v2/commit-review-20261107/ci-verification.json"
+  },
+  "tests": {
+    "typescript": {
+      "total": 291,
+      "passed": 288,
+      "failed": 0,
+      "skipped": 3
+    },
+    "python": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0
+    },
+    "missingPrevious282Identities": [],
+    "skippedIdentities": [
+      "Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
+      "locked external MCP components negotiates with @upstash/context7-mcp@4.4.4 and reaches its query endpoint",
+      "Serena 2.1.0 official Docker image finds a real symbol and its references through stdio MCP"
+    ],
+    "sweOriginalFive": {
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0
+    },
+    "swePolicyAndContinuation": {
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0
+    },
+    "checks": [
+      {
+        "check": "check --workspace=@wz-agent/pi-enhanced",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-0.log"
+      },
+      {
+        "check": "check:evaluation --workspace=@wz-agent/pi-enhanced",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-1.log"
+      },
+      {
+        "check": "check:pinned-deps",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-2.log"
+      },
+      {
+        "check": "check:runtime-deps",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-3.log"
+      },
+      {
+        "check": "check:ts-imports",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-4.log"
+      },
+      {
+        "check": "check:entry-graphs",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-5.log"
+      },
+      {
+        "check": "check:install-lock:coding-agent",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-6.log"
+      },
+      {
+        "check": "check:browser-smoke",
+        "exitCode": 0,
+        "log": ".artifacts/swe-continuation/check-7.log"
+      }
+    ],
+    "biome": {
+      "files": 21,
+      "diagnostics": 0
+    },
+    "offlineBuild": "passed",
+    "packScan": "passed"
+  },
+  "stub": {
+    "classification": "simulated_provider_real_runner_task",
+    "officialResolved": null,
+    "effectivenessClaim": false,
+    "threeModeAdmission": {
+      "capture": "passed",
+      "matched": "passed",
+      "v1Mismatch": "blocked_before_upstream",
+      "followingV2": "not_run",
+      "stubForwardedRequests": 14
+    }
+  },
+  "authorization": {
+    "status": "consumed_no_reuse",
+    "profile": "swe-task-v1",
+    "instanceId": "astropy__astropy-13033",
+    "order": [
+      "off",
+      "v1",
+      "v2"
+    ],
+    "model": "deepseek-flash",
+    "maxRequestsPerCell": 12,
+    "maxTokensPerCell": 80000,
+    "maxCostUsdPerCell": 0.03,
+    "timeoutMsPerCell": 180000,
+    "maxBatchCostUsd": 0.09,
+    "retry": false,
+    "recovery": "strict",
+    "grantCreated": true,
+    "scope": [
+      "source commit",
+      "configuration digest",
+      "per-mode first-wire fingerprints",
+      "CI run",
+      "batch and output identity",
+      "expiry <=24h",
+      "single-use ordered cell claims"
+    ],
+    "hostCalibration": "passed_on_clean_commit",
+    "grantExpiry": "2026-11-07T15:16:41.906Z"
+  },
+  "futureRealExperiments": [
+    {
+      "mode": "off",
+      "modelAttemptStatus": "stopped",
+      "agentAttempted": true,
+      "agentCompleted": false,
+      "auditComplete": false,
+      "patchExportStatus": "not_exported",
+      "patchSha256": null,
+      "officialHarnessStatus": "not_run",
+      "resolved": null,
+      "requestsForwarded": 7,
+      "actualInputTokens": 41126,
+      "actualOutputTokens": 1874,
+      "actualTotalTokens": 43000,
+      "gatewayCostUsd": 0.0145866,
+      "providerInvoiceUsd": null,
+      "reason": "SWE_PATCH_PATH_DENIED"
+    },
+    {
+      "mode": "v1",
+      "modelAttemptStatus": "not_run",
+      "agentAttempted": false,
+      "agentCompleted": null,
+      "auditComplete": null,
+      "patchExportStatus": "not_run",
+      "patchSha256": null,
+      "officialHarnessStatus": "not_run",
+      "resolved": null,
+      "requestsForwarded": 0,
+      "actualInputTokens": 0,
+      "actualOutputTokens": 0,
+      "actualTotalTokens": 0,
+      "gatewayCostUsd": 0,
+      "providerInvoiceUsd": null,
+      "reason": "batch_stopped_after_off"
+    },
+    {
+      "mode": "v2",
+      "modelAttemptStatus": "not_run",
+      "agentAttempted": false,
+      "agentCompleted": null,
+      "auditComplete": null,
+      "patchExportStatus": "not_run",
+      "patchSha256": null,
+      "officialHarnessStatus": "not_run",
+      "resolved": null,
+      "requestsForwarded": 0,
+      "actualInputTokens": 0,
+      "actualOutputTokens": 0,
+      "actualTotalTokens": 0,
+      "gatewayCostUsd": 0,
+      "providerInvoiceUsd": null,
+      "reason": "batch_stopped_after_off"
+    }
+  ],
+  "historicalIntegrity": {
+    "protectedCount": 75,
+    "allHashesMatched": true,
+    "existingDeletedDocs": 42
+  },
+  "candidateManifest": ".artifacts/swe-continuation/candidates.json",
+  "limitations": [
+    "Source-restricted SWE protocol, not a standard full SWE-bench score.",
+    "V1 has no pre-seeded plan and only exposes read-only Task queries.",
+    "Trusted official evaluator controller shares a Docker socket; it is not complete host-data isolation. Historical initial third-party dotenv loading remains unknown.",
+    "Only OFF attempted; V1/V2 and official scoring not_run. No Task-effect or benchmark-success claim is supported.",
+    "No automatic retries, additional source fixes, commits or paid calls after the stop. Latest result reports remain uncommitted."
+  ],
+  "sourceCommit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+  "providerInvoiceUsd": null,
+  "realPilot": {
+    "instanceId": "astropy__astropy-13033",
+    "model": "deepseek-flash",
+    "batchId": "swe_task_real_20261107a",
+    "runStatus": "budget_stopped",
+    "rawBatchStopReason": "isolation_boundary_stop",
+    "rawTerminationClassification": "isolation_boundary_stop",
+    "gatewayDenial": "GATEWAY_TOKEN_BUDGET",
+    "patchExportError": "SWE_PATCH_PATH_DENIED",
+    "agentCellsAttempted": 1,
+    "agentCellsStopped": 1,
+    "agentCellsNotRun": 2,
+    "officialResolved": 0,
+    "officialUnresolved": 0,
+    "officialNotRun": 3,
+    "officialSuccessRate": null,
+    "cells": [
+      {
+        "mode": "off",
+        "modelAttemptStatus": "stopped",
+        "agentAttempted": true,
+        "agentCompleted": false,
+        "auditComplete": false,
+        "patchExportStatus": "not_exported",
+        "patchSha256": null,
+        "officialHarnessStatus": "not_run",
+        "resolved": null,
+        "requestsForwarded": 7,
+        "actualInputTokens": 41126,
+        "actualOutputTokens": 1874,
+        "actualTotalTokens": 43000,
+        "gatewayCostUsd": 0.0145866,
+        "providerInvoiceUsd": null,
+        "reason": "SWE_PATCH_PATH_DENIED"
+      },
+      {
+        "mode": "v1",
+        "modelAttemptStatus": "not_run",
+        "agentAttempted": false,
+        "agentCompleted": null,
+        "auditComplete": null,
+        "patchExportStatus": "not_run",
+        "patchSha256": null,
+        "officialHarnessStatus": "not_run",
+        "resolved": null,
+        "requestsForwarded": 0,
+        "actualInputTokens": 0,
+        "actualOutputTokens": 0,
+        "actualTotalTokens": 0,
+        "gatewayCostUsd": 0,
+        "providerInvoiceUsd": null,
+        "reason": "batch_stopped_after_off"
+      },
+      {
+        "mode": "v2",
+        "modelAttemptStatus": "not_run",
+        "agentAttempted": false,
+        "agentCompleted": null,
+        "auditComplete": null,
+        "patchExportStatus": "not_run",
+        "patchSha256": null,
+        "officialHarnessStatus": "not_run",
+        "resolved": null,
+        "requestsForwarded": 0,
+        "actualInputTokens": 0,
+        "actualOutputTokens": 0,
+        "actualTotalTokens": 0,
+        "gatewayCostUsd": 0,
+        "providerInvoiceUsd": null,
+        "reason": "batch_stopped_after_off"
+      }
+    ],
+    "comparisonAvailable": false,
+    "taskEffectiveness": "not_evaluated",
+    "evidenceDirectory": ".artifacts/swe-pilot-admission/host-output/swe_task_real_20261107a",
+    "observations": ".artifacts/swe-pilot-admission/pilot-observations.json",
+    "officialStatusDirectory": ".artifacts/swe-pilot-admission/official",
+    "metrics": {
+      "actualInputTokens": 41126,
+      "actualOutputTokens": 1874,
+      "actualTotalTokens": 43000,
+      "gatewayCostUsd": 0.0145866,
+      "requestsForwarded": 7,
+      "requestsRejectedBeforeForward": 1,
+      "fileToolCalls": 10,
+      "toolCounts": {
+        "grep": 2,
+        "read": 4,
+        "edit": 4
+      },
+      "persistedAuditEvents": 18,
+      "auditIntegrity": "valid",
+      "auditComplete": false,
+      "telemetryComplete": true
+    },
+    "knownIssues": [
+      "Export rejection in this collector takes precedence over the budget-stop termination class. Raw isolation label is not evidence of an actual filesystem escape.",
+      "The model edited tests although the unchanged common source-only exporter excludes test paths. Those constraints were not stated in the raw issue prompt.",
+      "Rejected Git diff is not separately retained; edit events are saved but are not an authoritative final Patch. No filtered or reconstructed prediction was fabricated.",
+      "Gateway uses UTF-8 request bytes +4096 as input-token upper bound plus max output. Request 8 exact bound is unknown; veto is consistent with hard reservation even at 43000 actual tokens.",
+      "Session audit remains interrupted despite 18 valid saved operations."
+    ]
+  },
+  "previousOfflineTests": {
+    "typescript": {
+      "total": 273,
+      "passed": 270,
+      "failed": 0,
+      "skipped": 3
+    },
+    "python": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0
+    },
+    "missingBaselineTestIdentities": [],
+    "checks": [
+      {
+        "check": "check --workspace=@wz-agent/pi-enhanced",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-0.log"
+      },
+      {
+        "check": "check:evaluation --workspace=@wz-agent/pi-enhanced",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-1.log"
+      },
+      {
+        "check": "check:pinned-deps",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-2.log"
+      },
+      {
+        "check": "check:runtime-deps",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-3.log"
+      },
+      {
+        "check": "check:ts-imports",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-4.log"
+      },
+      {
+        "check": "check:entry-graphs",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-5.log"
+      },
+      {
+        "check": "check:install-lock:coding-agent",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-6.log"
+      },
+      {
+        "check": "check:browser-smoke",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-admission/check-7.log"
+      }
+    ],
+    "biome": {
+      "checkedFiles": 13,
+      "diagnostics": 0
+    },
+    "offlineBuild": "passed",
+    "packScan": "passed",
+    "evidenceDirectory": ".artifacts/swe-pilot-admission"
+  },
+  "previousVerifiedCi": {
+    "status": "current_commit_remote_ci_verified",
+    "commit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+    "runId": 42382223747,
+    "runUrl": "https://github.com/Wenzayyds/agent/actions/runs/42382223747",
+    "jobs": [
+      {
+        "name": "offline-engineering (ubuntu-latest)",
+        "id": 128432059566,
+        "conclusion": "success",
+        "url": "https://github.com/Wenzayyds/agent/actions/runs/42382223747/job/128432059566"
+      },
+      {
+        "name": "docker-isolation",
+        "id": 128432059807,
+        "conclusion": "success",
+        "url": "https://github.com/Wenzayyds/agent/actions/runs/42382223747/job/128432059807"
+      },
+      {
+        "name": "offline-engineering (windows-latest)",
+        "id": 128432059890,
+        "conclusion": "success",
+        "url": "https://github.com/Wenzayyds/agent/actions/runs/42382223747/job/128432059890"
+      }
+    ],
+    "artifactTests": [
+      {
+        "artifactGroup": "Linux",
+        "metadata": {
+          "schemaVersion": 1,
+          "commit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+          "runId": "42382223747",
+          "job": "offline-engineering",
+          "runnerOs": "Linux",
+          "platform": "linux/x64",
+          "node": "v24.22.2",
+          "npm": "11.19.1",
+          "python": "Python 3.14.10",
+          "docker": null
+        },
+        "tests": {
+          "numTotalTests": 273,
+          "numPassedTests": 221,
+          "numFailedTests": 0,
+          "numPendingTests": 52
+        }
+      },
+      {
+        "artifactGroup": "Windows",
+        "metadata": {
+          "schemaVersion": 1,
+          "commit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+          "runId": "42382223747",
+          "job": "offline-engineering",
+          "runnerOs": "Windows",
+          "platform": "win32/x64",
+          "node": "v24.22.2",
+          "npm": "11.19.1",
+          "python": "Python 3.14.10",
+          "docker": null
+        },
+        "tests": {
+          "numTotalTests": 273,
+          "numPassedTests": 219,
+          "numFailedTests": 0,
+          "numPendingTests": 54
+        }
+      },
+      {
+        "artifactGroup": "docker",
+        "metadata": {
+          "schemaVersion": 1,
+          "commit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+          "runId": "42382223747",
+          "job": "docker-isolation",
+          "runnerOs": "Linux",
+          "platform": "linux/x64",
+          "node": "v24.22.2",
+          "npm": "11.19.1",
+          "python": "Python 3.14.4",
+          "docker": "29.4.2"
+        },
+        "tests": {
+          "numTotalTests": 101,
+          "numPassedTests": 101,
+          "numFailedTests": 0,
+          "numPendingTests": 0
+        }
+      }
+    ],
+    "archives": [
+      {
+        "name": "pi-enhanced-Linux-106d6e190bd516e1fb6b718b979040db7f5c6d43",
+        "id": 13578225927,
+        "digest": "sha256:7b3585a24636822933e5137057ceffe25b13dcd36cf62d8e30c589d15e1885d2",
+        "matchesGitHubDigest": true
+      },
+      {
+        "name": "pi-enhanced-Windows-106d6e190bd516e1fb6b718b979040db7f5c6d43",
+        "id": 13577958765,
+        "digest": "sha256:5120a54952260dc711debea8d3e797a2e51c5f701f8343645c9914a06cc43f3a",
+        "matchesGitHubDigest": true
+      },
+      {
+        "name": "pi-enhanced-docker-106d6e190bd516e1fb6b718b979040db7f5c6d43",
+        "id": 13577914599,
+        "digest": "sha256:a9c5412cd8f25b293ce14380abb51620212c369c2023f33044e016cdfe8f6d33",
+        "matchesGitHubDigest": true
+      }
+    ],
+    "logFiles": 72,
+    "sweStub": {
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "cases": [
+        {
+          "instanceId": "astropy__astropy-13033",
+          "mode": "off",
+          "status": "passed",
+          "agentCompleted": true,
+          "auditComplete": true,
+          "officialResolved": null,
+          "patchSha256": "4dc0850303b1c57fc4790acc007678efbd0a78287aa4cd5957ff36aff23c8d91",
+          "file": ".artifacts\\swe-pilot-admission\\ci-run-42382223747\\pi-enhanced-docker-106d6e190bd516e1fb6b718b979040db7f5c6d43\\swe-stub\\swe_13033_off.json",
+          "testDurationMs": 5719.750687
+        },
+        {
+          "instanceId": "astropy__astropy-13033",
+          "mode": "v1",
+          "status": "passed",
+          "agentCompleted": true,
+          "auditComplete": true,
+          "officialResolved": null,
+          "patchSha256": "4dc0850303b1c57fc4790acc007678efbd0a78287aa4cd5957ff36aff23c8d91",
+          "file": ".artifacts\\swe-pilot-admission\\ci-run-42382223747\\pi-enhanced-docker-106d6e190bd516e1fb6b718b979040db7f5c6d43\\swe-stub\\swe_13033_v1.json",
+          "testDurationMs": 6035.565161
+        },
+        {
+          "instanceId": "astropy__astropy-13033",
+          "mode": "v2",
+          "status": "passed",
+          "agentCompleted": true,
+          "auditComplete": true,
+          "officialResolved": null,
+          "patchSha256": "4dc0850303b1c57fc4790acc007678efbd0a78287aa4cd5957ff36aff23c8d91",
+          "file": ".artifacts\\swe-pilot-admission\\ci-run-42382223747\\pi-enhanced-docker-106d6e190bd516e1fb6b718b979040db7f5c6d43\\swe-stub\\swe_13033_v2.json",
+          "testDurationMs": 6413.272072
+        },
+        {
+          "instanceId": "astropy__astropy-13453",
+          "mode": "off",
+          "status": "passed",
+          "agentCompleted": true,
+          "auditComplete": true,
+          "officialResolved": null,
+          "patchSha256": "fdc3c536a7b9789be77f55b898b01b042587fcbae51dbc187d07b8e550ace703",
+          "file": ".artifacts\\swe-pilot-admission\\ci-run-42382223747\\pi-enhanced-docker-106d6e190bd516e1fb6b718b979040db7f5c6d43\\swe-stub\\swe_13453_off.json",
+          "testDurationMs": 5734.721539999999
+        },
+        {
+          "instanceId": "astropy__astropy-14365",
+          "mode": "v2",
+          "status": "passed",
+          "agentCompleted": true,
+          "auditComplete": true,
+          "officialResolved": null,
+          "patchSha256": "6d522a226de613f0a6b634199e14c53a7f638f80b7da6db1ee6baf3e029e38a9",
+          "file": ".artifacts\\swe-pilot-admission\\ci-run-42382223747\\pi-enhanced-docker-106d6e190bd516e1fb6b718b979040db7f5c6d43\\swe-stub\\swe_14365_v2.json",
+          "testDurationMs": 5567.960556000002
+        }
+      ],
+      "mirrorPreparation": "success",
+      "requiredEvidenceGate": "success"
+    },
+    "paidModelCalls": 0,
+    "officialAgentScore": null,
+    "conclusion": "success",
+    "threeModeAdmission": "passed_with_v1_pre_forward_denial",
+    "remainingPilotPrerequisites": [
+      "Clean tested commit and fresh actual-host calibration",
+      "One-use trusted host grant bound to new commit, CI, config and mode inputs"
+    ],
+    "limitations": [
+      "Shared trusted evaluator Docker socket is not complete host-data isolation",
+      "Historical initial third-party credential loading remains unknown"
+    ],
+    "localLogExtraction": "Original ZIP kept intact; long step filenames are stored as short indexed logs with an original-name and SHA-256 map."
+  },
+  "currentRepair": {
+    "status": "offline_verified_pending_review",
+    "baseCommit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+    "workingTreeModified": true,
+    "paidCallsThisRound": 0,
+    "providerKeyReadThisRound": false,
+    "gitCommitPushOrRemoteCiThisRound": false,
+    "tests": {
+      "typescript": {
+        "total": 282,
+        "passed": 279,
+        "failed": 0,
+        "skipped": 3
+      },
+      "python": {
+        "passed": 15,
+        "failed": 0,
+        "skipped": 0
+      },
+      "missingOld273Identities": [],
+      "policyE2E": {
+        "passed": 9,
+        "failed": 0,
+        "skipped": 0
+      },
+      "checks": [
+        {
+          "check": "check --workspace=@wz-agent/pi-enhanced",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-0.log"
+        },
+        {
+          "check": "check:evaluation --workspace=@wz-agent/pi-enhanced",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-1.log"
+        },
+        {
+          "check": "check:pinned-deps",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-2.log"
+        },
+        {
+          "check": "check:runtime-deps",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-3.log"
+        },
+        {
+          "check": "check:ts-imports",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-4.log"
+        },
+        {
+          "check": "check:entry-graphs",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-5.log"
+        },
+        {
+          "check": "check:install-lock:coding-agent",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-6.log"
+        },
+        {
+          "check": "check:browser-smoke",
+          "exitCode": 0,
+          "log": ".artifacts/swe-pilot-repair/check-7.log"
+        }
+      ],
+      "biome": {
+        "files": 19,
+        "diagnostics": 0
+      },
+      "build": "passed",
+      "pack": "passed"
+    },
+    "sourceOnlyProtocol": {
+      "issuePreserved": true,
+      "commonPromptForAllModes": true,
+      "testsReadable": true,
+      "testsWritable": false,
+      "trackedSourceOnly": true,
+      "commonPolicyFunction": "safePatchPath",
+      "perAnswerPathAllowlist": false,
+      "brokerReceivesRejectedWrites": false,
+      "candidateEditsSilentlyRemoved": false
+    },
+    "budget": {
+      "formulaUnchanged": true,
+      "decisionOrderUnchanged": true,
+      "limitsAndPricingUnchanged": true,
+      "newStubDenialDiagnostics": {
+        "formulaVersion": "utf8_bytes_plus4096_v1",
+        "requestBodyBytes": 117435,
+        "requestedOutputTokens": 384000,
+        "outputTokenLimit": 2048,
+        "inputTokenUpperBound": 121531,
+        "candidateReservedTokens": 123579,
+        "candidateReservedCostUsd": 0.0389169,
+        "maxTotalTokens": 80000,
+        "remainingTokenHeadroom": 79777,
+        "maxTotalCostUsd": 0.03,
+        "remainingCostHeadroomUsd": 0.0299151
+      },
+      "stubActualUsageTokens": 223,
+      "historicalRequest8": {
+        "status": "unknown_no_backfill",
+        "requestBodyBytes": null,
+        "requestedOutputTokens": null,
+        "candidateReservedTokens": null,
+        "candidateReservedCostUsd": null,
+        "originalEvidenceUnmodified": true
+      }
+    },
+    "results": {
+      "runtimeClassificationIndependentOfExport": true,
+      "normalAgentRejectedPatch": {
+        "agentCompleted": true,
+        "auditComplete": true,
+        "terminationClassification": "completed",
+        "patchExportError": "SWE_PATCH_UNSAFE",
+        "diagnostic": {
+          "status": "rejected",
+          "error": "SWE_PATCH_UNSAFE",
+          "candidatePatchSha256": "8feda48b4017de1aa8a228122c9d85cebd4a323313b173ce37d8b67b23a77523",
+          "candidatePatchBytes": 419,
+          "paths": [
+            {
+              "path": "astropy/__init__.py",
+              "pathSha256": "c0450b28b8368b89fb164c4c64dd3d6a07c6d819572f5382c121dc28e5297132"
+            }
+          ],
+          "pathsTruncated": false,
+          "contentSaved": false
+        },
+        "officialHarnessStatus": "not_run"
+      },
+      "forcedInterruptedPi": {
+        "agentCompleted": false,
+        "auditStatus": {
+          "complete": false,
+          "integrity": "valid",
+          "recoveryState": "interrupted_or_unfinished"
+        },
+        "terminationClassification": "agent_execution_error"
+      },
+      "rejectedPatchEvidence": "bounded paths/hashes/bytes/error only; no body or credentials; no predictions"
+    },
+    "integrity": {
+      "protectedFiles": 124,
+      "allHashesUnchanged": true,
+      "deletedDocs": 42,
+      "officialHarnessUnchanged": true,
+      "sandboxAndP1Unchanged": true
+    },
+    "newSourceRemoteCi": "configured_only_not_run",
+    "lastRealBudget": "consumed_no_reuse",
+    "realRerunAuthorized": false,
+    "changedFilesManifest": ".artifacts/swe-pilot-repair/changed-files.json",
+    "evidenceDirectory": ".artifacts/swe-pilot-repair",
+    "nextPrerequisites": [
+      "Review and separately authorize an exact commit/push file list",
+      "New commit Windows/Linux/Docker CI with all mandatory SWE cases actually run",
+      "New clean checkout and same-host mode-specific fingerprint calibration for the changed common prompt",
+      "A new explicit paid budget and fresh single-use host grant; never reuse the consumed $0.09",
+      "Fresh evaluator preflight and policy-compliant predictions before official scoring"
+    ]
+  },
+  "previousPreparationTests": {
+    "typescript": {
+      "total": 282,
+      "passed": 279,
+      "failed": 0,
+      "skipped": 3
+    },
+    "python": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0
+    },
+    "missingOld273Identities": [],
+    "policyE2E": {
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0
+    },
+    "checks": [
+      {
+        "check": "check --workspace=@wz-agent/pi-enhanced",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-0.log"
+      },
+      {
+        "check": "check:evaluation --workspace=@wz-agent/pi-enhanced",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-1.log"
+      },
+      {
+        "check": "check:pinned-deps",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-2.log"
+      },
+      {
+        "check": "check:runtime-deps",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-3.log"
+      },
+      {
+        "check": "check:ts-imports",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-4.log"
+      },
+      {
+        "check": "check:entry-graphs",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-5.log"
+      },
+      {
+        "check": "check:install-lock:coding-agent",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-6.log"
+      },
+      {
+        "check": "check:browser-smoke",
+        "exitCode": 0,
+        "log": ".artifacts/swe-pilot-repair/check-7.log"
+      }
+    ],
+    "biome": {
+      "files": 19,
+      "diagnostics": 0
+    },
+    "build": "passed",
+    "pack": "passed"
+  },
+  "currentPreparation": {
+    "status": "offline_verified_pending_review",
+    "baseCommit": "106d6e190bd516e1fb6b718b979040db7f5c6d43",
+    "workingTreeModified": true,
+    "paidCallsThisRound": 0,
+    "providerKeyReadThisRound": false,
+    "newRealGrantCreated": false,
+    "gitCommitPushRemoteCiThisRound": false,
+    "tests": {
+      "typescript": {
+        "total": 291,
+        "passed": 288,
+        "failed": 0,
+        "skipped": 3
+      },
+      "python": {
+        "passed": 15,
+        "failed": 0,
+        "skipped": 0
+      },
+      "missingPrevious282Identities": [],
+      "skippedIdentities": [
+        "Batch J production Runner and crash audit enforces identity through real Pi, gateway and Docker",
+        "locked external MCP components negotiates with @upstash/context7-mcp@4.4.4 and reaches its query endpoint",
+        "Serena 2.1.0 official Docker image finds a real symbol and its references through stdio MCP"
+      ],
+      "sweOriginalFive": {
+        "passed": 5,
+        "failed": 0,
+        "skipped": 0
+      },
+      "swePolicyAndContinuation": {
+        "passed": 17,
+        "failed": 0,
+        "skipped": 0
+      },
+      "checks": [
+        {
+          "check": "check --workspace=@wz-agent/pi-enhanced",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-0.log"
+        },
+        {
+          "check": "check:evaluation --workspace=@wz-agent/pi-enhanced",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-1.log"
+        },
+        {
+          "check": "check:pinned-deps",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-2.log"
+        },
+        {
+          "check": "check:runtime-deps",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-3.log"
+        },
+        {
+          "check": "check:ts-imports",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-4.log"
+        },
+        {
+          "check": "check:entry-graphs",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-5.log"
+        },
+        {
+          "check": "check:install-lock:coding-agent",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-6.log"
+        },
+        {
+          "check": "check:browser-smoke",
+          "exitCode": 0,
+          "log": ".artifacts/swe-continuation/check-7.log"
+        }
+      ],
+      "biome": {
+        "files": 21,
+        "diagnostics": 0
+      },
+      "offlineBuild": "passed",
+      "packScan": "passed"
+    },
+    "continuation": {
+      "scope": "swe-task-v1 only; all other profiles remain strict",
+      "hostReceipt": "host-cleanup.json, runId/cell/workspace/result/run-report hash bindings; only written after private-root removal",
+      "requiredHostChecks": [
+        "Pi child close and PID absent",
+        "Gateway closed, zero active requests and reserved exposure; started == completed",
+        "Docker run namespace empty after removal",
+        "Workspace identity valid before removal",
+        "Private project/git/session/task root removed",
+        "Results persisted and exact SHA bindings verified",
+        "Next cell grant revalidated including expiry and wx consumption",
+        "Independent next-cell full reservation fits batch maximum"
+      ],
+      "incompleteAuditRule": "valid bound journal only; no pending writes; pending readonly operations require host cleanup proof; complete flag never rewritten",
+      "strictStops": [
+        "unknown cleanup/identity/audit",
+        "Gateway accounting/provider failure or missing Usage",
+        "any existing strict tool/security denial",
+        "unsafe Patch export",
+        "authorization or fingerprint mismatch",
+        "batch reservation insufficient"
+      ],
+      "scenarios": {
+        "audit_corrupt": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-audit_corrupt.json",
+          "providerCalls": 1,
+          "observedModes": [
+            "off"
+          ],
+          "stoppedReason": "swe_host_cleanup_unconfirmed",
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "stopped",
+              "continuationReady": false,
+              "notRunReason": null,
+              "runStatus": "gateway_error",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "invalid_or_missing",
+              "gatewayDenials": [
+                "GATEWAY_FAILED_CLOSED"
+              ],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "swe_host_cleanup_unconfirmed",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "swe_host_cleanup_unconfirmed",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        },
+        "batch_cap": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-batch_cap.json",
+          "providerCalls": 1,
+          "observedModes": [
+            "off"
+          ],
+          "stoppedReason": "batch_budget_reservation",
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "failed",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "completed",
+              "agentCompleted": true,
+              "auditComplete": true,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "batch_budget_reservation",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "batch_budget_reservation",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        },
+        "container_failure": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-container_failure.json",
+          "providerCalls": 1,
+          "observedModes": [
+            "off"
+          ],
+          "stoppedReason": "swe_gateway_settlement_unconfirmed",
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "stopped",
+              "continuationReady": false,
+              "notRunReason": null,
+              "runStatus": "gateway_error",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "swe_gateway_settlement_unconfirmed",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "swe_gateway_settlement_unconfirmed",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        },
+        "cost": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-cost.json",
+          "providerCalls": 3,
+          "observedModes": [
+            "off",
+            "v1",
+            "v2"
+          ],
+          "stoppedReason": null,
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "budget_stopped",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [
+                "GATEWAY_COST_BUDGET"
+              ],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "budget_stopped",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [
+                "GATEWAY_COST_BUDGET"
+              ],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "budget_stopped",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [
+                "GATEWAY_COST_BUDGET"
+              ],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        },
+        "no_patch": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-no_patch.json",
+          "providerCalls": 3,
+          "observedModes": [
+            "off",
+            "v1",
+            "v2"
+          ],
+          "stoppedReason": null,
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "failed",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "completed",
+              "agentCompleted": true,
+              "auditComplete": true,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "failed",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "completed",
+              "agentCompleted": true,
+              "auditComplete": true,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "failed",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "completed",
+              "agentCompleted": true,
+              "auditComplete": true,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        },
+        "requests": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-requests.json",
+          "providerCalls": 3,
+          "observedModes": [
+            "off",
+            "v1",
+            "v2"
+          ],
+          "stoppedReason": null,
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "budget_stopped",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [
+                "GATEWAY_REQUEST_LIMIT"
+              ],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "budget_stopped",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [
+                "GATEWAY_REQUEST_LIMIT"
+              ],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "budget_stopped",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [
+                "GATEWAY_REQUEST_LIMIT"
+              ],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        },
+        "timeout": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-timeout.json",
+          "providerCalls": 6,
+          "observedModes": [
+            "off",
+            "v1",
+            "v2"
+          ],
+          "stoppedReason": null,
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "timeout",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "timeout",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "stopped",
+              "continuationReady": true,
+              "notRunReason": null,
+              "runStatus": "timeout",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        },
+        "usage_failure": {
+          "evidence": ".artifacts/swe-continuation/final-stub/continuation-usage_failure.json",
+          "providerCalls": 1,
+          "observedModes": [
+            "off"
+          ],
+          "stoppedReason": "swe_gateway_settlement_unconfirmed",
+          "cells": [
+            {
+              "id": "off",
+              "resultStatus": "stopped",
+              "continuationReady": false,
+              "notRunReason": null,
+              "runStatus": "gateway_error",
+              "agentCompleted": false,
+              "auditComplete": false,
+              "auditIntegrity": "valid",
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v1",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "swe_gateway_settlement_unconfirmed",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            },
+            {
+              "id": "v2",
+              "resultStatus": "not_run",
+              "continuationReady": null,
+              "notRunReason": "swe_gateway_settlement_unconfirmed",
+              "runStatus": null,
+              "agentCompleted": null,
+              "auditComplete": null,
+              "auditIntegrity": null,
+              "gatewayDenials": [],
+              "officialHarnessStatus": "not_run",
+              "resolved": null
+            }
+          ]
+        }
+      },
+      "tokenBudgetScenario": {
+        "providerCalls": 12,
+        "currentCellForwarded": 4,
+        "denial": {
+          "reservationDiagnostics": {
+            "formulaVersion": "utf8_bytes_plus4096_v1",
+            "requestBodyBytes": 223747,
+            "requestedOutputTokens": 384000,
+            "outputTokenLimit": 2048,
+            "inputTokenUpperBound": 227843,
+            "candidateReservedTokens": 229891,
+            "candidateReservedCostUsd": 0.0708105,
+            "maxTotalTokens": 200000,
+            "remainingTokenHeadroom": 199550,
+            "maxTotalCostUsd": 0.08,
+            "remainingCostHeadroomUsd": 0.079829
+          },
+          "runId": "swe_task_budget_off_off",
+          "requestSequence": 5,
+          "code": "GATEWAY_TOKEN_BUDGET",
+          "upstreamForwarded": false,
+          "requestsStarted": 4,
+          "actualTotalTokens": 450,
+          "committedTokenUpperBound": 450,
+          "reservedTokens": 0,
+          "actualCostUsd": 0.00017099999999999998,
+          "committedCostUpperBoundUsd": 0.00017099999999999998,
+          "reservedCostUsd": 0
+        }
+      },
+      "productionInputAdmission": {
+        "capture": "passed",
+        "matched": "passed",
+        "v1Mismatch": "blocked_before_forward",
+        "laterV2": "not_run"
+      },
+      "replay": "each of eight real Runner batch fixtures rerun once and rejected before forwarding"
+    },
+    "budgetProposal": {
+      "status": "offline_feasible_not_a_completion_guarantee",
+      "paidCalls": 0,
+      "proposalAuthorizedForPaidExecution": false,
+      "proposal": {
+        "perCell": {
+          "model": "deepseek-flash",
+          "thinking": "off",
+          "maxRequests": 20,
+          "maxTokens": 200000,
+          "maxCostUsd": 0.08,
+          "timeoutMs": 600000,
+          "maxOutputTokens": 2048,
+          "retries": 0,
+          "concurrency": 1
+        },
+        "batch": {
+          "maxRequests": 60,
+          "maxTokens": 600000,
+          "maxCostUsd": 0.24
+        }
+      },
+      "historicalRequests": [
+        {
+          "requestSequence": 1,
+          "upstreamForwarded": true,
+          "actualTotalTokens": 2939,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": 16901,
+          "savedReservedCostUsd": 0.0069135,
+          "previousSettledTokens": 0,
+          "wouldFitNewTokenLimit": true,
+          "wouldFitNewCostLimit": true
+        },
+        {
+          "requestSequence": 2,
+          "upstreamForwarded": true,
+          "actualTotalTokens": 3991,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": 20975,
+          "savedReservedCostUsd": 0.0081357,
+          "previousSettledTokens": 2939,
+          "wouldFitNewTokenLimit": true,
+          "wouldFitNewCostLimit": true
+        },
+        {
+          "requestSequence": 3,
+          "upstreamForwarded": true,
+          "actualTotalTokens": 4941,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": 24686,
+          "savedReservedCostUsd": 0.009249,
+          "previousSettledTokens": 6930,
+          "wouldFitNewTokenLimit": true,
+          "wouldFitNewCostLimit": true
+        },
+        {
+          "requestSequence": 4,
+          "upstreamForwarded": true,
+          "actualTotalTokens": 7173,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": 31747,
+          "savedReservedCostUsd": 0.011367299999999999,
+          "previousSettledTokens": 11871,
+          "wouldFitNewTokenLimit": true,
+          "wouldFitNewCostLimit": true
+        },
+        {
+          "requestSequence": 5,
+          "upstreamForwarded": true,
+          "actualTotalTokens": 7675,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": 34373,
+          "savedReservedCostUsd": 0.0121551,
+          "previousSettledTokens": 19044,
+          "wouldFitNewTokenLimit": true,
+          "wouldFitNewCostLimit": true
+        },
+        {
+          "requestSequence": 6,
+          "upstreamForwarded": true,
+          "actualTotalTokens": 8044,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": 36914,
+          "savedReservedCostUsd": 0.012917399999999999,
+          "previousSettledTokens": 26719,
+          "wouldFitNewTokenLimit": true,
+          "wouldFitNewCostLimit": true
+        },
+        {
+          "requestSequence": 7,
+          "upstreamForwarded": true,
+          "actualTotalTokens": 8237,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": 38412,
+          "savedReservedCostUsd": 0.0133668,
+          "previousSettledTokens": 34763,
+          "wouldFitNewTokenLimit": true,
+          "wouldFitNewCostLimit": true
+        },
+        {
+          "requestSequence": 8,
+          "upstreamForwarded": false,
+          "actualTotalTokens": null,
+          "requestBodyBytes": null,
+          "requestBodyBytesStatus": "not_saved_unknown",
+          "savedReservedTokenUpperBound": null,
+          "savedReservedCostUsd": null,
+          "previousSettledTokens": 43000,
+          "wouldFitNewTokenLimit": null,
+          "wouldFitNewCostLimit": null
+        }
+      ],
+      "historicalRequest8": "unknown; no body/output/reservation backfill",
+      "capacityCalculationNotHistoricalMeasurement": {
+        "afterSettledTokens": 43000,
+        "assumedOutputLimit": 2048,
+        "formula": "bodyBytes + 4096 + outputLimit <= maxTokens - settledTokens",
+        "oldMaximumNextRequestBodyBytes": 30856,
+        "newMaximumNextRequestBodyBytes": 150856,
+        "remainingCostUsdAtSavedGatewayRates": 0.0654134
+      },
+      "knownOldStubRequestFormulaExercise": {
+        "notRealModelEvidence": true,
+        "source": ".artifacts/swe-pilot-repair/frozen-stub/policy-budget-off.json",
+        "diagnostics": {
+          "formulaVersion": "utf8_bytes_plus4096_v1",
+          "requestBodyBytes": 117435,
+          "requestedOutputTokens": 384000,
+          "outputTokenLimit": 2048,
+          "inputTokenUpperBound": 121531,
+          "candidateReservedTokens": 123579,
+          "candidateReservedCostUsd": 0.0389169,
+          "maxTotalTokens": 80000,
+          "remainingTokenHeadroom": 79777,
+          "maxTotalCostUsd": 0.03,
+          "remainingCostHeadroomUsd": 0.0299151
+        },
+        "newTokenHeadroom": 199777,
+        "newCostHeadroomUsd": 0.0799151,
+        "wouldFitBothNewLimits": true
+      },
+      "limitations": [
+        "Request 8 cannot be replayed because its body is not saved",
+        "Provider invoice unknown; configured gateway rates are unchanged",
+        "Request size can grow past either limit; larger quotas do not guarantee completion",
+        "Actual provider context capacity must still be respected; no new remote model metadata was fetched",
+        "At 200000 total tokens with 40960 output tokens, configured cost could reach 0.096864; the independent 0.08 cost cap may stop first"
+      ]
+    },
+    "fairness": {
+      "instance": "astropy__astropy-13033",
+      "baseCommit": "298ccb478e6bf092953bca67a3d29dc6c35f6752",
+      "commonIssuePromptBaseToolsAndSystemChecked": true,
+      "fullSchemasIntentionallyDifferByMode": true,
+      "memory": false,
+      "context": false,
+      "taskSeeded": false,
+      "protocol": "swebench_verified_source_restricted_v1"
+    },
+    "grading": {
+      "entry": "benchmarks/real-agent/swebench.ts --instance --prediction --agent-result --harness-checkout --parquet --output-dir --execute",
+      "officialHarness": "v4.1.0 unchanged",
+      "harnessRunsThisRound": 0,
+      "resolved": null,
+      "partialPatchCanBeScored": true,
+      "agentCompleteAndAuditIndependent": true,
+      "noPatch": "no predictions; officialHarnessStatus=not_run; resolved=null",
+      "evaluator": "independent credential-free control environment; shared Docker socket is privileged, not full host isolation"
+    },
+    "integrity": {
+      "protectedHistoricalFiles": 124,
+      "allHashesUnchanged": true,
+      "oldDeletedDocs": 42,
+      "stagedEmpty": true,
+      "workflowUnchangedThisRound": true,
+      "gatewayUnchangedSincePriorRepair": true,
+      "coreMcpMemoryContextTaskAlgorithmsUnchanged": true
+    },
+    "remoteCi": "configured_only_not_run_for_modified_source",
+    "budgetAuthorized": false,
+    "old009Grant": "consumed_do_not_reuse",
+    "remainingPrerequisites": [
+      "Review exact candidates and separately authorize commit/push",
+      "Current new commit Windows/Linux/Docker CI actually passed with mandatory SWE cases executed",
+      "Clean checkout, public mirror and fresh actual-host per-mode Stub calibration",
+      "Unique new batch/output and independent evaluator directories",
+      "Separate explicit USD 0.24 approval and fresh one-use grant bound to Commit/CI/config/inputs/expiry/run identity",
+      "Evaluator resource preflight and legal predictions before official grading"
+    ],
+    "evidenceDirectory": ".artifacts/swe-continuation",
+    "candidateManifest": ".artifacts/swe-continuation/candidates.json"
+  }
+}

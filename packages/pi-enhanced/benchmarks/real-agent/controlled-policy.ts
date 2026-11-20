@@ -1,0 +1,170 @@
+import { CONTROLLED_LIMITS } from "./controlled-cases.ts";
+
+export interface ControlledResult {
+	patchStatus: string;
+	runStatus: string;
+	controlledCell: string;
+	gateway: {
+		state: string;
+		requestsStarted: number;
+		requestsCompleted: number;
+		requestsRejected: number;
+		actualTotalTokens: number;
+		committedTokenUpperBound: number;
+		actualCostUsd: number;
+		committedCostUpperBoundUsd: number;
+	};
+	sandboxAudit: {
+		evidence: {
+			network: string;
+			readOnlyRoot: boolean;
+			user: string;
+			mounts: Array<{ destination: string; readWrite: boolean }>;
+		};
+		audit: Array<{ status: string }>;
+	};
+	contextAudit: { state?: string; diagnostics: unknown[] };
+	toolFailures: Array<{ result: unknown }>;
+	[key: string]: unknown;
+}
+
+/** SWE only. A missing session_shutdown is not proof that host cleanup failed, or succeeded. */
+export function sweContinuationStopReason(
+	result: ControlledResult,
+	host: Record<string, unknown>,
+	limits: { maxRequests: number; maxTokens: number; maxCostUsd: number },
+): string | null {
+	const audit = result.sandboxAudit as ControlledResult["sandboxAudit"] & {
+		integrity?: string;
+		runId?: string;
+		workspaceSha256?: string;
+		state?: string;
+		pending?: Array<{ operation: string; toolName: string }>;
+	};
+	if (
+		![
+			"childClosed",
+			"childAbsent",
+			"containersRemoved",
+			"workspaceIdentityValid",
+			"gatewayClosed",
+			"privateRootRemoved",
+		].every((key) => host[key] === true) ||
+		host.gatewayActiveRequests !== 0 ||
+		host.reservedTokens !== 0 ||
+		host.reservedCostUsd !== 0 ||
+		host.runId !== result.runId ||
+		host.cell !== result.controlledCell ||
+		audit?.integrity !== "valid" ||
+		audit.state === "limit_reached" ||
+		audit.runId !== `${String(result.runId).slice(0, 50)}-swebench` ||
+		audit.workspaceSha256 !== host.workspaceSha256 ||
+		!Array.isArray(audit.pending) ||
+		audit.pending.some((p) => !["read", "grep", "find", "ls"].includes(p.toolName))
+	)
+		return "swe_host_cleanup_unconfirmed";
+	const gateway = result.gateway;
+	const denials = result.gatewayRejections as Array<{ code: string; upstreamForwarded: boolean }> | undefined;
+	if (
+		gateway?.state !== "ready" ||
+		gateway.requestsStarted !== gateway.requestsCompleted ||
+		!Array.isArray(denials) ||
+		denials.length !== gateway.requestsRejected ||
+		denials.some(
+			(d) =>
+				d.upstreamForwarded !== false ||
+				!["GATEWAY_TOKEN_BUDGET", "GATEWAY_COST_BUDGET", "GATEWAY_REQUEST_LIMIT"].includes(d.code),
+		)
+	)
+		return "swe_gateway_settlement_unconfirmed";
+	// Reuse the strict boundary checks; only confirmed ordinary stop conditions are normalized here.
+	const ordinary = ["completed", "verification_failed", "gateway_budget_stop", "agent_execution_error"];
+	if (!ordinary.includes(String(result.terminationClassification))) return String(result.terminationClassification);
+	return controlledStopReason(
+		{
+			...result,
+			auditComplete: true,
+			runStatus: "completed",
+			terminationClassification: "completed",
+			gateway: { ...gateway, requestsRejected: 0 },
+		},
+		limits,
+	);
+}
+
+export function controlledStopReason(
+	result: ControlledResult,
+	limits: { maxRequests: number; maxTokens: number; maxCostUsd: number } = CONTROLLED_LIMITS,
+): string | null {
+	if (
+		result.terminationClassification &&
+		!["completed", "verification_failed"].includes(String(result.terminationClassification))
+	)
+		return String(result.terminationClassification);
+	if (typeof result.patchExportError === "string" && result.patchExportError !== "empty_patch")
+		return result.patchExportError;
+	if (result.auditComplete === false) return "sandbox_audit_incomplete";
+	const g = result.gateway;
+	if (!g || g.state !== "ready" || g.requestsRejected !== 0 || g.requestsStarted !== g.requestsCompleted)
+		return "gateway_or_usage_failure";
+	if (
+		![
+			g.requestsStarted,
+			g.actualTotalTokens,
+			g.committedTokenUpperBound,
+			g.actualCostUsd,
+			g.committedCostUpperBoundUsd,
+		].every((n) => Number.isFinite(n) && n >= 0)
+	)
+		return "invalid_budget_evidence";
+	if (
+		g.requestsStarted > limits.maxRequests ||
+		g.committedTokenUpperBound > limits.maxTokens ||
+		g.committedCostUpperBoundUsd > limits.maxCostUsd + Number.EPSILON
+	)
+		return "budget_exceeded";
+	const e = result.sandboxAudit?.evidence;
+	if (
+		!e ||
+		e.network !== "none" ||
+		!e.readOnlyRoot ||
+		!/^[1-9][0-9]*:[1-9][0-9]*$/u.test(e.user) ||
+		e.mounts.length !== 1 ||
+		e.mounts[0]?.destination !== "/workspace" ||
+		!e.mounts[0].readWrite
+	)
+		return "isolation_evidence_invalid";
+	if (!Array.isArray(result.sandboxAudit.audit) || result.sandboxAudit.audit.some((entry) => entry.status !== "ok"))
+		return "sandbox_operation_failure";
+	if (
+		!Array.isArray(result.toolFailures) ||
+		result.toolFailures.some((failure) => /SANDBOX_/u.test(JSON.stringify(failure)))
+	)
+		return "sandbox_tool_failure";
+	if (result.runStatus !== "completed") return "run_not_completed";
+	if (
+		result.controlledCell === "c_on" &&
+		(!Array.isArray(result.contextAudit?.diagnostics) || !result.contextAudit.diagnostics.length)
+	)
+		return "context_audit_missing";
+	return null;
+}
+
+export function verifyControlledCi(value: unknown, commit: string): void {
+	if (!value || typeof value !== "object") throw new Error("CONTROLLED_CI_REQUIRED");
+	const evidence = value as {
+		commit?: string;
+		conclusion?: string;
+		runUrl?: string;
+		jobs?: Array<{ name: string; conclusion: string }>;
+	};
+	if (
+		evidence.commit !== commit ||
+		evidence.conclusion !== "success" ||
+		!evidence.runUrl?.startsWith("https://github.com/Wenzayyds/agent/actions/runs/") ||
+		!["offline-engineering (ubuntu-latest)", "offline-engineering (windows-latest)", "docker-isolation"].every(
+			(name) => evidence.jobs?.some((job) => job.name === name && job.conclusion === "success"),
+		)
+	)
+		throw new Error("CONTROLLED_CI_NOT_PASSED_FOR_COMMIT");
+}
