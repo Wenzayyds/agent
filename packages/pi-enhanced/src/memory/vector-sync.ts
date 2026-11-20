@@ -93,7 +93,7 @@ export class MemoryVectorSync {
 	}
 
 	async diagnose(): Promise<{ orphanIds: string[]; staleIds: string[]; missingIds: string[]; truncated: boolean }> {
-		const { points, cursor } = await this.index.list(this.projectId, { limit: INSPECTION_BATCH });
+		const { points, invalid, cursor } = await this.index.list(this.projectId, { limit: INSPECTION_BATCH });
 		const orphanIds = new Set<string>();
 		const staleIds = new Set<string>();
 		for (const point of points) {
@@ -103,6 +103,10 @@ export class MemoryVectorSync {
 				const expected = this.asPoint(record);
 				if (!expected || !samePoint(expected, point)) staleIds.add(point.memoryId);
 			}
+		}
+		for (const { memoryId } of invalid ?? []) {
+			if (await this.service.get(memoryId)) staleIds.add(memoryId);
+			else orphanIds.add(memoryId);
 		}
 		const candidates = this.service.indexCandidates("", INSPECTION_BATCH + 1);
 		const expected = candidates.slice(0, INSPECTION_BATCH).flatMap((record) => this.asPoint(record) ?? []);
@@ -179,7 +183,7 @@ export class MemoryVectorSync {
 		let cursor: string | undefined;
 		do {
 			const page = await this.index.list(this.projectId, { memoryId: job.memoryId, cursor });
-			const superseded = page.points.filter(
+			const superseded = [...page.points, ...(page.invalid ?? [])].filter(
 				({ revision }) => revision < job.revision || (!countedAsLive && revision === job.revision),
 			);
 			await this.index.remove(this.projectId, superseded);
@@ -205,6 +209,13 @@ export class MemoryVectorSync {
 			if (current && point.revision > current.revision) continue;
 			const expectedPoint = current ? this.asPoint(current) : undefined;
 			if (!expectedPoint || !samePoint(expectedPoint, point)) obsolete.push(point);
+		}
+		for (const point of remote.invalid ?? []) {
+			const current = await this.service.get(point.memoryId);
+			if (current && point.revision > current.revision) continue;
+			if (current?.revision === point.revision && this.asPoint(current)) {
+				this.service.vectorOutbox.enqueue(point.memoryId, point.revision);
+			} else obsolete.push(point);
 		}
 		await this.index.remove(this.projectId, obsolete);
 		this.remoteCursor = remote.cursor;

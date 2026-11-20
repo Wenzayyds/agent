@@ -49,16 +49,19 @@ export interface VectorHit extends MemoryVectorMetadata {
 	score: number;
 }
 
+interface MemoryVectorPage {
+	points: MemoryVectorMetadata[];
+	invalid?: VectorRevision[];
+	cursor?: string;
+}
+
 export interface MemoryVectorIndex {
 	readonly model: EmbeddingModel;
 	ensure(): Promise<void>;
 	upsert(points: readonly MemoryVectorPoint[]): Promise<void>;
 	remove(projectId: string, points: readonly VectorRevision[]): Promise<void>;
 	search(query: VectorQuery): Promise<VectorHit[]>;
-	list(
-		projectId: string,
-		options?: { memoryId?: string; cursor?: string; limit?: number },
-	): Promise<{ points: MemoryVectorMetadata[]; cursor?: string }>;
+	list(projectId: string, options?: { memoryId?: string; cursor?: string; limit?: number }): Promise<MemoryVectorPage>;
 	get(projectId: string, revisions: readonly VectorRevision[]): Promise<MemoryVectorMetadata[]>;
 }
 
@@ -159,10 +162,20 @@ export class QdrantVectorIndex implements MemoryVectorIndex {
 					: {}),
 			},
 		});
-		return result.map((point) => ({ ...this.parsePoint(query.projectId, point), score: point.score }));
+		const hits = result.flatMap((point) => {
+			const decoded = this.parsePoint(query.projectId, point);
+			if (!hasMemoryMetadata(decoded)) return [];
+			if (!scopes.includes(scopeKey(decoded.scope))) throw new QdrantError("qdrant-invalid-response");
+			return [{ ...decoded, score: point.score }];
+		});
+		if (result.length && !hits.length) throw new QdrantError("qdrant-invalid-response");
+		return hits;
 	}
 
-	async list(projectId: string, options: { memoryId?: string; cursor?: string; limit?: number } = {}) {
+	async list(
+		projectId: string,
+		options: { memoryId?: string; cursor?: string; limit?: number } = {},
+	): Promise<MemoryVectorPage> {
 		const { points, cursor } = await this.index.scroll({
 			cursor: options.cursor,
 			limit: options.limit,
@@ -170,27 +183,45 @@ export class QdrantVectorIndex implements MemoryVectorIndex {
 				must: [...this.scopeFilter(projectId), ...(options.memoryId ? [match("memoryId", options.memoryId)] : [])],
 			},
 		});
-		return { points: points.map((point) => this.parsePoint(projectId, point)), cursor };
+		const valid: MemoryVectorMetadata[] = [];
+		const invalid: VectorRevision[] = [];
+		for (const point of points) {
+			const decoded = this.parsePoint(projectId, point);
+			if (options.memoryId !== undefined && decoded.memoryId !== options.memoryId)
+				throw new QdrantError("qdrant-invalid-response");
+			if (hasMemoryMetadata(decoded)) valid.push(decoded);
+			else invalid.push(decoded);
+		}
+		return { points: valid, cursor, ...(invalid.length ? { invalid } : {}) };
 	}
 
 	async get(projectId: string, revisions: readonly VectorRevision[]): Promise<MemoryVectorMetadata[]> {
 		const result = await this.index.get(revisions.map((ref) => vectorPointId(projectId, ref, this.model)));
-		return result.map((point) => this.parsePoint(projectId, point));
+		return result.map((point) => this.parsePoint(projectId, point)).filter(hasMemoryMetadata);
 	}
 
 	private scopeFilter(projectId: string) {
 		return [match("projectId", projectId), match("modelKey", this.key)];
 	}
 
-	private parsePoint(projectId: string, point: IndexedPoint<Record<string, unknown>>): MemoryVectorMetadata {
+	private parsePoint(
+		projectId: string,
+		point: IndexedPoint<Record<string, unknown>>,
+	): MemoryVectorMetadata | VectorRevision {
 		const { payload: data, id } = point;
-		const scope = parseScopeKey(data.scopeKey);
 		if (
 			data.projectId !== projectId ||
 			data.modelKey !== this.key ||
-			!scope ||
 			typeof data.memoryId !== "string" ||
-			!Number.isSafeInteger(data.revision) ||
+			!data.memoryId ||
+			!Number.isSafeInteger(data.revision)
+		)
+			throw new QdrantError("qdrant-invalid-response");
+		const ref = { memoryId: data.memoryId, revision: data.revision as number };
+		if (id !== vectorPointId(projectId, ref, this.model)) throw new QdrantError("qdrant-invalid-response");
+		const scope = parseScopeKey(data.scopeKey);
+		if (
+			!scope ||
 			!Number.isSafeInteger(data.contentRevision) ||
 			typeof data.contentHash !== "string" ||
 			!VECTOR_MEMORY_TYPES.includes(data.type as VectorMemoryType) ||
@@ -201,9 +232,7 @@ export class QdrantVectorIndex implements MemoryVectorIndex {
 			(data.conditions !== undefined &&
 				(!Array.isArray(data.conditions) || !data.conditions.every((entry) => typeof entry === "string")))
 		)
-			throw new QdrantError("qdrant-invalid-response");
-		const ref = { memoryId: data.memoryId, revision: data.revision as number };
-		if (id !== vectorPointId(projectId, ref, this.model)) throw new QdrantError("qdrant-invalid-response");
+			return ref;
 		return {
 			...ref,
 			projectId,
@@ -218,6 +247,10 @@ export class QdrantVectorIndex implements MemoryVectorIndex {
 			validUntil: data.validUntil === Number.MAX_SAFE_INTEGER ? undefined : (data.validUntil as number),
 		};
 	}
+}
+
+function hasMemoryMetadata(point: VectorRevision): point is MemoryVectorMetadata {
+	return "projectId" in point;
 }
 
 function modelKey(model: EmbeddingModel): string {
