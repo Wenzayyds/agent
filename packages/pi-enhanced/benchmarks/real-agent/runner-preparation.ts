@@ -219,7 +219,7 @@ export async function prepareAgent(context: RunnerContext, workspace: ReturnType
 	return { ...workspace, agentDir, memorySeed, seededTaskId, taskStateBefore, moduleTools, prompt };
 }
 export type PreparedAgent = Awaited<ReturnType<typeof prepareAgent>> & {
-	recovery?: { priorTestCalls: number; sessionId: string; page?: { reference: string; offset: number; limit: number } };
+	recovery?: { claimId: string; verifiedWorkspace?: string; sessionSha256: string; reclaimed?: boolean; verifyOnly?: boolean; priorTestCalls: number; sessionId: string; page?: { reference: string; offset: number; limit: number } };
 };
 const V3_MEMORY_RULE = "normalizeKey is used for index lookups and must preserve the original input value.";
 

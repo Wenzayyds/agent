@@ -2,7 +2,7 @@
 
 Pi Enhanced 为 Pi 提供六个可独立启停的扩展，包括 MCP Policy、Memory、Context、Task Manager、Docker Sandbox 和 Knowledge。运行时实现位于 `src/`，模型实验位于 `benchmarks/real-agent/`。两者通过 Extension 接口连接。
 
-当前 Task Manager 支持 `off`、`v1`、`v2`。SWE-bench 使用 OFF/V1/V2 三组受限源码对照，模型执行和官方判分分别启动。实验配置不代表费用授权。
+Task Manager 的 SWE-bench 对照使用 `off`、`v1`、`v2` 三种模式。模型执行与官方判分分别启动，真实模型运行需要单独授权。
 
 ## V3 联合恢复 Demo
 
@@ -52,11 +52,13 @@ npm exec vitest -- --run packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.te
 | `src/memory/`、`python/memory-intelligence/` | 项目记忆存储、检索和可选 Python 向量计算 |
 | `src/knowledge/`、`python/knowledge-parser/` | 文档导入、权限管理和检索 |
 | `src/context/`、`src/task-manager/` | 请求上下文选择、任务状态和计划更新 |
-| `benchmarks/real-agent/` | 当前模型 Runner、预算、授权与 SWE-bench；见[调用关系](benchmarks/real-agent/README.md) |
-| `benchmarks/archive/` | 旧 P5、消融和合成基准，已移出日常脚本和 CI；见[归档说明](benchmarks/archive/README.md) |
+| `benchmarks/real-agent/` | 当前评测入口、Runner、预算网关、授权和 SWE-bench 判分，见[调用关系](benchmarks/real-agent/README.md) |
+| `benchmarks/archive/` | 仅供复现旧实验的脚本和配置，日常命令、CI 和打包均不包含，见[归档说明](benchmarks/archive/README.md) |
 | `tests/unit/`、`tests/integration/`、`tests/e2e/` | 策略单测、模块生命周期和生产链路回归 |
 | `scripts/ci/` | CI 元数据、测试身份清单、Docker 证据与打包检查 |
-| `docs/` | 设计和验收资料；旧记录只用于追溯 |
+| `docs/` | 评测设计、验收记录和 CI 使用的测试身份基线 `version-freeze-results.json` |
+| `docs/history/` | 历史交接快照 |
+| `evaluation-output/`、仓库根目录 `.artifacts/` | 历史运行数据和本地证据，包含真实实验、评分和授权记录 |
 
 ## 普通开发会话接入 CCR
 
@@ -135,8 +137,8 @@ Package 提供以下独立 Extension。
 
 | 模块 | 入口 | 状态命令 |
 |---|---|---|
-| MCP Policy | `extensions/mcp-policy.ts` | `/enhanced-mcp-policy-status`，P1 已实现 |
-| Memory | `extensions/memory.ts` | `/enhanced-memory-status`；启用且受信任后开放 P2-6 交互命令 |
+| MCP Policy | `extensions/mcp-policy.ts` | `/enhanced-mcp-policy-status` |
+| Memory | `extensions/memory.ts` | `/enhanced-memory-status`，启用且受信任后开放下列交互命令 |
 | Context | `extensions/context.ts` | `/enhanced-context-status`、`/enhanced-context-inspect` |
 | Task Manager | `extensions/task-manager.ts` | `/enhanced-task-manager-status` |
 | Docker Sandbox | `extensions/sandbox.ts` | 由受控 Runner 设置宿主配置 |
@@ -157,9 +159,11 @@ Memory 模块只有在配置启用且当前项目受信任时才打开项目存�
 - `/enhanced-memory-archive`、`/enhanced-memory-restore`、`/enhanced-memory-delete`：可逆归档、恢复和二次确认的单条删除；
 - `enhanced_memory_search`：模型唯一可调用的 Memory 工具，只读 verified，不接受 projectId、状态或路径参数。
 
-Memory 文本和 Session Recall 都按低信任数据处理，不会进入 system prompt。P2-6 同时提供生命周期受控的 `ScopedMemoryReader`；P3 只有在 Context 和 `memoryInjection` 均显式开启时，才把经过 verified 复核、限额和脱敏的 Episodic Memory 作为低信任 user 侧资料注入本次请求。
+Memory 文本和 Session Recall 都按低信任数据处理，不会进入 system prompt。`ScopedMemoryReader` 随 Memory 模块的会话生命周期启停。Context 和 `memoryInjection` 均显式开启时，才将经过 verified 复核、限额和脱敏的 Episodic Memory 作为低信任资料加入本次请求。
 
 Memory 默认使用 SQLite FTS5。已有 semantic 或 hybrid 配置继续使用 TF-IDF+SVD。将 `backend` 设为 `e5-qdrant` 后，Memory 使用本地 CPU E5 和 `pi_enhanced_memory_v3` 集合。启用 Knowledge 后，两者可共用本机 Qdrant 实例和预置权重缓存，各自管理 Worker。Worker 或 Qdrant 不可用时，检索回退到 SQLite FTS5。[运行配置](docs/memory-v3.md)
+
+启用向量检索后，Python Worker 负责可重建的向量计算，TypeScript 按当前项目、记忆状态和版本复核命中。
 
 ### Knowledge/RAG
 
@@ -242,7 +246,7 @@ Memory Intelligence 的可选配置示例：
 }
 ```
 
-`mode` 支持 `lexical`、`semantic`、`hybrid`，默认是 `lexical`。配置不能指定脚本、数据库路径或 projectId。Python 环境、超时和快照上限见 [P2-8 验证](docs/p2-8-verification.md)。
+`mode` 支持 `lexical`、`semantic`、`hybrid`，默认是 `lexical`。配置不能指定脚本、数据库路径或 projectId。
 
 Memory Governance 阈值是显式且有范围限制的配置：
 
@@ -262,7 +266,7 @@ Memory Governance 阈值是显式且有范围限制的配置：
 }
 ```
 
-Doctor 不写数据。`maintain dry-run` 只持久化可审查的 proposal 草稿，不改变 Memory 内容或状态；压缩/合并 apply 只生成新的 candidate，不继承 verified。Batch A 没有后台自动维护和批量删除。
+Doctor 不写数据。`maintain dry-run` 只持久化可审查的 proposal 草稿，不改变 Memory 内容或状态；压缩/合并 apply 只生成新的 candidate，不继承 verified。维护命令由用户手动触发。
 
 Context 配置示例：
 
@@ -285,7 +289,7 @@ Context 配置示例：
 }
 ```
 
-`observe` 只计算诊断，不改变消息；`select` 只改变本次模型请求视图，不写 Session。Memory 和当前 Task 摘要分别设开关并默认关闭。Task 摘要只读、低信任，并在注入前重新核对项目、会话、分支和 revision。Context 不使用 `context_with_system`，不会改系统提示或工具定义。详细设计见 [P3 Context 设计](docs/p3-context-design.md)。
+`observe` 只计算诊断，不改变消息；`select` 只改变本次模型请求视图，不写 Session。Memory 和当前 Task 摘要分别设开关并默认关闭。Task 摘要只读、低信任，并在注入前重新核对项目、会话、分支和 revision。Context 不使用 `context_with_system`，不会改系统提示或工具定义。
 
 `toolOutput.deduplicateReads` 默认关闭。在受信任项目启用 `select` 和 `toolOutput` 后，可以单独启用它。OpenAI Chat Completions 流式请求中，参数和文本都相同的工作区只读工具输出只保留最近一份正文。历史工具调用和原始会话记录完整保留。Memory、Knowledge 和分页恢复继续按各自原有权限规则发送。
 
@@ -340,7 +344,7 @@ Pi Package 也允许在 `settings.json` 的 package 资源筛选中排除某个�
 
 规则匹配顺序为：任意明确 deny、工具级规则、Server 级规则、默认动作；同层按 `priority` 从高到低，再按声明顺序。`defaultAction` 只能是 `ask` 或 `deny`。
 
-`nativeToolGuard` 独立保护 Pi 原生 read/write/edit 与 Shell 工具。默认写入和 Shell 需要逐次确认，无 UI 时拒绝；路径规范化后只允许工作区范围，并保护 `.git`、`.pi`。这不是操作系统沙箱，完整覆盖范围和限制见 Batch E 安全文档。
+`nativeToolGuard` 独立保护 Pi 原生 read/write/edit 与 Shell 工具。默认写入和 Shell 需要逐次确认，无 UI 时拒绝；路径规范化后只允许工作区范围，并保护 `.git`、`.pi`。Docker 文件工具隔离由 Sandbox 扩展提供。
 
 需要审批时，没有对话界面的 print/RPC 流程会拒绝执行。MCP annotations 只用于提示风险，不作为授权依据。对 Serena 这类工具较多的 Server，还应在原生 `mcp.json` 中用 `exposure: "hidden"` 只开放所需查询工具。
 
@@ -378,7 +382,7 @@ docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6
 
 真实模型密钥可以保存在仓库根目录 `.env` 中，例如 `DEEPSEEK_API_KEY=...`。该文件已被 Git 忽略，只有带 `--execute` 的真实评测路径会读取它；dry-run 和 `--preflight` 不读取 `.env`。保存密钥本身不会开启真实评测，授权开关、预算网关确认以及调用、Token、金额和超时上限仍需在获准运行时显式提供。
 
-受控 DeepSeek 试用使用 `--budget-enforcement local_hard_gateway`。runner 为每个任务启动仅监听 `127.0.0.1` 的硬预算网关，通过临时 `models.json` 覆盖内置 DeepSeek 地址；真实 Key 不进入 Pi 子进程或 Docker。网关在转发前预留请求次数、输入上界、输出上限和费用，固定单并发并实施超时；usage 缺失、超限、断流或上游错误后失败关闭。当前只允许 `deepseek/deepseek-flash`。
+受控 DeepSeek 试用使用 `--budget-enforcement local_hard_gateway`。runner 为每个任务启动仅监听 `127.0.0.1` 的硬预算网关，通过临时 `models.json` 覆盖内置 DeepSeek 地址；真实 Key 不进入 Pi 子进程或 Docker。网关在转发前预留请求次数、输入上界、输出上限和费用，固定单并发并实施超时；usage 缺失、超限、断流或上游错误后失败关闭。默认受控评测使用 `deepseek/deepseek-flash`。`deepseek/deepseek-v4-pro` 仅用于单独配置的 SWE OFF 试跑或 V1/V2 对照。
 
 首版不支持 Shell、PowerShell、用户 `!`、codemode、tool_search、MCP 写工具或未知第三方工具。排障时可先运行：
 
@@ -423,12 +427,9 @@ E19 真实配对中，20K 完成 6/9，25K 完成 7/9。Premium 30K 已做离线
 
 工程检查使用 `npm run check --workspace=@wz-agent/pi-enhanced` 和 `npm run check:evaluation --workspace=@wz-agent/pi-enhanced`。普通 CI 使用无密钥预检；Docker Job 必须实际运行沙箱、网关和 SWE 策略用例，跳过不算通过。
 
-测试中的 Batch 字样是历史测试身份，不表示用例已经废弃。仍覆盖路径隔离、预算结算、授权消费、审计恢复及模块生命周期的用例继续保留，避免把结构清理变成覆盖率删减。
+CI 使用 `docs/version-freeze-results.json` 核对测试身份。旧 Batch 用例仍覆盖路径隔离、预算结算、授权消费和审计恢复。
 
-- [当前交接](../../HANDOFF.md)：当前任务、权限范围和未解决问题。
-- [SWE-bench 验收记录](docs/swebench-task-v2-verification.md)与[结果](docs/swebench-task-v2-results.json)：整理前离线验收和真实尝试的原始结论。
-- [SWE-bench 协议与设计](docs/swebench-task-v2-design.md)：受限源码规则、模式差异和官方判分。
-- [数据备份恢复](docs/data-backup-restore.md)：Memory 与 Task 数据管理。
-- [完整历史交接](docs/history/HANDOFF-before-structure-cleanup.md)：旧阶段、授权、实验和 CI 记录，不作为当前执行指令。
-
-历史报告和 `evaluation-output/` 保留原路径；`.artifacts/` 保存本地原始证据。整理前的 26 文件候选清单仅描述当时版本，结构整理后的提交范围须重新核对。
+- [项目开发约定](../../AGENTS.md)和[交接记录](../../HANDOFF.md)。
+- [SWE-bench 验收记录](docs/swebench-task-v2-verification.md)与[结果](docs/swebench-task-v2-results.json)，包含离线验收及当时真实运行的记录。
+- [SWE-bench 协议与设计](docs/swebench-task-v2-design.md)，包含受限源码规则、模式差异和官方判分。
+- Memory 与 Task 数据的备份和恢复由 `npm run data --workspace=@wz-agent/pi-enhanced -- ...` 提供，参数见[命令入口](scripts/data-management.ts)。

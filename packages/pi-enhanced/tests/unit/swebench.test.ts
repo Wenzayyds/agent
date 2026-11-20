@@ -18,9 +18,26 @@ import {
 	sweWritePathAllowed,
 	windowsDockerStorage,
 } from "../../benchmarks/real-agent/swebench.ts";
-import { compactSweGrep } from "../../src/sandbox/tools.ts";
+import { compactSweGrep, compactSweRead } from "../../src/sandbox/tools.ts";
 
 describe("SWE-bench Verified adapter", () => {
+	it("caps a SWE read page after JSON escaping and resumes at the next complete line", () => {
+		const path = "astropy/units/format/cds.py";
+		const lines = Array.from({ length: 5 }, (_, index) => index + " han 汉字\\\"".repeat(90));
+		const id = "call-read";
+		const bytes = (content: string) => Buffer.byteLength(JSON.stringify({ role: "tool", content, tool_call_id: id }));
+		const first = compactSweRead(lines, path, 40, 45, id);
+		const [, end] = /lines 41-(\d+) of 45/u.exec(first)!;
+		const count = Number(end) - 40;
+		expect(first).toContain(path);
+		expect(first).toContain("offset=" + (Number(end) + 1));
+		expect(first.split("\n\n")[1]).toBe(lines.slice(0, count).join("\n"));
+		expect(bytes(first)).toBeLessThanOrEqual(4096);
+		expect(compactSweRead(lines.slice(count), path, Number(end), 45, id)).toContain(lines[count]);
+		const skipped = compactSweRead(["x".repeat(5000), "next line"], path, 0, 2, id);
+		expect(skipped).toContain("line 1 of 2 exceeds the 4 KiB result limit and was skipped. Use offset=2");
+		expect(bytes(skipped)).toBeLessThanOrEqual(4096);
+	});
 	it("deduplicates context, prioritizes matches and caps the JSON-encoded grep result", () => {
 		const path = "a-file.py";
 		const rows = Array.from({ length: 10 }, (_, line) => ({ path, line: line + 1, text: '汉字\\"'.repeat(250), match: false }));

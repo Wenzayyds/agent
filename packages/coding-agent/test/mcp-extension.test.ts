@@ -366,7 +366,7 @@ describe("MCP tools", () => {
 		expect(await convertMcpResult("docs", "t", { content: [{ type: "text", text: "nope" }], isError: true })).toEqual(
 			{
 				content: [{ type: "text", text: "nope" }],
-				details: { server: "docs", tool: "t" },
+				details: { server: "docs", tool: "t", code: "server_error" },
 				structuredContent: { content: [{ type: "text", text: "nope" }], isError: true },
 				isError: true,
 			},

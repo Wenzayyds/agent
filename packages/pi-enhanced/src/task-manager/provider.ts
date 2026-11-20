@@ -463,6 +463,16 @@ export class TaskProvider {
 		});
 	}
 
+	getCheckpoint(taskId: string, checkpointId: string): TaskCheckpoint | null {
+		this.assertOpen();
+		const row = this.database
+			.prepare(
+				"SELECT c.* FROM task_checkpoints c JOIN tasks t ON t.task_id=c.task_id WHERE c.task_id=? AND c.checkpoint_id=? AND t.project_id=?",
+			)
+			.get(taskId, checkpointId, this.scope.projectId) as CheckpointRow | undefined;
+		return row ? this.readCheckpoint(row) : null;
+	}
+
 	checkpointIntegrity(checkpoint: TaskCheckpoint): "verified" | "legacy" | "invalid" {
 		const event = this.checkpointEvent(checkpoint);
 		if (!event || event.checkpointId !== checkpoint.checkpointId || event.taskRevision !== checkpoint.taskRevision)

@@ -18,6 +18,14 @@ packages/ai/src/providers/data/
 packages/ai/src/providers/.model-generation-*/
 *.cpuprofile
 
+# Pi Enhanced local CI and Docker smoke outputs
+/packages/pi-enhanced/.ci-vitest.json
+/packages/pi-enhanced/.ci-test-manifest.json
+/packages/pi-enhanced/.ci-sandbox-vitest.json
+/packages/pi-enhanced/ci-metadata.json
+/packages/pi-enhanced/ci-docker-metadata.json
+/packages/pi-enhanced/docs/batch-f-sandbox-smoke.json
+
 # Environment
 .env
 

@@ -58,6 +58,7 @@ export interface McpRequestOptions {
 }
 
 interface PendingRequest {
+	invalidFrameObserved?: boolean;
 	resolve: (value: unknown) => void;
 	reject: (reason: unknown) => void;
 	timeoutMs: number;
@@ -141,12 +142,43 @@ function validateReadResourceResult(value: unknown): ReadResourceResult {
 	return value as unknown as ReadResourceResult;
 }
 
+function validContentBlock(block: unknown): boolean {
+	if (!isObject(block)) return false;
+	switch (block.type) {
+		case "text":
+			return typeof block.text === "string";
+		case "image":
+		case "audio":
+			return typeof block.data === "string" && typeof block.mimeType === "string";
+		case "resource_link":
+			return typeof block.uri === "string" && typeof block.name === "string";
+		case "resource": {
+			const r = block.resource;
+			return (
+				isObject(r) &&
+				typeof r.uri === "string" &&
+				(r.mimeType === undefined || typeof r.mimeType === "string") &&
+				((typeof r.text === "string" && r.blob === undefined) ||
+					(typeof r.blob === "string" && r.text === undefined))
+			);
+		}
+		default:
+			return false;
+	}
+}
+
 /**
  * `content` is required by the spec, but servers that only return `structuredContent` omit it (the SDK defaults it too).
  * `structuredContent` may be any JSON value, as MCP 2026-07-28 allows.
  */
 function validateCallToolResult(value: unknown): CallToolResult {
-	if (!isObject(value) || (value.content !== undefined && !Array.isArray(value.content))) {
+	if (
+		!isObject(value) ||
+		(value.isError !== undefined && typeof value.isError !== "boolean") ||
+		(value.content === undefined
+			? !("structuredContent" in value)
+			: !Array.isArray(value.content) || !value.content.every(validContentBlock))
+	) {
 		throw new McpError(JSON_RPC_ERROR_CODES.invalidRequest, "Invalid MCP tools/call result");
 	}
 	return (value.content === undefined ? { ...value, content: [] } : value) as unknown as CallToolResult;
@@ -208,7 +240,15 @@ export class McpClient {
 		this.disposers = [
 			transport.onMessage((message) => this.handleMessage(message)),
 			// Transport errors are reported only. Pending requests fail when the transport closes.
-			transport.onError((error) => this.emitError(error)),
+			transport.onError((error) => {
+				// A malformed frame has no trustworthy request ID. Keep awaiting valid replies.
+				if (
+					error instanceof McpError &&
+					(error.code === JSON_RPC_ERROR_CODES.parseError || error.code === JSON_RPC_ERROR_CODES.invalidRequest)
+				)
+					for (const pending of this.pending.values()) pending.invalidFrameObserved = true;
+				this.emitError(error);
+			}),
 			transport.onClose(() => this.handleTransportClose()),
 		];
 
@@ -554,7 +594,12 @@ export class McpClient {
 		if (entry.timer) clearTimeout(entry.timer);
 		if (!Number.isFinite(entry.timeoutMs) || entry.timeoutMs <= 0) return;
 		entry.timer = setTimeout(() => {
-			this.cancelPending(id, new McpTimeoutError(entry.timeoutMs), entry.cancellable, "Request timed out");
+			this.cancelPending(
+				id,
+				new McpTimeoutError(entry.timeoutMs, entry.invalidFrameObserved),
+				entry.cancellable,
+				"Request timed out",
+			);
 		}, entry.timeoutMs);
 	}
 

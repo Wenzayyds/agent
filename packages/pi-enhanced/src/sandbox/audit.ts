@@ -3,6 +3,7 @@ import {
 	closeSync,
 	existsSync,
 	fsyncSync,
+	linkSync,
 	lstatSync,
 	openSync,
 	readFileSync,
@@ -37,7 +38,7 @@ interface AuditBody {
 }
 
 /** Flush + atomic replacement: a reader sees a whole old or new snapshot, never a partial JSON. */
-export function atomicPrivateJson(path: string, value: unknown): void {
+export function atomicPrivateJson(path: string, value: unknown, mode: "replace" | "create" = "replace"): void {
 	const temporary = `${path}.${randomUUID()}.tmp`;
 	const fd = openSync(temporary, "wx", 0o600);
 	try {
@@ -47,7 +48,8 @@ export function atomicPrivateJson(path: string, value: unknown): void {
 		closeSync(fd);
 	}
 	try {
-		renameSync(temporary, path);
+		if (mode === "create") linkSync(temporary, path);
+		else renameSync(temporary, path);
 	} finally {
 		rmSync(temporary, { force: true });
 	}

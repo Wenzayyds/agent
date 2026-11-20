@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { interruptSandboxAudit } from "../../src/sandbox/audit.ts";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { createTaskStorageScope } from "../../src/task-manager/provider.ts";
@@ -19,7 +19,7 @@ import { createInputAdmission } from "./input-admission.ts";
 import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { finalizeAgentExecution, removeRunContainers } from "./runner-cleanup.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
-import { beginResumedRun, resumeSessionPath } from "./runner-resume.ts";
+import { beginResumedRun, recordResumeChild, resumeSessionPath } from "./runner-resume.ts";
 import { resolveSweProfile } from "./swe-profile.ts";
 import { assertSwePytestWorkspace } from "./swe-test-feedback.ts";
 
@@ -119,7 +119,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			...(context.recoveryPhase && seededTaskId ? {
 				PI_ENHANCED_V3_TASK_ID: seededTaskId,
 				PI_ENHANCED_V3_RECOVERY_PHASE: context.recoveryPhase,
-				...(context.jointRecovery && context.recoveryPhase === "pause" ? { PI_ENHANCED_V3_READONLY_PHASE: "1" } : {}),
+				...((context.jointRecovery && context.recoveryPhase === "pause") || recovery?.verifyOnly ? { PI_ENHANCED_V3_READONLY_PHASE: "1" } : {}),
 				PI_ENHANCED_V3_MODULE_TOOLS: moduleTools.join(","),
 				...(task.id === "memory-guided-regression" ? { PI_ENHANCED_V3_JOINT_FIXTURE: "1" } : {}),
 			} : {}),
@@ -139,6 +139,9 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			PI_ENHANCED_SANDBOX_REPORT_PATH: sandboxAuditPath,
 			...(task.swebench && swe && "compactGrep" in swe && swe.compactGrep
 				? { PI_ENHANCED_SWE_SINGLE_COMPACT_GREP: "1" }
+				: {}),
+			...(task.swebench && swe && "readResultMaxBytes" in swe.configuration
+				? { PI_ENHANCED_SWE_READ_MAX_BYTES: String(swe.configuration.readResultMaxBytes) }
 				: {}),
 			PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS: readonlyModuleTools || (task.swebench && switches.task) ? "1" : "0",
 			...(task.swebench && context.taskMode === "v2" ? { PI_ENHANCED_SANDBOX_TASK_PLAN_TOOL: "1" } : {}),
@@ -168,7 +171,8 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		mkdirSync(directory, { recursive: true });
 		telemetry = new EvaluationTelemetry(
 			plan!.runId,
-			join(directory, context.recoveryPhase === "resume" ? "evaluation-telemetry-resumed.json" : "evaluation-telemetry.json"),
+			join(directory, recovery?.reclaimed ? `evaluation-telemetry-recovered-${randomUUID()}.json` :
+				context.recoveryPhase === "resume" ? "evaluation-telemetry-resumed.json" : "evaluation-telemetry.json"),
 			cwd,
 			verifierScope.runId,
 		);
@@ -283,7 +287,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 	let boundaryShutdownDeadline: number | undefined;
 	try {
 		if (context.recoveryPhase === "resume") {
-			beginResumedRun(context, gatewayAtStart!, gateway.deadlineAt);
+			beginResumedRun(context, gatewayAtStart!, gateway.deadlineAt, recovery);
 			startTelemetry();
 		}
 		if (contractSource === "mcp") configureContractServer(agentDir, containerOwner);
@@ -292,6 +296,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 		child = await runAgentProcess(
 			process.execPath,
 			[
+				...(context.recoveryPhase === "resume" ? ["--import", pathToFileURL(join(here, "resume-child.mjs")).href] : []),
 				cli,
 				"--mode",
 				"json",
@@ -315,7 +320,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 				"--no-skills",
 				"--no-context-files",
 				context.recoveryPhase === "resume"
-					? context.jointRecovery
+					? recovery?.verifyOnly ? "已核实上次修改。请调用 run_tests 复测并报告结果。" : context.jointRecovery
 						? "继续最初任务。先重新调用 enhanced_memory_search 查找 normalizeKey，并读取 key.js。可以在一轮内调用这两个只读工具。结合已保存的基线失败，只修改 key.js。修复后调用 run_tests，看到复测结果后正常结束。"
 						: "继续完成最初任务。使用已保存的工具结果和已完成的工作，继续尚未完成的修改和验证。"
 					: prompt,
@@ -323,6 +328,7 @@ export async function executeAgent(context: RunnerContext, prepared: PreparedAge
 			{
 				cwd,
 				timeoutMs: gateway.deadlineAt === undefined ? plan.timeoutMs : Math.max(1, gateway.deadlineAt - Date.now()),
+				...(context.recoveryPhase === "resume" ? { waitForClaim: true, onSpawn: (pid: number | undefined) => recordResumeChild(root, recovery?.claimId, pid) } : {}),
 				...(handshakePath
 					? {
 							onSpawn: (pid: number | undefined) => {
@@ -453,6 +459,7 @@ async function runAgentProcess(
 		onTimeout?: () => void;
 		onEvent?: (value: unknown) => void;
 		onEventError?: () => void;
+		waitForClaim?: boolean;
 		onSpawn?: (pid: number | undefined) => void;
 	},
 ): Promise<{
@@ -468,7 +475,7 @@ async function runAgentProcess(
 			cwd: options.cwd,
 			env: options.env,
 			windowsHide: true,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["ignore", "pipe", "pipe", ...(options.waitForClaim ? ["ipc" as const] : [])],
 		});
 		const stdout: Buffer[] = [];
 		const stderr: Buffer[] = [];
@@ -482,7 +489,7 @@ async function runAgentProcess(
 			if (size <= 4 * 1024 * 1024) target.push(chunk);
 			else child.kill();
 		};
-		child.stdout.on("data", (chunk: Buffer) => {
+		child.stdout!.on("data", (chunk: Buffer) => {
 			collect(stdout, chunk);
 			if (options.onEvent) {
 				eventBuffer += decoder.decode(chunk, { stream: true });
@@ -501,7 +508,7 @@ async function runAgentProcess(
 				}
 			}
 		});
-		child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+		child.stderr!.on("data", (chunk: Buffer) => collect(stderr, chunk));
 		const boundaryTimer = options.stopOnBoundaryFailure
 			? setInterval(() => {
 					if (timedOut && options.onTimeout) return;
@@ -550,6 +557,7 @@ async function runAgentProcess(
 		if (options.onSpawn) {
 			try {
 				options.onSpawn(child.pid);
+				if (options.waitForClaim) child.send("resume-claimed", error => { if (error) child.kill(); });
 			} catch {
 				child.kill();
 			}

@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -517,6 +517,135 @@ describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch I production real-a
 		expect((await runPhase("resume")).status).not.toBe(0);
 		expect(bodies).toHaveLength(5);
 	}, 120_000);
+
+	it.each(["before-spawn", "before-child-registration", "after-write", "drift-after-retest", "final-checkpoint-loss"] as const)("recovers a claimed checkpoint %s without repeating edits", async boundary => {
+		const root = mkdtempSync(join(tmpdir(), "claim-"));
+		roots.push(root);
+		const runId = "claim_test";
+		const afterWrite = boundary !== "before-spawn" && boundary !== "before-child-registration";
+		const calls: Record<string, unknown>[] = [];
+		const edit = toolCallSse("edit", { path: "config.js", edits: [{ oldText: "input.timeoutMs || 1000",
+			newText: "input.timeoutMs ?? 5000 /* committed edit */" }] }, 120, 20);
+		const turns = [toolCallSse("run_tests", {}, 100, 20), textSse("Paused.", 110, 20), edit,
+			...(afterWrite ? [textSse("Write completed.", 130, 20)] : []),
+			toolCallSse("run_tests", {}, 140, 20), textSse("Verification complete.", 150, 20)];
+		const provider = await startProvider((body, response) => {
+			calls.push(body);
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(turns[calls.length - 1]);
+		});
+		const phase = (mode: string, fault?: string) => runRunner(provider.url, root, image, runId, false, "config-default",
+			90_000, ["--v3-evaluation", "--variant", "task-only", "--v3-stub-recovery", mode, ...(fault ? [fault] : [])]);
+		expect((await phase("pause")).status).toBe(0);
+		expect((await phase("resume", afterWrite ? "--test-claim-after-write" : boundary === "before-spawn" ? "--test-claim-before-spawn" : "--test-before-child-registration")).status).not.toBe(0);
+		const count = calls.length;
+		expect(count).toBe(afterWrite ? 4 : 2);
+		const privateDir = join(root, runId, "private");
+		const cwd = join(privateDir, "config-default");
+		const agentDir = join(privateDir, "config-default-agent");
+		const dbPath = createTaskStorageScope(createProjectScope({ cwd, agentDir }), agentDir).databasePath;
+		if (boundary === "after-write") {
+			const marker = join(privateDir, "previous-pause.json");
+			const savedMarker = readFileSync(marker);
+			const legacy = JSON.parse(JSON.parse(savedMarker.toString("utf8")).body);
+			delete legacy.workspaceDirectory;
+			const body = JSON.stringify(legacy);
+			writeFileSync(marker, JSON.stringify({ body, sha256: createHash("sha256").update(body).digest("hex") }));
+			try { expect((await phase("resume")).stderr).toContain("RECONCILIATION_REQUIRED"); }
+			finally { writeFileSync(marker, savedMarker); }
+			const file = join(root, runId, "private", "config-default", "config.js");
+			const original = readFileSync(file);
+			writeFileSync(file, Buffer.concat([original, Buffer.from("// external drift")]));
+			expect((await phase("resume")).stderr).toContain("RECONCILIATION_REQUIRED");
+			expect(calls).toHaveLength(count);
+			writeFileSync(file, original);
+			const db = new DatabaseSync(dbPath);
+			try {
+				db.exec("UPDATE task_attempts SET state='started' WHERE tool_name='edit'");
+				expect((await phase("resume")).stderr).toContain("RECONCILIATION_REQUIRED");
+				db.exec("UPDATE task_attempts SET state='succeeded' WHERE tool_name='edit'");
+			} finally { db.close(); }
+			const session = join(privateDir, "agent-session.jsonl");
+			const saved = readFileSync(session, "utf8");
+			const entries = saved.trimEnd().split("\n").map(line => JSON.parse(line));
+			const result = entries.find(e => e.message?.role === "toolResult" && e.message.toolName === "edit");
+			const duplicate = { ...result, id: "a0102030", parentId: entries.at(-1).id };
+			for (const id of [result.message.toolCallId, "unpaired-id"]) {
+				writeFileSync(session, saved + JSON.stringify({ ...duplicate, message: { ...duplicate.message, toolCallId: id } }) + "\n");
+				expect((await phase("resume")).stderr).toContain("EVAL_V3_RESUME_UNPAIRED_RESULT");
+			}
+			writeFileSync(session, saved);
+			renameSync(cwd, cwd + "-saved");
+			mkdirSync(cwd);
+			try { expect((await phase("resume")).stderr).toContain("IDENTITY_MISMATCH"); }
+			finally { rmdirSync(cwd); renameSync(cwd + "-saved", cwd); }
+			expect(calls).toHaveLength(count);
+		}
+		const resumed = await phase("resume", boundary === "after-write" ? "--test-stale-finish" :
+			!afterWrite ? undefined : "--test-" + boundary);
+		if (boundary === "drift-after-retest" || boundary === "final-checkpoint-loss") {
+			expect(resumed.status).not.toBe(0);
+			if (boundary === "drift-after-retest") expect(resumed.stderr).toContain("RECONCILIATION_REQUIRED");
+			expect(existsSync(join(root, runId, "run.json"))).toBe(false);
+			const db = new DatabaseSync(dbPath, { readOnly: true });
+			try {
+				expect(db.prepare("SELECT status FROM tasks").get()?.status).toBe("running");
+				expect(db.prepare("SELECT status FROM task_steps WHERE step_id='repair'").get()?.status).toBe("pending");
+				expect(db.prepare("SELECT count(*) AS n FROM task_checkpoints").get()?.n).toBe(1);
+			} finally { db.close(); }
+			expect((await phase("resume")).stderr).toContain("RECONCILIATION_REQUIRED");
+			expect(calls).toHaveLength(turns.length);
+			return;
+		}
+		if (boundary === "after-write") expect(resumed.stderr).toContain("TEST_STALE_RESULT_REJECTED");
+		expect(resumed.status, resumed.stderr).toBe(0);
+		expect(calls).toHaveLength(turns.length);
+		const tools = (calls[count]!.tools as { function: { name: string } }[]).map(t => t.function.name);
+		expect(tools.includes("edit")).toBe(!afterWrite);
+		const final = JSON.parse(readFileSync(join(root, runId, "run.json"), "utf8")).results[0];
+		expect(final).toMatchObject({ runStatus: "completed", verifierPassed: true, auditComplete: true });
+		expect(final.resumedTask.lastCheckpoint.checkpointId).toBeTruthy();
+		const finalCheckpointIds = () => {
+			const db = new DatabaseSync(dbPath, { readOnly: true });
+			try { return db.prepare("SELECT checkpoint_id FROM task_checkpoints ORDER BY rowid").all().map(row => row.checkpoint_id); }
+			finally { db.close(); }
+		};
+		const checkpoints = finalCheckpointIds();
+		expect(checkpoints).toHaveLength(2);
+		expect(checkpoints[1]).toBe(final.resumedTask.lastCheckpoint.checkpointId);
+		expect((await phase("resume")).stderr).toContain("EVAL_V3_RESUME_TERMINAL_RUN");
+		expect(calls).toHaveLength(turns.length);
+		expect(finalCheckpointIds()).toEqual(checkpoints);
+		expect(final.toolTrace.filter((e: { phase: string; toolName: string }) => e.phase === "start" && e.toolName === "edit"))
+			.toHaveLength(afterWrite ? 0 : 1);
+	}, 120_000);
+
+	it("publishes an expired resume after interrupted reporting without starting another model request", async () => {
+		const root = mkdtempSync(join(tmpdir(), "resume-expiry-"));
+		roots.push(root);
+		const runId = "expiry_report";
+		let calls = 0;
+		const stub = await startProvider((_body, res) => {
+			calls++;
+			res.writeHead(200, { "Content-Type": "text/event-stream" }).end(textSse("Pause.", 100, 10));
+		});
+		const phase = (mode: string, fault = false) => runRunner(stub.url, root, image, runId, false, "config-default",
+			15_000, ["--v3-evaluation", "--variant", "task-only", "--v3-stub-recovery", mode, ...(fault ? ["--test-before-report"] : [])]);
+		const paused = await phase("pause");
+		expect(paused.status, paused.stderr).toBe(0);
+		const deadline = JSON.parse(paused.stdout).budgetDeadlineAt;
+		await new Promise(r => setTimeout(r, Math.max(0, deadline - Date.now()) + 10));
+		expect((await phase("resume", true)).stderr).toContain("TEST_REPORT_PUBLICATION_INTERRUPTED");
+		const report = join(root, runId, "run.json");
+		expect(existsSync(report)).toBe(false);
+		const finish = await phase("resume");
+		expect(finish.status, finish.stderr).toBe(0);
+		expect(JSON.parse(readFileSync(report, "utf8")).results[0]).toMatchObject({
+			runStatus: "budget_stopped", budgetReason: "GATEWAY_RUN_TIMEOUT", agentCompleted: false, auditComplete: true,
+			resumeAdmission: { deadlineAt: deadline, upstreamForwarded: false }, gateway: { requestsStarted: 1, reservedTokens: 0 },
+		});
+		expect((await phase("resume")).stderr).toContain("EVAL_V3_RESUME_TERMINAL_RUN");
+		expect(calls).toBe(1);
+	}, 60_000);
 
 	it.each(["model-only", "read-only", "exhausted"])("recovers a generic session boundary (%s)", async (scenario) => {
 		const root = mkdtempSync(join(tmpdir(), "pi-v3-boundary-"));
@@ -1108,7 +1237,8 @@ function runRunner(
 	const v3 = jointRecovery || extraArgs.includes("--v3-evaluation");
 	const args = [
 		"--experimental-strip-types",
-		killAfterPause || extraArgs.includes("--test-interrupt-after-write")
+		killAfterPause || extraArgs.some(arg => ["--test-interrupt-after-write", "--test-claim-before-spawn", "--test-before-child-registration", "--test-claim-after-write",
+			"--test-stale-finish", "--test-drift-after-retest", "--test-final-checkpoint-loss", "--test-before-report"].includes(arg))
 			? resolve(import.meta.dirname, "../fixtures/runner-pause-child.ts") : runner,
 		"--execute",
 		"--local-stub-url",

@@ -19,7 +19,19 @@ export interface PendingBudgetRequest {
 	updatedAt: number;
 }
 
+/** Admission failed before any request or new reservation existed. */
+export class ExpiredBudgetResume extends Error {
+	readonly status: BudgetGatewayStatus;
+	readonly deadlineAt: number;
+	constructor(status: BudgetGatewayStatus, deadlineAt: number) {
+		super("GATEWAY_RUN_TIMEOUT");
+		this.status = status;
+		this.deadlineAt = deadlineAt;
+	}
+}
+
 interface RecordBody {
+	resumeDeniedAt?: number;
 	version: 1;
 	policy: string;
 	deadlineAt: number;
@@ -89,7 +101,8 @@ export class DurableBudget {
 				if (previous.policy !== policy || (options.deadlineAt !== undefined && options.deadlineAt !== previous.deadlineAt))
 					throw new Error("GATEWAY_BUDGET_POLICY_MISMATCH");
 				if (previous.ownerPid !== null && alive(previous.ownerPid)) throw new Error("GATEWAY_BUDGET_IN_USE");
-				checkTime(previous, now);
+				if (now < previous.updatedAt) throw new Error("GATEWAY_BUDGET_CLOCK_REGRESSION");
+				if (previous.resumeDeniedAt !== undefined) return previous;
 				const status = previous.status;
 				if (previous.pending.some(({ phase }) => phase === "dispatched")) throw new Error("GATEWAY_BUDGET_UNCERTAIN_USAGE");
 				if (status.state === "failed_closed") throw new Error(status.lastError ?? "GATEWAY_FAILED_CLOSED");
@@ -102,12 +115,23 @@ export class DurableBudget {
 				}
 				status.reservedCostUsd = 0;
 				previous.pending = [];
+				if (now >= previous.deadlineAt) {
+					previous.resumeDeniedAt = now;
+					previous.updatedAt = now;
+					status.lastError = "GATEWAY_RUN_TIMEOUT";
+					status.state = "failed_closed";
+					previous.owner = null;
+					previous.ownerPid = null;
+					this.write(previous);
+					return previous;
+				}
 				previous.ownerPid = process.pid;
 				previous.owner = this.owner;
 				previous.updatedAt = now;
 				this.write(previous);
 				return previous;
 			});
+			if (this.record.resumeDeniedAt !== undefined) throw new ExpiredBudgetResume(this.record.status, this.record.deadlineAt);
 		} catch (error) {
 			this.db.close();
 			throw error;
@@ -120,7 +144,8 @@ export class DurableBudget {
 
 	changePolicy(status: BudgetGatewayStatus, policy: string): void {
 		const record = { ...this.record, policy, status: structuredClone(status), updatedAt: Date.now() };
-		checkTime(this.record, record.updatedAt);
+		if (record.updatedAt < this.record.updatedAt) throw new Error("GATEWAY_BUDGET_CLOCK_REGRESSION");
+		if (record.updatedAt >= this.record.deadlineAt) throw new Error("GATEWAY_RUN_TIMEOUT");
 		if (record.pending.length) throw new Error("GATEWAY_BUDGET_TIER_CHANGE_DENIED");
 		this.transaction(() => this.writeOwned(record));
 		this.record = record;
@@ -188,17 +213,14 @@ function alive(pid: number): boolean {
 	catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
-function checkTime(record: RecordBody, now: number): void {
-	if (now < record.updatedAt) throw new Error("GATEWAY_BUDGET_CLOCK_REGRESSION");
-	if (now >= record.deadlineAt) throw new Error("GATEWAY_RUN_TIMEOUT");
-}
-
 function validateRecord(record: RecordBody): void {
 	const status = record.status;
 	const validCount = (n: number) => Number.isSafeInteger(n) && n >= 0;
 	const validCost = (n: number) => Number.isFinite(n) && n >= 0;
 	const limits = status?.limits as BudgetGatewayLimits | undefined;
-	if (!status || !limits || !validCount(record.deadlineAt) || !validCount(record.updatedAt) ||
+	if (!status || !limits || (record.resumeDeniedAt !== undefined && (!validCount(record.resumeDeniedAt) ||
+		record.resumeDeniedAt < record.deadlineAt || record.resumeDeniedAt !== record.updatedAt ||
+		status.lastError !== "GATEWAY_RUN_TIMEOUT" || status.state !== "failed_closed" || record.owner !== null)) || !validCount(record.deadlineAt) || !validCount(record.updatedAt) ||
 		(record.ownerPid !== null && (!validCount(record.ownerPid) || record.ownerPid === 0)) ||
 		(record.ownerPid === null ? record.owner !== null : typeof record.owner !== "string") ||
 		!Array.isArray(record.pending) || !Array.isArray(status.denials) || !Array.isArray(status.requestOutcomes) ||

@@ -174,10 +174,20 @@ it("refuses a missing, altered, expired or corrupted run on restart", async () =
 	const first = await launch(options);
 	expect(first.url).toBeDefined();
 	await terminate(first.child);
+	const reserved = await launch(options, true, true);
+	expect(reserved.stage).toBe("prepared");
+	await terminate(reserved.child);
 	expect((await launch({ ...options, limits: { ...options.limits, maxRequests: 3 } }, true)).error).toBe("GATEWAY_BUDGET_POLICY_MISMATCH");
 	await new Promise((resolve) => setTimeout(resolve, Math.max(0, options.persistence!.deadlineAt! - Date.now()) + 20));
 	expect((await launch(options, true)).error).toBe("GATEWAY_RUN_TIMEOUT");
 	const db = new DatabaseSync(options.persistence!.databasePath);
+	const row = db.prepare("SELECT body FROM gateway_budget_runs").get() as { body: string };
+	const stored = JSON.parse(row.body);
+	expect(stored.resumeDeniedAt).toBeGreaterThanOrEqual(stored.deadlineAt);
+	expect(stored.status).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_RUN_TIMEOUT",
+		requestsStarted: 0, requestAttempts: 1, reservedTokens: 0, reservedCostUsd: 0 });
+	expect((await launch(options, true)).error).toBe("GATEWAY_RUN_TIMEOUT");
+	expect(db.prepare("SELECT body FROM gateway_budget_runs").get()?.body).toBe(row.body);
 	db.exec("UPDATE gateway_budget_runs SET body='modified'");
 	db.close();
 	expect((await launch(options, true)).error).toBe("GATEWAY_BUDGET_CORRUPT");

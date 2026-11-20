@@ -265,6 +265,8 @@ describe("P3 verified Memory integration", () => {
 				const serialized = JSON.stringify(projected);
 				reference = /v1:[a-f0-9]{64}/u.exec(serialized)?.[0];
 				expect(reference).toBeDefined();
+				expect(serialized).toContain("head-evidence");
+				expect(serialized).toContain("tail-evidence");
 				expect(serialized).not.toContain("middle-evidence");
 				expect(serialized).toContain("AssertionError: unexpected key casing");
 				return fauxAssistantMessage("Inspection finished");

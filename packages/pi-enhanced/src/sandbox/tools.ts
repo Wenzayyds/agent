@@ -262,6 +262,10 @@ async function executeRead(
 		input.limit === undefined
 			? allLines.slice(startLine)
 			: allLines.slice(startLine, Math.min(startLine + input.limit, allLines.length));
+	if (process.env.PI_ENHANCED_SWE_READ_MAX_BYTES === "4096") {
+		const text = compactSweRead(selected, relativePath, startLine, allLines.length, id);
+		return { content: [{ type: "text" as const, text }], details: undefined, structuredContent: text };
+	}
 	const truncation = truncateHead(selected.join("\n"));
 	let text = truncation.content;
 	if (truncation.truncated) {
@@ -276,6 +280,60 @@ async function executeRead(
 		details: truncation.truncated ? { truncation } : undefined,
 		structuredContent: text,
 	};
+}
+
+export function compactSweRead(
+	lines: readonly string[],
+	path: string,
+	startLine: number,
+	totalLines: number,
+	toolCallId: string,
+): string {
+	const maxBytes = 4 * 1024;
+	const wireBytes = (content: string) =>
+		Buffer.byteLength(JSON.stringify({ role: "tool", content, tool_call_id: toolCallId }));
+	const continuation = (endLine: number) =>
+		endLine < totalLines ? ". Use offset=" + (endLine + 1) + " to continue" : "";
+	let body = "";
+	let page = "";
+	let count = 0;
+	for (const line of lines) {
+		const endLine = startLine + count + 1;
+		const nextBody = count === 0 ? line : body + "\n" + line;
+		const nextPage =
+			"[" +
+			path +
+			" lines " +
+			(startLine + 1) +
+			"-" +
+			endLine +
+			" of " +
+			totalLines +
+			continuation(endLine) +
+			".]\n\n" +
+			nextBody;
+		if (wireBytes(nextPage) > maxBytes) break;
+		body = nextBody;
+		page = nextPage;
+		count++;
+	}
+	if (count > 0) return page;
+
+	const lineNumber = startLine + 1;
+	const notice =
+		lines.length === 0
+			? "[" + path + ": no lines requested. Use offset=" + lineNumber + " to continue.]"
+			: "[" +
+				path +
+				" line " +
+				lineNumber +
+				" of " +
+				totalLines +
+				" exceeds the 4 KiB result limit and was skipped" +
+				continuation(lineNumber) +
+				".]";
+	if (wireBytes(notice) > maxBytes) throw new Error("SWE_READ_METADATA_TOO_LARGE");
+	return notice;
 }
 
 type GrepRow = { path: string; line: number; text: string; match: boolean };

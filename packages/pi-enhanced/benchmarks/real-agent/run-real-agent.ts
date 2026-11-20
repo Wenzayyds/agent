@@ -24,7 +24,8 @@ import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
-import { loadSuspendedRun, saveSuspendedRun } from "./runner-resume.ts";
+import { ExpiredBudgetResume } from "./budget-persistence.ts";
+import { finishExpiredResume, loadSuspendedRun, saveSuspendedRun } from "./runner-resume.ts";
 import { assertFrozenDispatch } from "./swe-frozen-batch.ts";
 import { assertFrozenPytest, frozenCaseForProfile, frozenCases } from "./swe-frozen-catalog.ts";
 import { resolveSweProfile, SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, SWE_TASK_LIMITS } from "./swe-profile.ts";
@@ -444,7 +445,15 @@ export async function main(): Promise<void> {
 				taskMode: swebench ? ((taskMode as "off" | "v1" | "v2" | undefined) ?? "off") : undefined,
 			};
 			const prepared = workspace ? await prepareAgent(context, workspace) : loadSuspendedRun(context);
-			const execution = await executeAgent(context, prepared);
+			let execution;
+			try {
+				execution = await executeAgent(context, prepared);
+			} catch (error) {
+				if (recoveryPhase !== "resume" || !(error instanceof ExpiredBudgetResume)) throw error;
+				results.push(finishExpiredResume(context, prepared, error));
+				observedCost += error.status.actualCostUsd;
+				break;
+			}
 			if (recoveryPhase === "pause" && execution.child.status === 0 && execution.child.closed &&
 				execution.hostLifecycle.childAbsent && execution.hostLifecycle.containersRemoved &&
 				execution.gatewayStatus.state === "ready" && execution.gatewayStatus.requestsRejected === 0) {
@@ -481,6 +490,7 @@ export async function main(): Promise<void> {
 				runOutput,
 				batchL,
 				swebench: Boolean(swebench),
+				recovery: Boolean(recoveryPhase),
 				contractSource: contractSource === "file" || contractSource === "mcp" ? contractSource : undefined,
 				testFeedback,
 			},

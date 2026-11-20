@@ -4,9 +4,9 @@
 
 - `run-controlled.ts`：组织 OFF/V1/V2，按模式消费宿主授权，检查前一组清理和结算后再继续。
 - `run-real-agent.ts`：单组入口，负责参数、授权、准备、执行、收集及最终清理。
-- `swebench.ts`：公开实例加载、工作区准备、受限补丁导出和独立官方 Harness 调用。
+- `swebench.ts`：独立官方 Harness 的命令行入口，并保留已有评测接口的导出。
 
-三个入口保持原路径，命令行参数和结果格式保持不变。`npm run evaluate:swe --workspace=@wz-agent/pi-enhanced -- ...` 选择 SWE profile；仍须提供原实例、镜像、批次和输出参数。真实执行还须有当前 Commit 的 CI 证据和新的一次性宿主授权。
+三个入口保持原路径，沿用现有命令行参数和结果字段。`npm run evaluate:swe --workspace=@wz-agent/pi-enhanced -- ...` 选择 SWE profile；仍须提供原实例、镜像、批次和输出参数。真实执行还须有当前 Commit 的 CI 证据和新的一次性宿主授权。
 
 ## 五题 Flash OFF
 
@@ -33,6 +33,19 @@ node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/run-c
 
 本地验证可把 `PI_ENHANCED_SWE_LOCAL_MIRROR` 指向包含五个基线提交的 Astropy 镜像，然后运行 `swebench-stub.test.ts`。若设置 `PI_ENHANCED_SWE_FLASH_OFF_EVIDENCE` 为现有的证据目录，测试会保留批次与预测。每题结果位于 `<batchId>/<batchId>_off_<issue>/swebench/`，其中的 `predictions.jsonl` 和 `result.json` 可交给现有 `swebench.ts` 在独立目录判分。
 
+## 当前分层
+
+| 层 | 入口与职责 |
+| --- | --- |
+| 批次与单组入口 | `run-controlled.ts` 按组编排、预留批次预算并判断能否续跑。单组入口 `run-real-agent.ts` 负责准入和阶段协调。 |
+| SWE 配置与授权 | `swe-profile.ts` 统一选择模型、模式、预算和授权输入形式。`task-pair-authorization.ts` 校验配置指纹、CI 证据和一次性消费顺序。 |
+| Pi 扩展与输入准入 | `swe-tools.ts` 注册受限写入策略。`input-audit.ts` 记录提示词和工具摘要，`input-admission.ts` 在网关转发前校验首请求并记录准入结果。 |
+| 执行与回收 | `runner-preparation.ts` 准备输入和工作区。`runner-execution.ts` 启动 Pi 与网关，`runner-cleanup.ts` 分别尝试写入网关证据、关闭网关和回收容器。 |
+| SWE 工作区与补丁 | `swe-workspace.ts` 从固定公开提交准备工作区。`swe-patch.ts` 校验写入目标并导出预测补丁。两者共用 `swe-git.ts` 的受控 Git 调用。 |
+| 结果与独立评分 | `swe-results.ts` 收集运行结果、持久化的安全事件和预测补丁。`swe-evaluator.ts` 在独立目录调用官方 Harness 并记录评分状态。 |
+
+`safetyEvents` 来自停止扩展落盘的安全事件，用于解释拒绝和停止。`toolFailures` 记录实际收到的 Pi CLI 工具错误。即使 CLI 在停止时来不及输出事件，也能用安全事件和 Docker 审计分别核对拒绝原因和执行情况。
+
 ## 调用关系
 
 ```text
@@ -46,7 +59,7 @@ run-controlled（批次、每组预算、继续条件）
   → 下一组或停止
 
 合格 predictions.jsonl + result.json
-  → swebench 独立官方判分
+  → swebench 命令行入口 → swe-evaluator 独立官方判分
 ```
 
 `swe-profile.ts` 独立声明当前三模式、预算和配置指纹，不继承旧 Task Pair/Batch L 的预算。`evaluation-identity.ts` 只负责已有 SHA-256 编码规则。配置序列化顺序保持不变，迁移前后指纹一致。

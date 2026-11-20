@@ -50,6 +50,19 @@ for await (const line of lines) {
 	} else if (message.method === "tools/call") {
 		const { name, arguments: args = {} } = message.params;
 		if (auditPath) appendFileSync(auditPath, `${JSON.stringify({ name })}\n`);
+		if (name === "read_symbol" && args.name === "fixture-invalid-params") {
+			process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Invalid parameters" } }) + "\n");
+			continue;
+		}
+		if (name === "read_symbol" && ["fixture-business", "fixture-invalid-result"].includes(args.name)) {
+			const result = args.name === "fixture-business" ? { isError: true, content: [{ type: "text", text: "Unavailable" }] } : { content: false };
+			process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n");
+			continue;
+		}
+		if (name === "read_symbol" && args.name === "fixture-invalid-frame") {
+			process.stdout.write("{\n");
+			continue;
+		}
 		if (name === "read_symbol" && args.name === "fixture-timeout") continue;
 		if (name === "read_symbol" && args.name === "fixture-disconnect") process.exit(1);
 		if (name === "write_file" || name === "new_write") writeFileSync(args.path, args.content ?? "changed");
