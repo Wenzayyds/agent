@@ -108,3 +108,9 @@ v2 增加任务前缀隔离、会话和 TTL、证据撤销、平台与工具适�
 - `fixtures/memory-v3/` 下的 `compose.yaml`、`Dockerfile.e5`、`lab.ts`。
 - `tests/integration/` 下的 `memory-v3.test.ts`、`memory-v3-docker.test.ts`。
 - `benchmarks/memory-v3/` 下的 `dataset.ts`、`evaluate.ts`，以及 `docs/memory-v3.md`。
+
+## 向量记录损坏后的检索与对账
+
+同一页里部分 Point 的元数据损坏时，检索仍返回通过校验的健康候选；整页均损坏或索引不可用时沿用词法回退。项目、模型、记忆 ID、修订和确定性 Point ID 共同确定记录归属。身份冲突会中止此次索引读取，越出查询作用域的结果也会被拒绝。
+
+诊断按 SQLite 当前状态列出过期、缺失和孤立记录。对账通过原有 Outbox 重建可见且证据有效的当前修订，清理可确定归属的废弃修订和孤立 Point。高于本地观察修订的 Point 留待后续核查。重启后可重复对账，检索仍按 SQLite 的修订和可见性核验。分页诊断受单页上限约束，混合页中返回的候选可能少于请求数。

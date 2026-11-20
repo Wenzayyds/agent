@@ -28,6 +28,8 @@ packages/ai/src/providers/.model-generation-*/
 
 # Environment
 .env
+.env.local
+.env.production
 
 # Editor files
 .vscode/
