@@ -20,6 +20,35 @@ export interface BudgetGatewayPricing {
 	outputUsdPerMillion: number;
 }
 
+export interface BudgetGatewayModel {
+	modelId: string;
+	pricing: BudgetGatewayPricing;
+	contextWindow: number;
+	maxOutputTokens: number;
+	supportsTools: true;
+}
+
+export function isBudgetGatewayModel(value: unknown): value is BudgetGatewayModel {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const { modelId, contextWindow, maxOutputTokens, supportsTools, pricing } = value as Partial<BudgetGatewayModel>;
+	return (
+		typeof modelId === "string" && modelId.length > 0 && modelId.length <= 512 && modelId.trim() === modelId &&
+		supportsTools === true && typeof contextWindow === "number" && Number.isSafeInteger(contextWindow) &&
+		typeof maxOutputTokens === "number" && Number.isSafeInteger(maxOutputTokens) &&
+		maxOutputTokens > 0 && maxOutputTokens <= contextWindow && !!pricing &&
+		[pricing.inputUsdPerMillion, pricing.outputUsdPerMillion].every((rate) =>
+			Number.isFinite(rate) && rate >= 0 && rate <= Number.MAX_SAFE_INTEGER)
+	);
+}
+
+function cost(pricing: BudgetGatewayPricing, input: number, output: number): number {
+	return (input * pricing.inputUsdPerMillion + output * pricing.outputUsdPerMillion) / 1_000_000;
+}
+
+export function isBudgetGatewayUpstreamAllowed(url: string): boolean {
+	return /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(url) || url === "https://api.deepseek.com";
+}
+
 export interface BudgetGatewayOptions {
 	runId: string;
 	upstreamBaseUrl: string;
@@ -29,8 +58,9 @@ export interface BudgetGatewayOptions {
 	allowedModel: string;
 	limits: BudgetGatewayLimits;
 	pricing: BudgetGatewayPricing;
+	models?: readonly BudgetGatewayModel[];
 	fetch?: typeof globalThis.fetch;
-	dispatchCheck?: (permit: string | undefined) => (() => void) | undefined;
+	dispatchCheck?: (permit: string | undefined) => ((modelId: string) => void) | undefined;
 	runDeadlineAt?: number;
 	guardedClientRetry?: boolean;
 	telemetry?: EvaluationTelemetry;
@@ -66,6 +96,7 @@ interface Reservation {
 	outputTokenLimit: number;
 	reservedTokens: number;
 	reservedCostUsd: number;
+	model?: BudgetGatewayModel;
 }
 
 export interface BudgetGatewayStatus {
@@ -87,6 +118,8 @@ export interface BudgetGatewayStatus {
 	denials: GatewayDenialRecord[];
 	requestOutcomes: Array<{
 		requestSequence: number;
+		modelId?: string;
+		pricing?: BudgetGatewayPricing;
 		outcome: string;
 		transportCode?: string;
 		httpStatus?: number;
@@ -217,14 +250,15 @@ class BudgetLedger {
 		this.durable?.save(this.state);
 	}
 
-	preview(body: Record<string, unknown>): GatewayBudgetPreview {
+	preview(body: Record<string, unknown>, model?: BudgetGatewayModel): GatewayBudgetPreview {
 		const bytes = Buffer.byteLength(JSON.stringify(body));
-		const normalized = normalizeBudgetPayload({ ...body }, this.limits);
+		const normalized = normalizeBudgetPayload({ ...body }, this.limits, model);
 		const { diagnostics, denial } = this.plan(
 			bytes,
 			Buffer.byteLength(JSON.stringify(normalized.body)),
 			normalized.requestedOutputTokens,
 			normalized.requestedOutput,
+			model,
 		);
 		const stateDenial = !this.accepting
 			? "GATEWAY_CLOSING"
@@ -248,6 +282,7 @@ class BudgetLedger {
 		outboundBytes: number,
 		requestedOutputTokens: number,
 		defaultOutputTokenLimit: number,
+		model?: BudgetGatewayModel,
 	): GatewayBudgetPreview {
 		const minimumOutputTokens = this.limits.minOutputTokensPerRequest ?? defaultOutputTokenLimit;
 		const inputEstimateBytes = Math.max(bodyBytes, outboundBytes);
@@ -259,15 +294,17 @@ class BudgetLedger {
 		const remainingCostHeadroomUsd =
 			this.limits.maxTotalCostUsd - this.state.committedCostUpperBoundUsd - this.state.reservedCostUsd;
 		const outputRoomByTokens = Math.floor(remainingTokenHeadroom - inputTokenUpperBound);
-		const inputCostUsd = this.cost(inputTokenUpperBound, 0);
+		const pricing = model?.pricing ?? this.pricing;
+		const inputCostUsd = cost(pricing, inputTokenUpperBound, 0);
 		const outputRoomByCost =
-			this.pricing.outputUsdPerMillion === 0
+			pricing.outputUsdPerMillion === 0
 				? Infinity
-				: Math.floor(((remainingCostHeadroomUsd - inputCostUsd) * 1_000_000) / this.pricing.outputUsdPerMillion);
-		const affordableOutputTokens = Math.min(defaultOutputTokenLimit, outputRoomByTokens, outputRoomByCost);
+				: Math.floor(((remainingCostHeadroomUsd - inputCostUsd) * 1_000_000) / pricing.outputUsdPerMillion);
+		const outputRoomByModel = (model?.contextWindow ?? Infinity) - inputTokenUpperBound;
+		const affordableOutputTokens = Math.min(defaultOutputTokenLimit, outputRoomByTokens, outputRoomByCost, outputRoomByModel);
 		const outputTokenLimit = Math.min(defaultOutputTokenLimit, Math.max(minimumOutputTokens, affordableOutputTokens));
 		const reservedTokens = inputTokenUpperBound + outputTokenLimit;
-		const reservedCostUsd = this.cost(inputTokenUpperBound, outputTokenLimit);
+		const reservedCostUsd = cost(pricing, inputTokenUpperBound, outputTokenLimit);
 		const diagnostics: ReservationDiagnostics = {
 			formulaVersion: "utf8_max_in_out_plus4096_v2",
 			requestBodyBytes: bodyBytes,
@@ -289,11 +326,13 @@ class BudgetLedger {
 		const denial =
 			defaultOutputTokenLimit < minimumOutputTokens
 				? "GATEWAY_OUTPUT_LIMIT_TOO_LOW"
-				: reservedTokens > remainingTokenHeadroom
-					? "GATEWAY_TOKEN_BUDGET"
-					: reservedCostUsd > remainingCostHeadroomUsd
-						? "GATEWAY_COST_BUDGET"
-						: null;
+				: outputTokenLimit > outputRoomByModel
+					? "GATEWAY_MODEL_CONTEXT_LIMIT"
+					: reservedTokens > remainingTokenHeadroom
+						? "GATEWAY_TOKEN_BUDGET"
+						: reservedCostUsd > remainingCostHeadroomUsd
+							? "GATEWAY_COST_BUDGET"
+							: null;
 		return { diagnostics, denial };
 	}
 
@@ -303,6 +342,7 @@ class BudgetLedger {
 		requestedOutputTokens: number,
 		defaultOutputTokenLimit: number,
 		requestSequence: number,
+		model?: BudgetGatewayModel,
 	): Reservation {
 		if (!this.accepting) return this.reject("GATEWAY_CLOSING", requestSequence);
 		if (this.remainingTime() <= 0) {
@@ -320,8 +360,9 @@ class BudgetLedger {
 			outboundBytes,
 			requestedOutputTokens,
 			defaultOutputTokenLimit,
+			model,
 		);
-		if (denial) return this.reject(denial, requestSequence, diagnostics);
+		if (denial) return this.reject(denial, requestSequence, diagnostics, model?.pricing);
 		const {
 			inputTokenUpperBound,
 			outputTokenLimit,
@@ -339,6 +380,7 @@ class BudgetLedger {
 			outputTokenLimit,
 			reservedTokens,
 			reservedCostUsd,
+			model,
 		};
 		this.persistReservation(reservation, "reserved");
 		return reservation;
@@ -350,7 +392,7 @@ class BudgetLedger {
 		this.state.requestsCompleted += 1;
 		if (!usage) return this.fail(reservation, "GATEWAY_USAGE_MISSING");
 
-		const actualCostUsd = this.cost(usage.promptTokens, usage.completionTokens);
+		const actualCostUsd = cost(reservation.model?.pricing ?? this.pricing, usage.promptTokens, usage.completionTokens);
 		this.state.actualInputTokens += usage.promptTokens;
 		this.state.actualOutputTokens += usage.completionTokens;
 		this.state.actualTotalTokens += usage.totalTokens;
@@ -381,10 +423,6 @@ class BudgetLedger {
 		return this.settle(reservation, reservation.reservedTokens, reservation.reservedCostUsd);
 	}
 
-	private cost(input: number, output: number): number {
-		return (input * this.pricing.inputUsdPerMillion + output * this.pricing.outputUsdPerMillion) / 1_000_000;
-	}
-
 	private settle(reservation: Reservation, committedTokens: number, committedCostUsd: number): ReservationSettlement {
 		this.state.activeRequests -= 1;
 		this.state.reservedTokens = Math.max(0, this.state.reservedTokens - reservation.reservedTokens);
@@ -402,7 +440,7 @@ class BudgetLedger {
 		return settlement;
 	}
 
-	deny(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null): void {
+	deny(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null, pricing = this.pricing): void {
 		this.telemetry?.provider({
 			runId: this.runId,
 			requestSequence,
@@ -419,7 +457,7 @@ class BudgetLedger {
 			reservedTokenUpperBound: null,
 			reservedCostUpperBoundUsd: null,
 			responseIds: [],
-			pricing: { ...this.pricing },
+			pricing: { ...pricing },
 			reservationDiagnostics: diagnostics,
 			budgetSnapshot: {
 				requestsStarted: this.state.requestsStarted,
@@ -445,7 +483,7 @@ class BudgetLedger {
 					? "actual-exhausted"
 					: diagnostics.remainingCostHeadroomUsd <= 0
 						? "committed-exhausted"
-						: this.cost(diagnostics.inputTokenUpperBound, 0) >= diagnostics.remainingCostHeadroomUsd
+						: cost(pricing, diagnostics.inputTokenUpperBound, 0) >= diagnostics.remainingCostHeadroomUsd
 							? "next-input"
 							: "minimum-output";
 		}
@@ -467,8 +505,8 @@ class BudgetLedger {
 		if (this.state.denials.length > 64) this.state.denials.splice(0, this.state.denials.length - 64);
 	}
 
-	reject(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null): never {
-		this.deny(reason, requestSequence, diagnostics);
+	reject(reason: string, requestSequence: number, diagnostics: ReservationDiagnostics | null = null, pricing?: BudgetGatewayPricing): never {
+		this.deny(reason, requestSequence, diagnostics, pricing);
 		if (this.durable && isHardBudgetStop(reason)) {
 			this.failClosed(reason);
 			this.durable.save(this.state);
@@ -536,6 +574,8 @@ export async function startBudgetGateway(configuration: BudgetGatewayOptions): P
 	const options = {
 		...configuration,
 		limits: { ...configuration.limits },
+		pricing: { ...configuration.pricing },
+		models: configuration.models && structuredClone(configuration.models),
 		get telemetry() {
 			return configuration.telemetry;
 		},
@@ -549,6 +589,9 @@ export async function startBudgetGateway(configuration: BudgetGatewayOptions): P
 		Object.entries(limits).sort(),
 		Object.entries(options.pricing).sort(),
 		...(options.guardedClientRetry ? ["guarded-client-retry-v1"] : []),
+		...(options.models ? ["model-pricing-v1", [...options.models].sort((a, b) => a.modelId.localeCompare(b.modelId))
+			.map((model) => [model.modelId, model.contextWindow, model.maxOutputTokens, model.supportsTools,
+				model.pricing.inputUsdPerMillion, model.pricing.outputUsdPerMillion])] : []),
 	]);
 	const ledger = new BudgetLedger(
 		options.runId,
@@ -592,7 +635,11 @@ export async function startBudgetGateway(configuration: BudgetGatewayOptions): P
 		url: `http://127.0.0.1:${address.port}`,
 		deadlineAt: ledger.deadlineAt,
 		status: () => ledger.snapshot(),
-		preview: (body) => ledger.preview(body),
+		preview: (body) => {
+			const model = options.models?.find((entry) => entry.modelId === body.model);
+			const result = ledger.preview(body, model);
+			return options.models && !model ? { ...result, denial: "GATEWAY_MODEL_DENIED" } : result;
+		},
 		changeTier: (tier) => ledger.changeTier(tier, policy),
 		finalStatus: () => finalStatus && structuredClone(finalStatus),
 		stop: (reason) => {
@@ -617,12 +664,13 @@ export async function startBudgetGateway(configuration: BudgetGatewayOptions): P
 	};
 }
 
-function normalizeBudgetPayload(body: Record<string, unknown>, limits: BudgetGatewayLimits) {
+function normalizeBudgetPayload(body: Record<string, unknown>, limits: BudgetGatewayLimits, model?: BudgetGatewayModel) {
 	const requestedOutput = Math.min(
 		positiveInteger(body.max_tokens) ?? Infinity,
 		positiveInteger(body.max_completion_tokens) ?? Infinity,
 		positiveInteger(body.max_output_tokens) ?? Infinity,
 		limits.maxOutputTokensPerRequest,
+		model?.maxOutputTokens ?? Infinity,
 	);
 	const requestedOutputTokens =
 		positiveInteger(body.max_tokens) ??
@@ -690,7 +738,8 @@ async function handleRequest(
 		ledger.deny("GATEWAY_INVALID_JSON", requestSequence);
 		return sendJson(response, 400, { error: "GATEWAY_INVALID_JSON" });
 	}
-	if (body.model !== options.allowedModel) {
+	const model = options.models?.find((entry) => entry.modelId === body.model);
+	if (options.models ? !model : body.model !== options.allowedModel) {
 		ledger.deny("GATEWAY_MODEL_DENIED", requestSequence);
 		return sendJson(response, 400, { error: "GATEWAY_MODEL_DENIED" });
 	}
@@ -702,7 +751,8 @@ async function handleRequest(
 		ledger.deny("GATEWAY_MULTIPLE_OUTPUTS_DENIED", requestSequence);
 		return sendJson(response, 400, { error: "GATEWAY_MULTIPLE_OUTPUTS_DENIED" });
 	}
-	const { requestedOutput, requestedOutputTokens } = normalizeBudgetPayload(body, options.limits);
+	if (model) delete body.pricing;
+	const { requestedOutput, requestedOutputTokens } = normalizeBudgetPayload(body, options.limits, model);
 	if (options.guardedClientRetry) response.setHeader("x-should-retry", "false");
 	let reservation: Reservation;
 	try {
@@ -712,6 +762,7 @@ async function handleRequest(
 			requestedOutputTokens,
 			requestedOutput,
 			requestSequence,
+			model,
 		);
 	} catch (error) {
 		if (!(error instanceof GatewayRejection)) throw error;
@@ -728,9 +779,10 @@ async function dispatchRequest(
 	active: Set<AbortController>,
 	body: Record<string, unknown>,
 	reservation: Reservation,
-	check?: () => void,
+	check?: (modelId: string) => void,
 ): Promise<void> {
 	const { requestSequence } = reservation;
+	const pricing = reservation.model?.pricing ?? options.pricing;
 	const controller = new AbortController();
 	active.add(controller);
 	let settled = false;
@@ -755,11 +807,11 @@ async function dispatchRequest(
 		const outputTokens = usageAccounted ? usage!.completionTokens : null;
 		const actualCostUsd =
 			inputTokens !== null && outputTokens !== null
-				? (inputTokens * options.pricing.inputUsdPerMillion + outputTokens * options.pricing.outputUsdPerMillion) /
-					1_000_000
+				? cost(pricing, inputTokens, outputTokens)
 				: null;
 		ledger.recordOutcome({
 			requestSequence,
+			...(reservation.model ? { modelId: reservation.model.modelId, pricing: { ...pricing } } : {}),
 			outcome,
 			...(transportCode ? { transportCode } : {}),
 			...(transportStage ? { transportStage } : {}),
@@ -794,7 +846,7 @@ async function dispatchRequest(
 			reservedTokenUpperBound: reservation.reservedTokens,
 			reservedCostUpperBoundUsd: reservation.reservedCostUsd,
 			responseIds: [...responseIds],
-			pricing: { ...options.pricing },
+			pricing: { ...pricing },
 		});
 	};
 	const remaining = ledger.remainingTime();
@@ -809,7 +861,7 @@ async function dispatchRequest(
 		ledger.dispatch(reservation);
 		if (check) {
 			try {
-				check();
+				check(reservation.model?.modelId ?? options.allowedModel);
 			} catch {
 				settled = true;
 				settlement = ledger.undelivered(reservation);
@@ -843,12 +895,20 @@ async function dispatchRequest(
 			return;
 		}
 		let pending = "";
+		let modelConfirmed = false;
+		const expectedModel = upstream.ok ? reservation.model?.modelId : undefined;
+		const verifyModel = (parsed: ReturnType<typeof consumeSseLines>, final: boolean) => {
+			if (parsed.modelMismatch) throw new GatewayRejection("GATEWAY_UPSTREAM_MODEL_MISMATCH");
+			modelConfirmed ||= parsed.modelConfirmed;
+			if (expectedModel && final && !modelConfirmed) throw new GatewayRejection("GATEWAY_UPSTREAM_MODEL_UNVERIFIED");
+		};
 		const decoder = new TextDecoder();
 		for await (const chunk of upstream.body) {
 			const bytes = Buffer.from(chunk);
 			receivedBytes += bytes.length;
 			pending += decoder.decode(bytes, { stream: true });
-			const parsed = consumeSseLines(pending, options.telemetry ? responseIds : undefined);
+			const parsed = consumeSseLines(pending, options.telemetry ? responseIds : undefined, expectedModel);
+			verifyModel(parsed, parsed.done);
 			pending = parsed.remainder;
 			modelStopReason = parsed.stopReason ?? modelStopReason;
 			modelRequestedTools ||= parsed.hasToolCalls;
@@ -867,7 +927,8 @@ async function dispatchRequest(
 			if (doneSeen) break;
 		}
 		pending += decoder.decode();
-		const final = consumeSseLines(`${pending}\n`, options.telemetry ? responseIds : undefined);
+		const final = consumeSseLines(`${pending}\n`, options.telemetry ? responseIds : undefined, expectedModel);
+		verifyModel(final, true);
 		modelStopReason = final.stopReason ?? modelStopReason;
 		modelRequestedTools ||= final.hasToolCalls;
 		if (final.hasUsage) usage = final.usage;
@@ -902,7 +963,7 @@ async function dispatchRequest(
 						? "response-headers"
 						: "awaiting-headers";
 			const code =
-				controller.signal.aborted && reason instanceof Error
+				error instanceof GatewayRejection ? error.code : controller.signal.aborted && reason instanceof Error
 					? reason.message
 					: httpStatus && httpStatus >= 400
 						? `GATEWAY_UPSTREAM_HTTP_${httpStatus}`
@@ -930,7 +991,7 @@ async function dispatchRequest(
 				return;
 			}
 		}
-		if (!response.headersSent) sendJson(response, 502, { error: "GATEWAY_UPSTREAM_FAILED" });
+		if (!response.headersSent) sendJson(response, 502, { error: error instanceof GatewayRejection ? error.code : "GATEWAY_UPSTREAM_FAILED" });
 		else response.destroy(error instanceof Error ? error : undefined);
 	} finally {
 		clearTimeout(timeout);
@@ -958,6 +1019,7 @@ function upstreamTransportCode(error: unknown): string | undefined {
 function consumeSseLines(
 	input: string,
 	responseIds?: Set<string>,
+	expectedModel?: string,
 ): {
 	remainder: string;
 	usage: ProviderUsage | null;
@@ -966,6 +1028,8 @@ function consumeSseLines(
 	invalidUsage: boolean;
 	stopReason?: string;
 	hasToolCalls: boolean;
+	modelConfirmed: boolean;
+	modelMismatch: boolean;
 } {
 	const lines = input.split(/\r?\n/u);
 	const remainder = lines.pop() ?? "";
@@ -975,6 +1039,8 @@ function consumeSseLines(
 	let invalidUsage = false;
 	let stopReason: string | undefined;
 	let hasToolCalls = false;
+	let modelConfirmed = false;
+	let modelMismatch = false;
 	for (const line of lines) {
 		if (!line.startsWith("data:")) continue;
 		const data = line.slice(5).trim();
@@ -986,9 +1052,14 @@ function consumeSseLines(
 		try {
 			const parsed = JSON.parse(data) as {
 				id?: unknown;
+				model?: unknown;
 				usage?: Record<string, unknown>;
 				choices?: { finish_reason?: string; delta?: { tool_calls?: unknown[]; function_call?: unknown } }[];
 			};
+			if (expectedModel && parsed.model !== undefined) {
+				modelConfirmed ||= parsed.model === expectedModel;
+				modelMismatch ||= parsed.model !== expectedModel;
+			}
 			const choice = parsed.choices?.[0];
 			const finish = choice?.finish_reason;
 			hasToolCalls ||= Boolean(
@@ -1014,7 +1085,7 @@ function consumeSseLines(
 			}
 		} catch {}
 	}
-	return { remainder, usage, done, hasUsage, invalidUsage, stopReason, hasToolCalls };
+	return { remainder, usage, done, hasUsage, invalidUsage, stopReason, hasToolCalls, modelConfirmed, modelMismatch };
 }
 
 function parseUsage(value: Record<string, unknown>): ProviderUsage | null {
@@ -1070,10 +1141,7 @@ function nonnegativeInteger(value: unknown): number | undefined {
 
 function validateOptions(options: BudgetGatewayOptions): void {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(options.runId)) throw new Error("GATEWAY_RUN_ID_INVALID");
-	if (
-		!/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(options.upstreamBaseUrl) &&
-		options.upstreamBaseUrl !== "https://api.deepseek.com"
-	) {
+	if (!isBudgetGatewayUpstreamAllowed(options.upstreamBaseUrl)) {
 		throw new Error("GATEWAY_UPSTREAM_NOT_ALLOWED");
 	}
 	if (!options.upstreamApiKey || !options.clientToken || !options.adminToken)
@@ -1093,6 +1161,9 @@ function validateOptions(options: BudgetGatewayOptions): void {
 		throw new Error("GATEWAY_OUTPUT_LIMIT_INVALID");
 	for (const rate of Object.values(options.pricing))
 		if (!Number.isFinite(rate) || rate < 0) throw new Error("GATEWAY_PRICING_INVALID");
+	if (options.models && (!options.models.length || !options.models.every(isBudgetGatewayModel) ||
+		new Set(options.models.map(({ modelId }) => modelId)).size !== options.models.length))
+		throw new Error("GATEWAY_MODEL_CONFIG_INVALID");
 	if (options.limits.maxConcurrency !== 1) throw new Error("GATEWAY_CONCURRENCY_MUST_BE_ONE");
 }
 

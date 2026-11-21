@@ -47,12 +47,7 @@ export function taskPytestSource(events: Events, workspace: string): TaskPytestS
 	return matches.length === 1 ? matches[0] : undefined;
 }
 
-export function registerTaskPytestSource(
-	events: Events,
-	config: SandboxConfig,
-	policy: PytestConfig,
-	active: () => boolean,
-) {
+export function createTaskPytestEvidence(config: SandboxConfig, policy: PytestConfig, active: () => boolean) {
 	const workspaceId = hash([config.workspace, config.workspaceDevice, config.workspaceInode]);
 	const policyHash = hash([
 		policy.image,
@@ -79,11 +74,39 @@ export function registerTaskPytestSource(
 			}
 		},
 	};
-	const close = events.on(channel, (reply) => {
-		if (active() && typeof reply === "function") reply(source);
-	});
 	return {
-		close,
+		source,
+		receipt(evidence: PytestEvidence, result: PytestResult, usedDefaultTargets = false): PytestReceipt | undefined {
+			if (!active() || evidence.targets.length !== 1) return undefined;
+			const target = evidence.targets[0]!;
+			const identity = snapshot(target, evidence.files);
+			if (!identity) return undefined;
+			return {
+				...identity,
+				runId: config.runId,
+				target,
+				...(usedDefaultTargets ? { usedDefaultTargets: true as const } : {}),
+				status: evidence.status,
+				completedPasses: evidence.completedPasses ?? null,
+				exitCode: result.exitCode,
+				passed: result.passed,
+				failed: result.failed,
+			};
+		},
+	};
+}
+
+export function registerTaskPytestSource(
+	events: Events,
+	config: SandboxConfig,
+	policy: PytestConfig,
+	active: () => boolean,
+) {
+	const evidenceSource = createTaskPytestEvidence(config, policy, active);
+	return {
+		close: events.on(channel, (reply) => {
+			if (active() && typeof reply === "function") reply(evidenceSource.source);
+		}),
 		begin(id: string, usedDefaultTargets: boolean) {
 			const sinks: ReceiptSink[] = [];
 			events.emit(attemptChannel, (open: OpenAttempt) => {
@@ -93,21 +116,8 @@ export function registerTaskPytestSource(
 			if (sinks.length !== 1) return undefined;
 			const record = sinks[0]!;
 			return (evidence: PytestEvidence, result: PytestResult) => {
-				if (!active() || evidence.targets.length !== 1) return;
-				const target = evidence.targets[0]!;
-				const identity = snapshot(target, evidence.files);
-				if (identity)
-					record({
-						...identity,
-						runId: config.runId,
-						target,
-						...(usedDefaultTargets ? { usedDefaultTargets: true } : {}),
-						status: evidence.status,
-						completedPasses: evidence.completedPasses ?? null,
-						exitCode: result.exitCode,
-						passed: result.passed,
-						failed: result.failed,
-					});
+				const receipt = evidenceSource.receipt(evidence, result, usedDefaultTargets);
+				if (receipt) record(receipt);
 			};
 		},
 	};

@@ -339,8 +339,13 @@ export class TaskProvider {
 	markOpenAttemptsForReconciliation(now: number, taskId?: string): number {
 		return this.transaction(() => {
 			const rows = this.database
-				.prepare("SELECT * FROM task_attempts WHERE state='started' AND (? IS NULL OR task_id=?)")
-				.all(taskId ?? null, taskId ?? null) as unknown as AttemptRow[];
+				.prepare(
+					taskId
+						? "SELECT * FROM task_attempts WHERE state='started' AND task_id=?"
+						: `SELECT * FROM task_attempts AS attempts WHERE state='started' AND NOT EXISTS
+						(SELECT 1 FROM task_events WHERE type='ma1_delegation' AND task_id=attempts.task_id)`,
+				)
+				.all(...(taskId ? [taskId] : [])) as unknown as AttemptRow[];
 			for (const row of rows) {
 				this.database
 					.prepare("UPDATE task_attempts SET state='needs_reconciliation', ended_at=? WHERE attempt_id=?")
@@ -525,6 +530,35 @@ export class TaskProvider {
 				seq: number;
 			}
 		).seq;
+	}
+
+	delegationEvents(taskId: string): Array<{ seq: number; source: string; data: unknown }> {
+		this.require(taskId);
+		const rows = this.database
+			.prepare(
+				"SELECT seq, source_ref, payload_json, payload_hash FROM task_events WHERE task_id=? AND type='ma1_delegation' ORDER BY seq",
+			)
+			.all(taskId) as Array<{ seq: number; source_ref: string; payload_json: string; payload_hash: string }>;
+		return rows.map((row) => {
+			if (createHash("sha256").update(row.payload_json).digest("hex") !== row.payload_hash)
+				throw new TaskError("TASK_INVALID_TRANSITION", "Delegation event integrity check failed");
+			return { seq: row.seq, source: row.source_ref, data: JSON.parse(row.payload_json) as unknown };
+		});
+	}
+
+	appendDelegation(taskId: string, expectedSeq: number, source: string, data: object): number {
+		return this.transaction(() => {
+			this.require(taskId);
+			const last = this.database
+				.prepare("SELECT COALESCE(max(seq),0) AS seq FROM task_events WHERE task_id=? AND type='ma1_delegation'")
+				.get(taskId) as { seq: number };
+			if (last.seq !== expectedSeq)
+				throw new TaskError("TASK_REVISION_CONFLICT", "Delegation state already changed");
+			if (JSON.stringify(data).length > 8_000)
+				throw new TaskError("TASK_STORAGE_ERROR", "Delegation event is too large");
+			this.appendEvent(taskId, "ma1_delegation", source, data, Date.now());
+			return this.getLastEventSeq(taskId);
+		});
 	}
 
 	modelPlanEvents(taskId: string): Array<{ type: string; source: string; at: number; data: Record<string, unknown> }> {
