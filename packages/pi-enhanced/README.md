@@ -4,6 +4,12 @@ Pi Enhanced 为 Pi 提供六个可独立启停的扩展，包括 MCP Policy、Me
 
 Task Manager 的 SWE-bench 对照使用 `off`、`v1`、`v2` 三种模式。模型执行与官方判分分别启动，真实模型运行需要单独授权。
 
+## V4 运行模式
+
+普通 `pi` 默认运行 `single`。本地协作和 A2A 都通过显式加载 `/enhanced-multi` 启用，沿用原有扩展、SQLite Task Manager、Gateway 和 Docker。启动环境、角色权限、恢复规则与真实对照数据见 [V4 架构与运行手册](docs/v4-architecture.md)。
+
+在可信用户的 `pi-enhanced.json` 中，可用 `multiAgent.code` 和 `multiAgent.test` 为同一个 OpenAI 兼容服务分别选择模型。两个角色共享父任务预算，恢复沿用任务创建时的配置。[配置示例](docs/v4-architecture.md#在任务开始前选择-code-和-test-模型)
+
 ## V3 联合恢复 Demo
 
 Pi 已提供模型接入、工具循环和可持久化会话。Pi Enhanced 通过扩展复用这些能力，把请求上下文、项目记忆和任务进度连到同一条修复链路。受控 Runner 用本机预算网关访问模型，文件操作和测试在无网 Docker 中执行。
@@ -43,11 +49,49 @@ npm exec vitest -- --run packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.te
 
 当前真实联合恢复只开放给固定任务和 DeepSeek Flash，需要单独授权。自动接续要求可核验的暂停点，未知写入需要先核验。Gateway 的保守输入预留可能在实际用量达到上限前拒绝请求。Stub 验证工程链路，单次真实案例不代表跨任务成功率。
 
+## V4 MA-1 本地协作
+
+默认使用原有单 Agent 模式。用 `pi --extension <MA-1 入口的绝对路径>` 加载 [MA-1 扩展](src/multi-local/extension.ts)，然后在受信任的临时工作区使用 `/enhanced-multi start <JSON>`。命令会要求确认本次编辑和测试。宿主需配置现有 Sandbox 环境、固定镜像 ID、`PI_ENHANCED_PYTEST_CONFIG_JSON` 和 `PI_ENHANCED_MA1_LOCAL_URL`（`http://127.0.0.1:<端口>`）。`PI_ENHANCED_MA1_LOCAL_KEY` 用于本地服务认证，模型 ID 可通过 `PI_ENHANCED_MA1_LOCAL_MODEL` 设置。代理的工具和会话无法取得服务密钥。
+
+```text
+/enhanced-multi start {"goal":"修复 next_count 的返回值","target":"test_counter.py","editFiles":["counter.py"]}
+/enhanced-multi resume <task-id>
+```
+
+[Coordinator](src/multi-local/coordinator.ts) 使用 Task Manager 原有 SQLite 保存父任务、两条步骤、委派和真实 pytest 收据。Code Agent 可以读取、编辑批准的文件，并按项目配置使用只读 Memory/Knowledge 检索。Test Agent 的独立模型会话只读，宿主用 Docker 测试批准的版本，模型只收到失败类型、目标、计数等有界诊断。真实测试日志留在本地审计。启用受保护的检索后，Code Agent 写入的文件无法可靠保留内容来源，后续两个角色都拒绝将这些文件正文读回模型。Docker 仍会验证实际补丁。用户可在启动时把 `diagnose` 设为 `false`，直接使用确定性反馈。
+
+两个子会话共享父任务的 Gateway 账本。继续通过 `pi-enhanced.json` 的 `budget.tier` 选择 Economy 20K、Standard 25K（默认）或 Premium 30K。默认总计 8 次模型请求、180 秒、$0.03 和每次 512 输出 Token。模型诊断默认最多占 3 次，并计入同一账本。恢复沿用原档位、截止时间与已结算用量。阶段收据已落盘时继续下一步，执行结果不确定时进入待核验。达到硬上限会停止该任务，保留当前进度。
+
+本地复现需先准备 Docker 文件工具镜像和含 pytest 的镜像。入口复用项目 Vitest 和 HTTP Stub，无需 API 密钥。
+
+```bash
+npm exec -w packages/pi-enhanced -- vitest run tests/e2e/multi-local.test.ts --no-file-parallelism
+```
+
+测试将断言首次 pytest 失败、诊断反馈、第二次修复、复测通过和独立工作区判分，并核对跨进程恢复、撤权和共享预算。
+
+## V4 MA-2 A2A Test Agent
+
+默认的 `single` 和手动加载的 `multi-local` 继续使用原来的入口。选择 `multi-a2a` 时，仍由同一 Coordinator 负责编辑、重试、预算和父任务收尾，由另一个本机进程执行批准的 Docker pytest。服务只在 `127.0.0.1` 提供 A2A 1.0 JSON-RPC，Agent Card 位于 `/.well-known/agent-card.json`。
+
+从与 Coordinator 相同的受信任临时工作区启动服务，并为两个进程设置相同的 Sandbox 配置、`PI_ENHANCED_PYTEST_CONFIG_JSON`、Pi Agent 数据目录与 `PI_ENHANCED_A2A_PRINCIPAL`。使用宿主生成的独立 `PI_ENHANCED_A2A_TOKEN`，长度至少 32 字符。服务以 `PI_ENHANCED_A2A_PORT` 指定端口（默认 8765），Coordinator 的 `PI_ENHANCED_A2A_URL` 指向实际回环地址。单次连接超时可用 `PI_ENHANCED_A2A_TIMEOUT_MS` 配置，默认 5000 毫秒。
+
+```text
+node --experimental-strip-types <Pi Enhanced 绝对路径>/scripts/run-a2a-test-agent.ts
+/enhanced-multi start-a2a {"goal":"修复 next_count 的返回值","target":"test_counter.py","editFiles":["counter.py"]}
+/enhanced-multi resume-a2a <task-id>
+```
+
+远端服务从任务数据库核对已经保存的委派意图、调用身份、工作区和测试版本。Artifact 包含有界的结构化结果、诊断和 Docker 收据。任意测试 stdout、Memory/RAG 正文和模型凭据不进入 A2A 请求或响应。服务默认生成确定性诊断。显式设置 `diagnose: true` 时，由 Coordinator 的只读 Test Session 经父任务 Gateway 补充模型诊断。
+
+一个操作 ID 的同负载重试复用原 A2A Task ID。Coordinator 可恢复远端任务映射和已持久化的收据。服务在未确认执行结果时保存失败状态和审计线索，恢复不会自动重跑该操作。停止服务可发送 SIGINT 或 SIGTERM。依赖和协议固定为官方 SDK `1.3.0` 与 A2A 规范 `v1.0.0`。
+
 ## 代码导航
 
 | 目录 | 职责 |
 |---|---|
-| `extensions/` | 六个 Pi Extension 入口 |
+| `extensions/` | 六个默认 Pi Extension 入口 |
+| `src/multi-local/` | MA-1 本地协调、角色权限与手动加载入口 |
 | `src/mcp-policy/`、`src/sandbox/` | 工具策略、原生工具保护和 Docker 文件工具 |
 | `src/memory/`、`python/memory-intelligence/` | 项目记忆存储、检索和可选 Python 向量计算 |
 | `src/knowledge/`、`python/knowledge-parser/` | 文档导入、权限管理和检索 |

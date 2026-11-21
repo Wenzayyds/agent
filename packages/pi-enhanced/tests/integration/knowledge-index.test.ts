@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { KnowledgeService } from "../../src/knowledge/service.ts";
 import type { DocumentVectorPayload } from "../../src/knowledge/vector.ts";
 import { MemoryWorkerError } from "../../src/shared/embedding/python-worker-client.ts";
 import { QdrantError, type VectorIndex, type VectorWrite } from "../../src/shared/vector/qdrant.ts";
+import { createKnowledgeTestRoot } from "../fixtures/knowledge.ts";
 
 let root: string;
 const services: KnowledgeService[] = [];
@@ -13,7 +13,7 @@ const host = { audience: "host" } as const;
 const agent = { audience: "agent" } as const;
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "pi-knowledge-index-"));
+	root = createKnowledgeTestRoot("pi-knowledge-index-");
 });
 afterEach(async () => {
 	await Promise.all(services.splice(0).map((service) => service.close()));
@@ -70,7 +70,8 @@ it("switches only fully indexed versions, retries a partial remote write after r
 	const f = fixture();
 	let service = f.open();
 	writeFileSync(join(root, "api.md"), "# Auth\n\nGET /v1/keys requires scope_id.\n\n# Errors\n\nAUTH_403 means missing scope.");
-	const { documentId } = await service.add(root, "api.md", "api", "allow-external");
+	const { documentId, outcome } = await service.add(root, "api.md", "api", "allow-external");
+	expect(outcome).toBe("indexed");
 	const first = (await service.search("scope_id", agent, 1)).hits[0];
 	const delayed = [...f.points.values()].find(({ payload }) => payload.chunkId === first.chunk.chunkId)!;
 	expect(first.document.activeVersion).toBe(1);
@@ -105,8 +106,10 @@ it("immediately excludes deleted and private versions in lexical, dense and neig
 	const service = f.open();
 	writeFileSync(join(root, "public.md"), "# API\n\nUse resolveConfig and scope_id.\n\n# Errors\n\nAUTH_403 未授权。");
 	writeFileSync(join(root, "private.md"), "# Private\n\nUse resolveConfig and SECRET_FIELD.");
-	const { documentId } = await service.add(root, "public.md", "api", "allow-external");
+	const { documentId, outcome } = await service.add(root, "public.md", "api", "allow-external");
+	expect(outcome).toBe("indexed");
 	const privateDoc = await service.add(root, "private.md", "internal");
+	expect(privateDoc.outcome).toBe("indexed");
 	const privateHit = (await service.search("SECRET_FIELD", host, 1, "lexical")).hits[0];
 	expect((await service.search("SECRET_FIELD", agent, 10, "lexical")).hits).toEqual([]);
 	expect((await service.search("resolveConfig", agent, 10, "semantic")).hits.every(({ document }) => document.documentId === documentId)).toBe(true);
@@ -130,7 +133,8 @@ it("supports lexical fallback, model revision re-embedding, rebuild and removed 
 	let service = f.open();
 	const file = join(root, "runbook.md");
 	writeFileSync(file, "# 排障\n\n认证错误 AUTH_403 检查 scope_id。");
-	const { documentId } = await service.add(root, "runbook.md");
+	const { documentId, outcome } = await service.add(root, "runbook.md");
+	expect(outcome).toBe("indexed");
 	f.options.unavailable = true;
 	expect(await service.search("认证错误", host)).toMatchObject({ mode: "lexical", fallback: "qdrant-unavailable" });
 	f.options.unavailable = false;
@@ -158,7 +162,8 @@ it("revokes external access during a failed update without exposing staged text"
 	const service = f.open();
 	const file = join(root, "policy.md");
 	writeFileSync(file, "# Policy\n\nexternal_approval existing statement");
-	const { documentId } = await service.add(root, "policy.md", "api", "allow-external");
+	const { documentId, outcome } = await service.add(root, "policy.md", "api", "allow-external");
+	expect(outcome).toBe("indexed");
 	const first = (await service.search("external_approval", agent, 1, "lexical")).hits[0];
 	f.options.failUpsert = true;
 	writeFileSync(file, "# Policy\n\ninternal_rule successfully changed");
@@ -173,7 +178,7 @@ it("checks project ownership of SQLite and deletes orphan points for only its pr
 	const f = fixture();
 	const service = f.open();
 	writeFileSync(join(root, "doc.md"), "# Scope\n\nscope_key works");
-	await service.add(root, "doc.md", "api", "allow-external");
+	await expect(service.add(root, "doc.md", "api", "allow-external")).resolves.toMatchObject({ outcome: "indexed" });
 	expect(() => new KnowledgeService({
 		projectId: "other", filename: join(root, "documents.sqlite3"), mode: "lexical",
 	})).toThrow("Knowledge database belongs to another project");

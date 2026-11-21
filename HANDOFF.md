@@ -146,3 +146,23 @@ DeepSeek Flash 对照使用两道合成任务，每题的 RAG 开关组都能读
 基于封存的 E19 源码，在独立工作树 `F:/p20-9f44` 增加 Economy 20K、Standard 25K 和 Premium 30K。普通 CLI 的原生 DeepSeek Flash 请求、生产 AgentSession 和受控 Runner 复用本地 Gateway。普通 CLI 绑定 Task 时使用该 Task 的预算账本，无绑定时使用会话账本。恢复沿用原档、用量和截止时间，开工后改档须由宿主明确确认。
 
 E19 已完成 18 个真实单元，20K 端到端 6/9，25K 7/9。本轮预算档位开发仅使用本地 Stub 和无网验证。Premium 暂无独立真实模型对照。源码交接和回归证据位于 `.artifacts/e20/`。
+
+## V4 MA-1 · 本地多 Agent
+
+独立工作树 `F:/pma1-b169`，分支 `feature/ma1-local-multi-agent`。基线为 PR #3 已核验提交 `b16917ec793dc801d979759d2d6d4ca3e3e76972`，集成时需要保留该 PR 的 CI-1 修复。
+
+通过可选 `/enhanced-multi` 启用独立 Code/Test Session。Coordinator 使用现有 Task SQLite 写入委派、操作 ID、工作区版本和 Docker pytest 收据，两个 Session 复用一个持久预算 Gateway。恢复从已落盘的阶段继续，写入已发生但委派无法确认时保留待核验。源码入口与验证命令见 Pi Enhanced README。验收证据集中在 `.artifacts/ma1/`。
+
+首次 Windows 包级串行运行发现入口扫描把 MA-1 算成默认扩展。入口已移至 `packages/pi-enhanced/src/multi-local/extension.ts`，仅在显式加载时注册命令。首次运行与修复后的完整运行分别记录。
+
+## V4 MA-2 · A2A Test Agent
+
+`F:/pma2-b169` 的 `feature/ma2-a2a` 以同一提交和 11 个已验收的 MA-1 文件为基线。MA-1 的源码覆盖层散列为 `74ee77506e45e15edb484d50b95894aa8041c1791c146af2b9348891fd40291b`。
+
+使用 A2A 1.0 JSON-RPC 的独立 Test Agent 进程，启动、提交、轮询和取消走官方 TypeScript SDK。远端任务映射和经验证的 Artifact 保存在同一项目 Task SQLite 里。Coordinator 持久化委派与映射，共用 MA-1 的测试逻辑和父任务预算。验收产物位于 `.artifacts/ma2/`。
+
+## V4 最终集成
+
+`feature/v4-integration` 基于远端 `main` 的 `ded9691b162644811db2deec648f0a57e5fd7e36`，按 PR #3 撤权夹具、MA-1、MA-2、MA-3 的顺序逐文件整合。启动及权限、预算、恢复说明见 `packages/pi-enhanced/docs/v4-architecture.md`。MA-3 的 11 个有效真实结果与 7 个鉴权失败记录已封存。最终集成回归仅使用本地 Stub、无网构建和 Docker，验收证据集中在 `.artifacts/v4-integration/`。
+
+V4 发布前补充同一服务的角色模型配置。`multiAgent.code`、`multiAgent.test` 从可信用户配置读取，任务快照保存模型 ID、能力和费率。Gateway 按实际模型分别计价，两个角色沿用同一个父任务账本。角色模型验证使用本地 Stub，证据位于 `.artifacts/v4-role-models/`。

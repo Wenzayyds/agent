@@ -1,16 +1,16 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall, type ToolResultMessage } from "@earendil-works/pi-ai";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createHarness, createTestUiContext } from "../../../coding-agent/test/suite/harness.ts";
 import { createKnowledgeExtension } from "../../src/knowledge/extension.ts";
 import { KNOWLEDGE_READ, KNOWLEDGE_SEARCH } from "../../src/knowledge/tools.ts";
 import { ENHANCED_CONFIG_FILE } from "../../src/shared/config.ts";
+import { createKnowledgeTestRoot } from "../fixtures/knowledge.ts";
 
 it("registers native readonly tools and keeps authorization, bounds, shutdown and deletion checks in the handler", async () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-knowledge-tool-"));
+	const root = createKnowledgeTestRoot("pi-knowledge-tool-");
 	const agentDir = join(root, "agent");
 	mkdirSync(agentDir);
 	writeFileSync(join(agentDir, ENHANCED_CONFIG_FILE), JSON.stringify({ modules: { knowledge: { enabled: true } } }));
@@ -44,7 +44,10 @@ it("registers native readonly tools and keeps authorization, bounds, shutdown an
 		};
 		await harness.session.prompt(`/enhanced-docs add --allow-external --corpus=api ${publicFile}`);
 		expect(JSON.parse(messages.at(-1)!)).toMatchObject({ selected: 1, outcomes: { indexed: 1 } });
+		const importNotifications = messages.length;
 		await harness.session.prompt(`/enhanced-docs add ${JSON.stringify([privateFile])}`);
+		expect(messages).toHaveLength(importNotifications + 1);
+		expect(JSON.parse(messages.at(-1)!)).toMatchObject({ selected: 1, outcomes: { indexed: 1 } });
 		harness.setResponses([
 			fauxAssistantMessage([fauxToolCall(KNOWLEDGE_SEARCH, { query: "resolveConfig", corpusId: "api" })], { stopReason: "toolUse" }),
 			(request) => {

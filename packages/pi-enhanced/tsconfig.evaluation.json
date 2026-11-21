@@ -19,6 +19,9 @@
 		"tests/fixtures/sandbox-audit-child.ts",
 		"tests/e2e/budget-recovery.test.ts",
 		"tests/fixtures/budget-recovery-child.ts",
+		"tests/e2e/multi-local.test.ts",
+		"tests/fixtures/multi-local-child.ts",
+		"scripts/run-a2a-test-agent.ts",
 		"../coding-agent/src/utils/highlight-js.d.ts"
 	],
 	"exclude": ["**/dist/**"]

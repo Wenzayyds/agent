@@ -716,7 +716,7 @@ function hybridFaultExtension(fault: VectorFault, workspace: string, projectId: 
 	};
 }
 
-async function gradeIndependent(task: Task, grading: string, owned: Task["files"]) {
+export async function gradeIndependent(task: Task, grading: string, owned: Task["files"]) {
 	const verdicts: Record<string, unknown>[] = [];
 	for (const [path, value] of Object.entries(owned)) writeFileSync(join(grading, path), value);
 	for (const name of ["contract", "regression"]) {
@@ -759,9 +759,10 @@ type EvaluationSessionOptions = {
 	verifyReadOnly?: () => boolean;
 	continuations?: ContinuationCheck[];
 	onEvent?: SessionListener;
+	modelTransport?: (event: { beforeSend?: () => void }) => typeof fetch;
 };
 
-async function openEvaluationSession({
+export async function openEvaluationSession({
 	root,
 	manager,
 	url,
@@ -783,6 +784,7 @@ async function openEvaluationSession({
 	verifyReadOnly,
 	continuations,
 	onEvent,
+	modelTransport,
 }: EvaluationSessionOptions) {
 	const workspace = join(root, "p");
 	const agentDir = join(root, "a");
@@ -859,6 +861,7 @@ async function openEvaluationSession({
 				{ image: PYTEST, files: Object.keys(inputFiles), tests: [testFile] },
 			),
 			(pi) => {
+				if (modelTransport) pi.on("model_request_fetch", modelTransport);
 				let successfulEditId: string | undefined;
 				let publicPassId: string | undefined;
 				let restriction: NonNullable<ContextProjection["context"]>["mode"] = "full";
@@ -1022,7 +1025,7 @@ async function openEvaluationSession({
 	});
 	return session;
 }
-async function invokeEvaluationTask(session: EvaluationSession, notes: string[], cmd: string, args: string) {
+export async function invokeEvaluationTask(session: EvaluationSession, notes: string[], cmd: string, args: string) {
 	const noteLines = notes.length;
 	await session.prompt(`/${cmd} ${args}`);
 	assert(notes.length > noteLines, `No result from ${cmd}`);
@@ -2115,7 +2118,11 @@ async function evaluateCell(
 	}
 }
 
-if (e15Freeze) {
+if (selected === "ma3-freeze" || selected === "ma3-preflight" || selected === "ma3-paid-preflight" || selected === "ma3-paid" ||
+	selected === "ma3-resume-preflight" || selected === "ma3-resume-paid" || selected === "ma3-final-preflight" || selected === "ma3-final-paid") {
+	const { runMa3 } = await import("./ma3-evaluation.ts");
+	await runMa3(output, selected, { gradeIndependent, openEvaluationSession, invokeEvaluationTask, publicTarget: testFile, image: PYTEST });
+} else if (e15Freeze) {
 	assert.equal(output, workflowOutput);
 	const prior = existsSync(output) ? JSON.parse(readFileSync(output, "utf8")) : {};
 	assert(!prior.independentFreeze, "Independent task set is already frozen");
