@@ -9,6 +9,7 @@ import { contextReferences } from "../context/offload.ts";
 import { requestMemoryCandidateWrite } from "../memory/candidate-writer.ts";
 import type { ProjectScope } from "../memory/contracts.ts";
 import { createProjectScope } from "../memory/project-scope.ts";
+import { registerPytestAttempts, taskPytestSource } from "../sandbox/task-evidence.ts";
 import { loadTaskManagerConfig } from "./config.ts";
 import type { CheckpointObservation, TaskSnapshot, TaskStepInput } from "./contracts.ts";
 import { TaskError } from "./errors.ts";
@@ -27,6 +28,7 @@ export function createTaskManagerExtension(options: TaskManagerExtensionOptions 
 
 function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExtensionOptions): void {
 	let runtime: TaskRuntime | undefined;
+	registerPytestAttempts(pi.events, (workspace, id) => runtime?.openPytestAttempt(workspace, id));
 	let generation = 0;
 	let interactionsRegistered = false;
 	let unsubscribeReader: (() => void) | undefined;
@@ -55,6 +57,7 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 						trusted: ctx.isProjectTrusted(),
 						...(scope ? { scope } : {}),
 						agentDir,
+						pytestSource: () => scope && taskPytestSource(pi.events, scope.rootPath),
 					});
 		if (currentGeneration !== generation) {
 			next.close();
@@ -64,7 +67,10 @@ function registerTaskManagerExtension(pi: ExtensionAPI, options: TaskManagerExte
 		if (options.initialBinding && next.state === "ready" && next.service) {
 			const { taskId, stepId } = options.initialBinding;
 			const snapshot = next.service.get(taskId);
-			if (snapshot?.task.status === "running" && snapshot.steps.some((step) => step.stepId === stepId && step.status === "pending"))
+			if (
+				snapshot?.task.status === "running" &&
+				snapshot.steps.some((step) => step.stepId === stepId && step.status === "pending")
+			)
 				next.service.bind(taskId, stepId, ctx.sessionManager.getSessionId(), branchLeaf(ctx));
 		}
 		if (next.state === "ready" && next.scope && next.reader) {

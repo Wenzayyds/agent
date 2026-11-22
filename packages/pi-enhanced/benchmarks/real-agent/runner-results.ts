@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
-import { readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
+import { atomicPrivateJson, readSandboxAuditSnapshot } from "../../src/sandbox/audit.ts";
 import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
 import { createCheckpoint } from "../../src/task-manager/recovery.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
@@ -27,7 +27,7 @@ import { gatewayEvidence } from "./gateway-integration.ts";
 import { INPUT_AUDIT_FILE } from "./input-audit.ts";
 import { classifyTermination } from "./result-classification.ts";
 import type { AgentExecution } from "./runner-execution.ts";
-import { finishResumedRun, recordInterruptedRun } from "./runner-resume.ts";
+import { assertResumeOwner, finishResumedRun, recordInterruptedRun } from "./runner-resume.ts";
 import type { PreparedAgent, RunnerContext } from "./runner-preparation.ts";
 /** Interprets completed evidence and persists results; never starts an Agent, model request or container. */
 export function collectTaskResult(context: RunnerContext, prepared: PreparedAgent, execution: AgentExecution) {
@@ -46,6 +46,7 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 	} = prepared;
 	const { child, gatewayStatus, gatewayAtStart, verification, telemetry, sandboxAuditPath, contextReportPath, started, hostLifecycle, deadlineAt } = execution;
 	if (!verification) throw new Error("SYNTHETIC_VERIFIER_REQUIRED");
+	if (context.recoveryPhase === "resume") assertResumeOwner(root, prepared.recovery?.claimId);
 	const apiKeyEnv = plan.apiKeyEnv;
 	const events = parseAgentEvents(child.stdout ?? "");
 	const agentReportedUsage = summarizeUsage(events);
@@ -96,22 +97,24 @@ export function collectTaskResult(context: RunnerContext, prepared: PreparedAgen
 			["error", "aborted", "length"].includes(message.stopReason ?? "");
 	}));
 	const auditComplete = sandboxAudit.complete === true && Boolean(sandboxAudit.evidence);
+	const retestPassed = events.some((event) => {
+		const result = event.result as { details?: { status?: string; exitCode?: number } } | undefined;
+		return event.type === "tool_execution_end" && event.toolName === "run_tests" && !event.isError &&
+			result?.details?.status === "passed" && result.details.exitCode === 0;
+	});
 	const jointRecovery = context.jointRecovery && context.recoveryPhase === "resume" ? {
 		contextRestored: Array.isArray(contextAudit.restores) && contextAudit.restores.some((result: unknown) =>
 			(result as { status?: string } | null)?.status === "restored"),
 		memoryRechecked: events.some((event) => event.type === "tool_execution_end" &&
 			event.toolName === "enhanced_memory_search" &&
 			memoryTouchMetadata(event.result, Boolean(event.isError), memorySeed?.id ?? null).matchedSeed === true),
-		retestPassed: events.some((event) => {
-			const result = event.result as { details?: { status?: string; exitCode?: number } } | undefined;
-			return event.type === "tool_execution_end" && event.toolName === "run_tests" && !event.isError &&
-				result?.details?.status === "passed" && result.details.exitCode === 0;
-		}),
+		retestPassed,
 	} : undefined;
 	const missingJointEvidence = jointRecovery && (!auditComplete || !hostLifecycle.childClosed ||
 		!hostLifecycle.childAbsent || !hostLifecycle.containersRemoved || !hostLifecycle.workspaceIdentityValid ||
 		gatewayStatus.activeRequests !== 0 || Object.values(jointRecovery).some((value) => !value));
-	const exitCode = agentFailed || missingJointEvidence ? 1 : child.status;
+	const missingRetest = prepared.recovery?.verifyOnly && !retestPassed;
+	const exitCode = agentFailed || missingJointEvidence || missingRetest ? 1 : child.status;
 	const status = classifyExecution({ overBudget, timedOut, exitCode, verifierPassed });
 	const outcome = executionOutcome({
 		overBudget: budgetExceeded(usage, observedCost, plan!),
@@ -458,6 +461,7 @@ export function saveRunReport(
 		swebench?: boolean;
 		contractSource?: "file" | "mcp";
 		testFeedback?: boolean;
+		recovery?: boolean;
 	},
 	results: Record<string, unknown>[],
 	observedCost: number,
@@ -518,7 +522,8 @@ export function saveRunReport(
 		});
 	if (!localStubUrl && !batchL && !options.swebench && !options.testFeedback && !options.contractSource)
 		writeFileSync(join(packageRoot, "docs", "p5-real-model-results.json"), `${JSON.stringify(report, null, 2)}\n`);
-	if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
+	if (runOutput && options.recovery) atomicPrivateJson(join(runOutput, "run.json"), report, "create");
+	else if (runOutput) writeFileSync(join(runOutput, "run.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 	return report.summary;
 }
 function readSandboxAudit(path: string): Record<string, unknown> {

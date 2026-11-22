@@ -56,6 +56,9 @@ export default function batchLTools(pi: ExtensionAPI): void {
 					isError: true,
 				}),
 			});
-		pi.setActiveTools(["read", "grep", "find", "ls", "write", "edit", ...BATCH_L_MODULE_TOOLS]);
+		const fileTools = ["read", "grep", "find", "ls", "write", "edit"];
+		// Active tools keep their order on main. Append the paired tools from the same starting set.
+		pi.setActiveTools(fileTools);
+		pi.setActiveTools([...fileTools, ...BATCH_L_MODULE_TOOLS]);
 	});
 }

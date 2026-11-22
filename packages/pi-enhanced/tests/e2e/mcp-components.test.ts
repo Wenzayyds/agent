@@ -1,4 +1,6 @@
 import { McpClient, StdioTransport } from "@earendil-works/pi-mcp";
+import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -65,7 +67,7 @@ serenaDocker("Serena 2.1.0 official Docker image", () => {
 	it(
 		"finds a real symbol and its references through stdio MCP",
 		async () => {
-			const fixture = resolve(packageDir, "fixtures/serena-project");
+			const fixture = mkdtempSync(resolve(tmpdir(), "pi-serena-"));
 			const client = new McpClient({ name: "pi-enhanced-p1-serena", version: "0.1.0" });
 			const transport = new StdioTransport({
 				command: "docker",
@@ -73,6 +75,7 @@ serenaDocker("Serena 2.1.0 official Docker image", () => {
 					"run",
 					"--rm",
 					"-i",
+					"--pull=never",
 					"--mount",
 					`type=bind,source=${fixture},target=/workspaces/project,readonly`,
 					"--tmpfs",
@@ -91,6 +94,9 @@ serenaDocker("Serena 2.1.0 official Docker image", () => {
 				closeTimeoutMs: 10_000,
 			});
 			try {
+				cpSync(resolve(packageDir, "fixtures/serena-project"), fixture, { recursive: true });
+				// Docker needs the nested tmpfs mount point before it makes the project read-only.
+				mkdirSync(resolve(fixture, ".serena/cache"), { recursive: true });
 				const initialized = await client.connect(transport);
 				expect(initialized.protocolVersion).toBe(client.protocolVersion);
 				const tools = await client.listTools({ timeoutMs: 120_000 });
@@ -124,7 +130,11 @@ serenaDocker("Serena 2.1.0 official Docker image", () => {
 				expect(referencesText).toContain("build_target");
 				expect(referencesText).toContain("consume_target");
 			} finally {
-				await client.close();
+				try {
+					await client.close();
+				} finally {
+					rmSync(fixture, { recursive: true, force: true });
+				}
 			}
 		},
 		300_000,

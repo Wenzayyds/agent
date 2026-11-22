@@ -10,7 +10,7 @@ export default function recoveryTask(pi: ExtensionAPI): void {
 		tool === "enhanced_memory_search" || tool === "enhanced_task_get");
 	createTaskManagerExtension({ initialBinding: { taskId, stepId: phase === "pause" ? "reproduce" : "repair" } })(pi);
 	const settledWrites = new Set<string>();
-	const readOnly = phase === "pause" && process.env.PI_ENHANCED_V3_READONLY_PHASE === "1";
+	const readOnly = process.env.PI_ENHANCED_V3_READONLY_PHASE === "1";
 	pi.on("session_start", (_event, ctx) => {
 		if (phase === "resume") {
 			for (const entry of ctx.sessionManager.getBranch())
@@ -23,7 +23,7 @@ export default function recoveryTask(pi: ExtensionAPI): void {
 	});
 	pi.on("tool_call", (event) => {
 		if (readOnly && (event.toolName === "edit" || event.toolName === "write"))
-			return { block: true, reason: "The first phase only collects read-only evidence." };
+			return { block: true, reason: "This phase only permits read-only verification." };
 		if ((event.toolName === "edit" || event.toolName === "write") && settledWrites.has(event.toolCallId))
 			return { block: true, reason: "This tool call already has a durable write result in the recovered session." };
 	});

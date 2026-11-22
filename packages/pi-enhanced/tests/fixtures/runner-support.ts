@@ -42,13 +42,14 @@ export function toolCallsSse(
 	calls: { name: string; args: Record<string, unknown> }[],
 	input: number,
 	output: number,
+	distinguishCalls = false,
 ): string {
 	return responseSse(
 		{
 			role: "assistant",
 			tool_calls: calls.map(({ name, args }, index) => ({
 				index,
-				id: `call-${name}-${input}`,
+				id: distinguishCalls ? `call-${name}-${input}-${index}` : `call-${name}-${input}`,
 				type: "function",
 				function: { name, arguments: JSON.stringify(args) },
 			})),

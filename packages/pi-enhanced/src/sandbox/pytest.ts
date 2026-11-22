@@ -16,7 +16,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { sandboxUser } from "./broker.ts";
-import { assertSandboxContainerOwner, assertSandboxWorkspaceIdentity, SANDBOX_CONTAINER_OWNER_LABEL, type SandboxConfig } from "./config.ts";
+import {
+	assertSandboxContainerOwner,
+	assertSandboxWorkspaceIdentity,
+	SANDBOX_CONTAINER_OWNER_LABEL,
+	type SandboxConfig,
+} from "./config.ts";
 
 /** Host-only configuration: exact files, never globs or model-supplied paths. */
 export interface PytestConfig {
@@ -77,7 +82,11 @@ function boundedRead(fd: number): Buffer {
 	return buffer.subarray(0, length);
 }
 
-export function pytestFileVersions(config: SandboxConfig, policy: Pick<PytestConfig, "files" | "candidateImport">, destination?: string): Map<string, string> {
+export function pytestFileVersions(
+	config: SandboxConfig,
+	policy: Pick<PytestConfig, "files" | "candidateImport">,
+	destination?: string,
+): Map<string, string> {
 	assertSandboxWorkspaceIdentity(config);
 	const versions = new Map<string, string>();
 	let total = 0;
@@ -125,12 +134,33 @@ export function pytestFileVersions(config: SandboxConfig, policy: Pick<PytestCon
 	return versions;
 }
 
-const program = `import sys, pytest
+const pytestArgs =
+	"['-c', '/dev/null', '-p', 'no:cacheprovider', '--basetemp=/tmp/pytest', '--tb=short', '-r', 'fE', '-q', *sys.argv[1:]]";
+const setup = `import sys, pytest
 sys.dont_write_bytecode = True
-sys.path.insert(0, '/workspace')
-raise SystemExit(pytest.main(['-c', '/dev/null', '-p', 'no:cacheprovider', '--basetemp=/tmp/pytest', '--tb=short', '-r', 'fE', '-q', *sys.argv[1:]]))`;
+sys.path.insert(0, '/workspace')`;
+const program = setup + `\nraise SystemExit(pytest.main(${pytestArgs}))`;
 
-const pytestSourceProgram = `import os, pathlib, sys
+// The host-selected wrapper reports completed call phases separately from terminal diagnostics.
+// A zero exit from an all-skipped suite cannot complete a task step.
+function observedProgram(marker: string): string {
+	return (
+		setup +
+		`
+class Calls:
+    passed = 0
+    def pytest_runtest_logreport(self, report):
+        if report.when == 'call' and report.passed:
+            self.passed += 1
+calls = Calls()
+code = pytest.main(${pytestArgs}, plugins=[calls])
+print('${marker}' + str(calls.passed), flush=True)
+raise SystemExit(code)`
+	);
+}
+
+const pytestSourceProgram =
+	`import os, pathlib, sys
 sys.path.insert(0, "/workspace/src")
 os.environ["PYTHONPATH"] = "/workspace/src"
 import _pytest
@@ -146,7 +176,8 @@ for module in (pytest, _pytest):
     assert str(pathlib.Path(module.__file__).resolve()).startswith("/workspace/src/"), module.__file__
     print("Candidate module:", module.__file__)
 ` + program;
-const requestsSourceProgram = `import pathlib, sys
+const requestsSourceProgram =
+	`import pathlib, sys
 sys.path.insert(0, "/workspace")
 import requests
 assert str(pathlib.Path(requests.__file__).resolve()).startswith("/workspace/requests/"), requests.__file__
@@ -174,10 +205,12 @@ export function isPytestConfig(input: unknown, allowCandidateImport = false): in
 		files.length <= 128 &&
 		new Set(files).size === files.length &&
 		files.every((file) => typeof file === "string" && allowedPath(file, candidateImport)) &&
-		(candidateImport === undefined || allowCandidateImport && (
-			(candidateImport === "pytest" && files.includes("src/_pytest/__init__.py") &&
-				(files.includes("src/pytest.py") || files.includes("src/pytest/__init__.py"))) ||
-			(candidateImport === "requests" && files.includes("requests/__init__.py")))) &&
+		(candidateImport === undefined ||
+			(allowCandidateImport &&
+				((candidateImport === "pytest" &&
+					files.includes("src/_pytest/__init__.py") &&
+					(files.includes("src/pytest.py") || files.includes("src/pytest/__init__.py"))) ||
+					(candidateImport === "requests" && files.includes("requests/__init__.py"))))) &&
 		Array.isArray(tests) &&
 		tests.length >= 1 &&
 		tests.every((test) => typeof test === "string" && files.includes(pytestTargetFile(test) ?? ""))
@@ -185,6 +218,7 @@ export function isPytestConfig(input: unknown, allowCandidateImport = false): in
 }
 
 export interface PytestEvidence {
+	completedPasses?: number;
 	status: PytestResult["status"];
 	targets: readonly string[];
 	files: ReadonlyMap<string, string>;
@@ -193,13 +227,19 @@ export interface PytestEvidence {
 
 /** One instance per session; limits are consumed even when a call fails. */
 export function createPytestExecutor(config: SandboxConfig, input: PytestConfig, namespacePackages = false) {
-	if (!config.enabled || !config.trusted || !isPytestConfig(input, namespacePackages)) throw new Error("PYTEST_CONFIG_DENIED");
+	if (!config.enabled || !config.trusted || !isPytestConfig(input, namespacePackages))
+		throw new Error("PYTEST_CONFIG_DENIED");
 	const policy = structuredClone(input);
 	const timeoutMs = policy.timeoutMs ?? 30_000;
 	let calls = 0;
 	let elapsed = 0;
 	let busy = false;
-	return async (targets: string[], signal?: AbortSignal, observe?: (evidence: PytestEvidence) => void): Promise<PytestResult> => {
+	return async (
+		targets: string[],
+		signal?: AbortSignal,
+		observe?: (evidence: PytestEvidence, result: PytestResult) => void,
+		options: { recordCompletedTests?: boolean } = {},
+	): Promise<PytestResult> => {
 		const result: PytestResult = {
 			status: "sandbox_error",
 			targets: [],
@@ -219,12 +259,18 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig,
 				return file !== undefined && (policy.tests.includes(file) || policy.tests.includes(target));
 			})
 		)
-			return { ...result, status: "unsupported", output: "Only host-approved test files or functions are supported." };
+			return {
+				...result,
+				status: "unsupported",
+				output: "Only host-approved test files or functions are supported.",
+			};
 		result.targets = [...targets];
 		calls++;
 		busy = true;
 		const started = performance.now();
 		let files: ReadonlyMap<string, string> | undefined;
+		const marker = options.recordCompletedTests && !policy.candidateImport ? `pi-pytest-${randomUUID()}:` : undefined;
+		let completedPasses: number | undefined;
 		let root: string | undefined;
 		let id: string | undefined;
 		const docker = (args: string[]) =>
@@ -295,8 +341,18 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig,
 				"-I",
 				"-B",
 				"-c",
-				policy.candidateImport === "pytest" ? pytestSourceProgram : policy.candidateImport === "requests" ? requestsSourceProgram : program,
-				...(policy.candidateImport === "pytest" ? ["-p", "pytester", "--rootdir=/workspace"] : namespacePackages ? ["--import-mode=importlib", "--rootdir=/workspace", "-o", "consider_namespace_packages=true"] : []),
+				policy.candidateImport === "pytest"
+					? pytestSourceProgram
+					: policy.candidateImport === "requests"
+						? requestsSourceProgram
+						: marker
+							? observedProgram(marker)
+							: program,
+				...(policy.candidateImport === "pytest"
+					? ["-p", "pytester", "--rootdir=/workspace"]
+					: namespacePackages
+						? ["--import-mode=importlib", "--rootdir=/workspace", "-o", "consider_namespace_packages=true"]
+						: []),
 				...targets,
 			]);
 			if (!/^[a-f0-9]{64}$/u.test(id)) {
@@ -340,7 +396,7 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig,
 				const timer = setTimeout(stop, Math.min(timeoutMs, 90_000 - elapsed));
 				const collect = (chunk: Buffer) => {
 					count += chunk.length;
-					tail = Buffer.concat([tail, chunk]).subarray(-6000);
+					tail = Buffer.concat([tail, chunk]).subarray(marker ? -6128 : -6000);
 				};
 				child.stdout.on("data", collect);
 				child.stderr.on("data", collect);
@@ -357,7 +413,16 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig,
 					done(code);
 				});
 			});
-			result.output = tail.toString("utf8");
+			if (marker) {
+				const report = new RegExp(marker + "(\\d{1,9})\\r?\\n$").exec(tail.toString("utf8"));
+				if (report) {
+					completedPasses = Number(report[1]);
+					const bytes = Buffer.byteLength(report[0]);
+					tail = tail.subarray(0, tail.length - bytes);
+					count -= bytes;
+				}
+			}
+			result.output = tail.subarray(-6000).toString("utf8");
 			result.truncated = count > 6000;
 			if (stopped) {
 				result.status = cleanupFailed ? "sandbox_error" : signal?.aborted ? "execution_error" : "timeout";
@@ -397,7 +462,17 @@ export function createPytestExecutor(config: SandboxConfig, input: PytestConfig,
 			elapsed += performance.now() - started;
 			busy = false;
 		}
-		if (files) observe?.({ status: result.status, targets: result.targets, files, canRunAgain: calls < 3 && elapsed < 90_000 });
+		if (files)
+			observe?.(
+				{
+					completedPasses,
+					status: result.status,
+					targets: result.targets,
+					files,
+					canRunAgain: calls < 3 && elapsed < 90_000,
+				},
+				result,
+			);
 		while (Buffer.byteLength(JSON.stringify(result)) > 8192) {
 			result.output = result.output.slice(Math.max(1, Math.ceil(result.output.length / 8)));
 			result.truncated = true;

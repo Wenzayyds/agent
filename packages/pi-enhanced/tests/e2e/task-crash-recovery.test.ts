@@ -1,7 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
 import type { TaskManagerConfig } from "../../src/task-manager/config.ts";
@@ -29,9 +30,9 @@ describe("P4 real process interruption recovery", () => {
 			execFileSync("git", ["add", "fixture.txt"], { cwd: project });
 			execFileSync("git", ["commit", "-m", "fixture"], { cwd: project, stdio: "ignore" });
 
-			const fixture = resolve("packages/pi-enhanced/tests/fixtures/task-crash-child.ts");
+			const fixture = fileURLToPath(new URL("../fixtures/task-crash-child.ts", import.meta.url));
 			const child = spawn(process.execPath, ["--experimental-strip-types", fixture, project, agentDir, mode], {
-				cwd: resolve("."),
+				cwd: project,
 				stdio: ["ignore", "ignore", "ignore", "ipc"],
 				windowsHide: true,
 			});

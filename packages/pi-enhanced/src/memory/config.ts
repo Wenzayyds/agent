@@ -9,6 +9,8 @@ export interface MemoryIntelligenceConfig {
 	enabled: boolean;
 	mode: MemoryRetrievalMode;
 	rerankerEnabled: boolean;
+	backend?: "tfidf-svd" | "e5-qdrant";
+	qdrantEndpoint?: string;
 	startupTimeoutMs: number;
 	requestTimeoutMs: number;
 	maximumSnapshotRecords: number;
@@ -109,6 +111,8 @@ function readPatch(path: string, errors: string[]): MemoryConfigPatch | undefine
 		"enabled",
 		"mode",
 		"rerankerEnabled",
+		"backend",
+		"qdrantEndpoint",
 		"startupTimeoutMs",
 		"requestTimeoutMs",
 		"maximumSnapshotRecords",
@@ -129,6 +133,15 @@ function readPatch(path: string, errors: string[]): MemoryConfigPatch | undefine
 			return invalid(path, "mode", errors);
 		}
 		parsed.mode = intelligence.mode as MemoryRetrievalMode;
+	}
+	if (intelligence.backend !== undefined) {
+		if (intelligence.backend !== "tfidf-svd" && intelligence.backend !== "e5-qdrant")
+			return invalid(path, "backend", errors);
+		parsed.backend = intelligence.backend;
+	}
+	if (intelligence.qdrantEndpoint !== undefined) {
+		if (typeof intelligence.qdrantEndpoint !== "string") return invalid(path, "qdrantEndpoint", errors);
+		parsed.qdrantEndpoint = intelligence.qdrantEndpoint;
 	}
 	if (intelligence.rerankerEnabled !== undefined) {
 		if (typeof intelligence.rerankerEnabled !== "boolean") return invalid(path, "rerankerEnabled", errors);

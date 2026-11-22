@@ -434,6 +434,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const sessionWithRunner = session as unknown as {
 			_extensionRunner?: {
 				hasHandlers: (eventType: string) => boolean;
+				applyModelRequestPolicy: typeof session.extensionRunner.applyModelRequestPolicy;
 				emit: (event: { type: string; message?: { role?: string } }) => Promise<void>;
 				emitMessageEnd: (event: { type: string; message?: { role?: string } }) => Promise<undefined>;
 				emitToolCall: (event: { type: string; toolCallId: string }) => Promise<undefined>;
@@ -452,6 +453,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		};
 		sessionWithRunner._extensionRunner = {
 			hasHandlers: (eventType) => eventType === "tool_call",
+			applyModelRequestPolicy: (_phase, messages) => ({ messages }),
 			emit: async () => {},
 			emitMessageEnd: async () => undefined,
 			emitToolCall: async () => {
@@ -581,6 +583,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const sessionWithRunner = session as unknown as {
 			_extensionRunner?: {
 				hasHandlers: (eventType: string) => boolean;
+				applyModelRequestPolicy: typeof session.extensionRunner.applyModelRequestPolicy;
 				emit: (event: { type: string; message?: { role?: string } }) => Promise<void>;
 				emitMessageEnd: (event: { type: string; message?: { role?: string } }) => Promise<undefined>;
 				emitInput: (
@@ -598,6 +601,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		};
 		sessionWithRunner._extensionRunner = {
 			hasHandlers: () => false,
+			applyModelRequestPolicy: (_phase, messages) => ({ messages }),
 			emit: async () => {},
 			emitMessageEnd: async (event) => {
 				if (event.type === "message_end" && event.message?.role === "assistant") {

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { classifyMemory, memoryTaskId } from "./contracts.ts";
 import type {
 	CoreMemoryName,
 	MaintenanceProposal,
@@ -7,6 +6,7 @@ import type {
 	MemoryDoctorReport,
 	MemoryRecord,
 } from "./contracts.ts";
+import { classifyMemory, memoryTypeOf, recordScope } from "./contracts.ts";
 
 export interface MemoryGovernanceConfig {
 	maximumScanRecords: number;
@@ -33,10 +33,20 @@ export function planMemoryGovernance(options: {
 		.filter((group) => group.length > 1)
 		.map(ids);
 	const conflictGroups = groupBy(
-		records.filter((record) => record.status === "verified" && record.lifecycle === "active" && record.subjectKey),
-		(record) => `${governanceScope(record)}:${record.subjectKey ?? ""}`,
+		records.filter(
+			(record) =>
+				(record.status === "verified" || record.status === "candidate") &&
+				record.lifecycle === "active" &&
+				record.subjectKey,
+		),
+		(record) => JSON.stringify([governanceScope(record), memoryTypeOf(record), record.subjectKey]),
 	)
-		.filter((group) => group.length > 1 && overlapsValidity(group))
+		.filter(
+			(group) =>
+				group.some((record) => record.status === "verified") &&
+				new Set(group.map((record) => record.contentHash)).size > 1 &&
+				overlapsValidity(group),
+		)
 		.map(ids);
 	const nearDuplicateGroups = groupBy(records, governanceScope)
 		.flatMap((scope) => collectNearDuplicates(scope, options.config.nearDuplicatePercent / 100))
@@ -84,6 +94,12 @@ export function planMemoryGovernance(options: {
 		);
 	}
 	for (const group of nearDuplicateGroups) {
+		if (
+			records.some(
+				(record) => group.includes(record.id) && (record.type === "preference" || record.type === "working"),
+			)
+		)
+			continue;
 		if (exactDuplicateGroups.some((exact) => group.every((id) => exact.includes(id)))) continue;
 		const source = records.filter((record) => group.includes(record.id));
 		proposals.push(
@@ -189,8 +205,10 @@ export function planMemoryGovernance(options: {
 }
 
 function governanceScope(record: MemoryRecord): string {
-	const classification = classifyMemory(record);
-	return classification === "task" ? `task:${memoryTaskId(record.sources) ?? record.id}` : classification;
+	const scope = recordScope(record);
+	if (!scope) return `unbound:${record.id}`;
+	if (scope.kind === "project") return classifyMemory(record);
+	return JSON.stringify([scope.kind, scope.id]);
 }
 
 function proposal(

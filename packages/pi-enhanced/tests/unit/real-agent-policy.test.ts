@@ -165,6 +165,21 @@ describe("Batch F real model authorization and budget gate", () => {
 		).toThrow("EVAL_GATE_LOCAL_GATEWAY_MODEL_UNSUPPORTED");
 	});
 
+	it.each([[undefined, "standard", 25_000], ["economy", "economy", 20_000], ["premium", "premium", 30_000]])(
+		"uses %s for the local Gateway with the other hard limits intact",
+		(budgetTier, expected, tokens) => {
+			const input = { ...valid, provider: "deepseek", model: "deepseek-flash", budgetEnforcement: "local_hard_gateway",
+				budgetTier, maxTokensPerTask: undefined, maxTotalCostUsd: undefined, maxCallsPerTask: undefined, timeoutMs: undefined };
+			const env = { PI_ENHANCED_REAL_MODEL_EVAL: "1", PI_EVAL_API_KEY: "fake" };
+			expect(buildEvaluationPlan(input, env)).toMatchObject({ budgetTier: expected, maxTokensPerTask: tokens,
+				maxCallsPerTask: 8, maxTotalCostUsd: 0.03, timeoutMs: 180_000, maxOutputTokensPerRequest: 512 });
+			expect(buildEvaluationPlan({ ...input, maxCallsPerTask: "3", maxTotalCostUsd: "0.02", timeoutMs: "60000" }, env))
+				.toMatchObject({ maxCallsPerTask: 3, maxTotalCostUsd: 0.02, timeoutMs: 60_000 });
+			if (budgetTier) expect(() => buildEvaluationPlan({ ...input, maxTokensPerTask: "10000" }, env))
+				.toThrow("EVAL_GATE_BUDGET_TIER_MISMATCH");
+		},
+	);
+
 	it("preflight never reads a key and logs redact secrets and usage", () => {
 		expect(JSON.stringify(preflightView(valid, 5))).not.toContain("fake-secret");
 		expect(redactEvaluationText("token=fake-secret sk-example-123456789", ["fake-secret"])).not.toContain(

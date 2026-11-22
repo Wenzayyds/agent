@@ -35,6 +35,17 @@ export function normalizePlan(taskId: string, inputs: readonly TaskStepInput[], 
 }
 
 function normalizeValidation(value: StepValidation): StepValidation {
+	if (value.kind === "pytest") {
+		if (
+			typeof value.target !== "string" ||
+			value.target.length > 240 ||
+			!/^(?:[\w-]+\/)*[\w.-]+\.py(?:::[A-Za-z_]\w*){0,2}$/u.test(value.target) ||
+			typeof value.expectedSha256 !== "string" ||
+			!/^[a-f0-9]{64}$/u.test(value.expectedSha256)
+		)
+			throw new TaskError("TASK_VALIDATION_ERROR", "Invalid pytest target or expected test file hash");
+		return { kind: "pytest", target: value.target, expectedSha256: value.expectedSha256 };
+	}
 	if (value.kind === "command_exit") {
 		if (
 			(value.toolName !== "bash" && value.toolName !== "powershell") ||

@@ -66,6 +66,9 @@ import type {
 	MessageEndEvent,
 	MessageEndEventResult,
 	MessageRenderer,
+	ModelRequestFetchEvent,
+	ModelRequestPolicyEvent,
+	ModelRequestPolicyResult,
 	ProjectTrustContext,
 	ProjectTrustEvent,
 	ProjectTrustEventResult,
@@ -1365,6 +1368,86 @@ export class ExtensionRunner {
 		return currentMessages;
 	}
 
+	applyModelRequestPolicy(
+		phase: ModelRequestPolicyEvent["phase"],
+		messages: AgentMessage[],
+	): ModelRequestPolicyResult {
+		const entries = this.sessionManager.getEntries();
+		const entryIds = new Set(entries.map(({ id }) => id));
+		const detachedCompactions = new Set<number>();
+		for (const entry of entries) {
+			if (
+				entry.type === "compaction" &&
+				(!entry.parentId || !entryIds.has(entry.parentId) || !entryIds.has(entry.firstKeptEntryId))
+			) {
+				detachedCompactions.add(Date.parse(entry.timestamp));
+			}
+		}
+		// Detached legacy summaries have no source chain that an installed
+		// disclosure policy could validate, including when no extension is loaded.
+		const recoverable = (message: AgentMessage) =>
+			(message.role !== "branchSummary" || (message.fromId !== null && entryIds.has(message.fromId))) &&
+			(message.role !== "compactionSummary" || !detachedCompactions.has(message.timestamp));
+		if (!messages.every(recoverable)) messages = messages.filter(recoverable);
+		const required = new Set<string>();
+		const inspect = (message: AgentMessage) => {
+			if (message.role === "assistant") {
+				for (const [kind, proof] of Object.entries(message.requestProvenance ?? {}))
+					if (Array.isArray(proof) && proof.length) required.add(kind);
+			}
+			if (message.role === "toolResult") {
+				for (const name of [message.toolName, ...(message.nestedCalls?.calls.map(({ name }) => name) ?? [])]) {
+					if (name === "enhanced_docs_search" || name === "enhanced_docs_read") required.add("knowledge");
+					if (name === "enhanced_memory_search" || name === "enhanced_context_restore")
+						required.add("memoryContext");
+				}
+			}
+			if (
+				message.role === "custom" &&
+				(message.customType === "pi-enhanced-context-memory" ||
+					message.customType === "pi-enhanced-restored-context")
+			)
+				required.add("memoryContext");
+		};
+		for (const message of messages) inspect(message);
+		for (const entry of entries) if (entry.type === "message") inspect(entry.message);
+		if (!this.hasHandlers("model_request_policy") && !required.size) return { messages };
+		const ctx = this.createContext();
+		const checks: (() => void)[] = [];
+		const covered = new Set<string>();
+		let isolateTransport = false;
+		let provenance: ModelRequestPolicyResult["provenance"];
+		for (const { handlers } of snapshotEventHandlers(this.extensions, "model_request_policy")) {
+			for (const handler of handlers) {
+				const result = handler({ type: "model_request_policy", phase, messages }, ctx) as
+					| ModelRequestPolicyResult
+					| undefined;
+				if (!result) continue;
+				if (!Array.isArray(result.messages)) throw new Error("Invalid model request policy result");
+				messages = result.messages;
+				isolateTransport ||= result.isolateTransport === true;
+				if (result.provenance) provenance = { ...provenance, ...result.provenance };
+				for (const source of result.handlesSources ?? []) covered.add(source);
+				if (result.beforeSend) checks.push(result.beforeSend);
+			}
+		}
+		for (const kind of required) {
+			if (!covered.has(kind)) throw new Error(`The disclosure policy for this session is unavailable (${kind})`);
+		}
+		return {
+			messages,
+			isolateTransport,
+			provenance,
+			...(checks.length > 0
+				? {
+						beforeSend: () => {
+							for (const check of checks) check();
+						},
+					}
+				: {}),
+		};
+	}
+
 	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {
 		const ctx = this.createContext();
 		let currentPayload = payload;
@@ -1394,6 +1477,21 @@ export class ExtensionRunner {
 		}
 
 		return currentPayload;
+	}
+
+	async resolveModelRequestFetch(event: ModelRequestFetchEvent): Promise<typeof globalThis.fetch | undefined> {
+		let transport: typeof globalThis.fetch | undefined;
+		const ctx = this.createContext();
+		for (const { handlers } of snapshotEventHandlers(this.extensions, "model_request_fetch")) {
+			for (const handler of handlers) {
+				const result = await handler(event, ctx);
+				if (result === undefined) continue;
+				if (typeof result !== "function") throw new Error("Invalid model request transport");
+				if (transport) throw new Error("Multiple extensions selected a model request transport");
+				transport = result as typeof globalThis.fetch;
+			}
+		}
+		return transport;
 	}
 
 	async emitBeforeProviderHeaders(headers: ProviderHeaders): Promise<ProviderHeaders> {

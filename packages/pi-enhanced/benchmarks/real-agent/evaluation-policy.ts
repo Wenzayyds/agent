@@ -1,3 +1,11 @@
+import {
+	DEFAULT_TASK_BUDGET_TIER,
+	TASK_BUDGET_DEFAULTS,
+	TASK_TOKEN_TIERS,
+	type TaskBudgetTier,
+	taskBudgetTier,
+} from "../../src/shared/task-budget.ts";
+
 export interface EvaluationPlan {
 	runId: string;
 	provider: string;
@@ -6,6 +14,8 @@ export interface EvaluationPlan {
 	maxTotalCostUsd: number;
 	maxTasks: number;
 	maxTokensPerTask: number;
+	budgetTier?: TaskBudgetTier;
+	maxOutputTokensPerRequest?: number;
 	maxCallsPerTask: number;
 	timeoutMs: number;
 	concurrency: 1;
@@ -14,7 +24,24 @@ export interface EvaluationPlan {
 	sandboxImage: string;
 }
 
+export function fillEvaluationBudget(input: Record<string, string | undefined>): Record<string, string | undefined> {
+	const tier = input.budgetTier ? taskBudgetTier(input.budgetTier) :
+		input.maxTokensPerTask === undefined ? DEFAULT_TASK_BUDGET_TIER : undefined;
+	if (tier && input.maxTokensPerTask !== undefined && Number(input.maxTokensPerTask) !== TASK_TOKEN_TIERS[tier])
+		throw new Error("EVAL_GATE_BUDGET_TIER_MISMATCH");
+	return {
+		...input,
+		budgetTier: tier,
+		maxTokensPerTask: tier ? String(TASK_TOKEN_TIERS[tier]) : input.maxTokensPerTask,
+		maxCallsPerTask: input.maxCallsPerTask ?? String(TASK_BUDGET_DEFAULTS.maxRequests),
+		maxTotalCostUsd: input.maxTotalCostUsd ?? String(TASK_BUDGET_DEFAULTS.maxTotalCostUsd),
+		timeoutMs: input.timeoutMs ?? String(TASK_BUDGET_DEFAULTS.timeoutMs),
+	};
+}
+
 export function buildEvaluationPlan(input: Record<string, string | undefined>, env: NodeJS.ProcessEnv): EvaluationPlan {
+	if (input.budgetEnforcement === "local_hard_gateway") input = fillEvaluationBudget(input);
+	else if (input.budgetTier) throw new Error("EVAL_GATE_BUDGET_TIER_REQUIRES_LOCAL_GATEWAY");
 	const required = [
 		"runId",
 		"provider",
@@ -59,9 +86,13 @@ export function buildEvaluationPlan(input: Record<string, string | undefined>, e
 		provider: input.provider!,
 		model: input.model!,
 		apiKeyEnv: input.apiKeyEnv!,
-		maxTotalCostUsd: numeric("maxTotalCostUsd", 0.01, 100),
+		maxTotalCostUsd: numeric("maxTotalCostUsd", input.budgetEnforcement === "local_hard_gateway" ? Number.MIN_VALUE : 0.01, 100),
 		maxTasks: Math.trunc(numeric("maxTasks", 1, 50)),
 		maxTokensPerTask: Math.trunc(numeric("maxTokensPerTask", 1, 2_000_000)),
+		...(input.budgetTier ? { budgetTier: taskBudgetTier(input.budgetTier) } : {}),
+		...(input.maxOutputTokensPerRequest
+			? { maxOutputTokensPerRequest: Math.trunc(numeric("maxOutputTokensPerRequest", 1, 384_000)) }
+			: input.budgetTier ? { maxOutputTokensPerRequest: TASK_BUDGET_DEFAULTS.maxOutputTokensPerRequest } : {}),
 		maxCallsPerTask: Math.trunc(numeric("maxCallsPerTask", 1, 100)),
 		timeoutMs: Math.trunc(numeric("timeoutMs", 1_000, 900_000)),
 		concurrency: concurrency as 1,
@@ -72,6 +103,7 @@ export function buildEvaluationPlan(input: Record<string, string | undefined>, e
 }
 
 export function preflightView(input: Record<string, string | undefined>, taskCount: number, testFeedback = false): Record<string, unknown> {
+	if (input.budgetEnforcement === "local_hard_gateway") input = fillEvaluationBudget(input);
 	return {
 		mode: "preflight",
 		authorized: false,
@@ -80,6 +112,7 @@ export function preflightView(input: Record<string, string | undefined>, taskCou
 		apiKeyEnv: input.apiKeyEnv ? "[configured-name-not-read]" : null,
 		requestedTasks: Math.min(Number(input.maxTasks) || taskCount, taskCount),
 		maxPotentialTokens: (Number(input.maxTasks) || taskCount) * (Number(input.maxTokensPerTask) || 0),
+		budgetTier: input.budgetTier ?? null,
 		maxTotalCostUsd: Number(input.maxTotalCostUsd) || null,
 		maxCallsPerTask: Number(input.maxCallsPerTask) || null,
 		timeoutMs: Number(input.timeoutMs) || null,

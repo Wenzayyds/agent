@@ -70,4 +70,25 @@ describe("P3 verified Memory injection", () => {
 			expect(result.injectedMemoryIds).toEqual([]);
 		}
 	});
+
+	it("drops a prior injection when the active task changes and retains shared project knowledge", async () => {
+		const task = record({ scope: { kind: "task", id: "alpha" } });
+		const project = record({ id: "public", content: "Shared project knowledge", scope: { kind: "project" } });
+		let taskId = "alpha";
+		const reader: ScopedMemoryReader = {
+			visibility: async () => ({ taskId }),
+			search: async () => [task, project],
+			get: async (id) => id === task.id ? task : project,
+			getCore: async () => null,
+		};
+		const settings = { reader, config, projectRoot: "C:\\p" };
+		const messages: ContextMessage[] = [{ role: "user", content: "deployment rules", timestamp: 1 }];
+		const first = await injectVerifiedMemory({ ...settings, messages });
+		expect(first.injectedMemoryIds).toEqual([task.id, project.id]);
+		taskId = "beta";
+		const second = await injectVerifiedMemory({ ...settings, messages: first.messages });
+		expect(second.injectedMemoryIds).toEqual([project.id]);
+		expect(JSON.stringify(second.messages)).not.toContain(task.id);
+	});
+
 });

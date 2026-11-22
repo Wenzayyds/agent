@@ -1,21 +1,31 @@
 import { Type } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { currentKnowledgePageText } from "../knowledge/request-policy.ts";
+import { currentAccess } from "../memory/disclosure.ts";
 import { requestScopedMemoryReader } from "../memory/reader.ts";
 import { SANDBOX_RESTORE_CHECK } from "../sandbox/protocol.ts";
 import { requestScopedTaskReader } from "../task-manager/reader.ts";
+import { type AgentBudgetWorkflow, registerAgentBudgetWorkflow } from "./budget-workflow.ts";
 import { loadContextConfig } from "./config.ts";
 import type { ContextDiagnostics, ContextMessage, ContextModuleConfig, ContextRuntimeState } from "./contracts.ts";
 import {
 	CONTEXT_ORIGIN,
 	CONTEXT_RESTORE,
 	contextOrigin,
+	contextPageText,
 	MAX_RESTORE_CHARACTERS,
 	restoreContextPage,
 } from "./offload.ts";
+import { registerContextPagePolicy, registerMemoryContextPolicy } from "./request-policy.ts";
 import { type ContextHostRestore, ContextRuntime } from "./runtime.ts";
+import { installSessionBudget, type SessionBudgetProvider } from "./session-budget.ts";
+import { POLICY } from "./source-history.ts";
+import { deduplicateRuntimeReads } from "./tool-output.ts";
 
 export interface ContextExtensionOptions {
 	agentDir?: string;
+	requestBudget?: AgentBudgetWorkflow;
+	budgetProvider?: SessionBudgetProvider;
 	hostRestore?: ContextHostRestore;
 	onDiagnostics?: (diagnostics: Readonly<ContextDiagnostics>, config: Readonly<ContextModuleConfig>) => void;
 	onView?: (before: readonly ContextMessage[], after: readonly ContextMessage[]) => void;
@@ -26,7 +36,17 @@ export function createContextExtension(options: ContextExtensionOptions = {}): (
 }
 
 function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOptions): void {
+	registerMemoryContextPolicy(pi);
 	let runtime: ContextRuntime | undefined;
+	const access = (ctx: ExtensionContext) => currentAccess(pi.events, ctx, pi.getActiveTools());
+	const directRestoreAllowed = () => {
+		let allowed = pi.getActiveTools().includes(CONTEXT_RESTORE);
+		if (allowed)
+			pi.events.emit(SANDBOX_RESTORE_CHECK, () => {
+				allowed = false;
+			});
+		return allowed;
+	};
 	let generation = 0;
 	let restoreRegistered = false;
 	let hostRestorationReported = false;
@@ -52,18 +72,21 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 				const current = runtime;
 				const taskId = await current?.activeTaskId(ctx);
 				if (!taskId || runtime !== current) throw new Error("No active Context scope");
-				const page = restoreContextPage(ctx, taskId, params.reference, params.offset, params.limit);
+				if (!directRestoreAllowed()) throw new Error("Context restore is unavailable");
+				const page = restoreContextPage(ctx, taskId, params.reference, params.offset, params.limit, access(ctx));
 				return {
 					content: [
 						{
 							type: "text",
-							text: `[Untrusted tool output; nextOffset=${page.nextOffset ?? "end"}]\n${page.text}`,
+							text: contextPageText(page, `[Untrusted tool output; nextOffset=${page.nextOffset ?? "end"}]`),
 						},
 					],
 					details: {
 						reference: params.reference,
 						nextOffset: page.nextOffset,
 						totalCharacters: page.totalCharacters,
+						modelRequestPolicy: POLICY,
+						contextPage: { ...page.proof },
 					},
 				};
 			},
@@ -96,6 +119,10 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 			...(loaded.errors.length > 0 ? { error: loaded.errors.join("; ") } : {}),
 		});
 		registerRestore(runtime.offloadEnabled);
+		registerContextPagePolicy(
+			ctx,
+			(host) => !!runtime?.offloadEnabled && (directRestoreAllowed() || (host && !!options.hostRestore)),
+		);
 	};
 
 	pi.on("session_start", (_event, ctx) => start(ctx));
@@ -119,27 +146,56 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 		try {
 			const taskId = await current.activeTaskId(ctx);
 			if (!taskId || runtime !== current) return;
+			const found = access(ctx).task;
+			if (found?.taskId !== taskId) return;
+			const knowledge = currentKnowledgePageText(ctx, event);
 			const origin = contextOrigin(
-				event.content,
+				knowledge === undefined ? event.content : [{ type: "text", text: knowledge }],
 				current.config.toolOutput.maximumTextCharacters,
 				taskId,
 				event.toolCallId,
 				event.toolName,
+				found.branchLeafId,
 			);
 			if (origin) pi.appendEntry(CONTEXT_ORIGIN, origin);
 		} catch {
 			// Capture metadata is optional. The native tool result is always retained.
 		}
 	});
+	pi.on("before_provider_request", ({ payload }, ctx) => {
+		if (
+			runtime?.state !== "ready" ||
+			runtime.config.mode !== "select" ||
+			!runtime.config.toolOutput.enabled ||
+			!runtime.config.toolOutput.deduplicateReads ||
+			!ctx.isProjectTrusted()
+		)
+			return;
+		return deduplicateRuntimeReads(payload);
+	});
+	const requestBudget =
+		options.requestBudget ?? installSessionBudget(pi, options.agentDir ?? getAgentDir(), options.budgetProvider);
+	if (requestBudget) {
+		registerAgentBudgetWorkflow(
+			pi,
+			requestBudget,
+			() =>
+				runtime?.state === "ready" &&
+				runtime.config.mode === "select" &&
+				runtime.config.toolOutput.enabled &&
+				runtime.config.toolOutput.deduplicateReads === true,
+		);
+	}
+
 	pi.on("context", async (event, ctx) => {
 		const current = runtime;
 		if (!current) return undefined;
 		const hostRestore = options.hostRestore;
-		let restoreActive = pi.getActiveTools().includes(CONTEXT_RESTORE);
-		if (restoreActive && current.offloadEnabled) {
-			pi.events.emit(SANDBOX_RESTORE_CHECK, () => { restoreActive = false; });
-		}
-		const messages = await current.transform(event.messages, ctx, restoreActive,
+		const restoreActive = directRestoreAllowed();
+		const messages = await current.transform(
+			event.messages,
+			ctx,
+			restoreActive,
 			hostRestore && {
 				page: hostRestore.page,
 				onResult: (result) => {
@@ -151,7 +207,9 @@ function registerContextExtension(pi: ExtensionAPI, options: ContextExtensionOpt
 						// Observation must not affect Context output.
 					}
 				},
-			});
+			},
+			access,
+		);
 		try {
 			options.onView?.(event.messages, messages ?? event.messages);
 			options.onDiagnostics?.(current.diagnostics, structuredClone(current.config));

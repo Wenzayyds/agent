@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionContext, ToolExecutionEndEvent, ToolExecutionStartEvent } from "@earendil-works/pi-coding-agent";
 import type { ProjectScope } from "../memory/contracts.ts";
+import type { PytestReceipt, TaskPytestSource } from "../sandbox/task-evidence.ts";
 import type { TaskManagerConfig } from "./config.ts";
 import type { ScopedTaskReader, ScopedTaskSummary } from "./contracts.ts";
 import { TaskError } from "./errors.ts";
@@ -30,14 +31,17 @@ export class TaskRuntime {
 		this.scope = scope;
 		this.error = error;
 		this.service = service;
-		if (service)
+		if (service) {
+			const getActiveNow = () => {
+				const taskId = service.activeBinding?.taskId;
+				return taskId ? this.summary(taskId) : null;
+			};
 			this.reader = {
 				get: async (taskId) => this.summary(taskId),
-				getActive: async () => {
-					const taskId = this.service?.activeBinding?.taskId;
-					return taskId ? this.summary(taskId) : null;
-				},
+				getActive: async () => getActiveNow(),
+				getActiveNow,
 			};
+		}
 	}
 
 	static start(options: {
@@ -45,6 +49,7 @@ export class TaskRuntime {
 		trusted: boolean;
 		scope?: ProjectScope;
 		agentDir: string;
+		pytestSource?: () => TaskPytestSource | undefined;
 	}): TaskRuntime {
 		if (!options.config.enabled) return new TaskRuntime("disabled", options.config);
 		if (!options.trusted) return new TaskRuntime("blocked", options.config);
@@ -60,7 +65,7 @@ export class TaskRuntime {
 				options.config,
 				options.scope,
 				undefined,
-				new TaskService(provider, options.config.maximumSteps),
+				new TaskService(provider, options.config.maximumSteps, options.pytestSource),
 			);
 		} catch (error) {
 			return new TaskRuntime(
@@ -94,6 +99,59 @@ export class TaskRuntime {
 			inputDigest,
 			startedAt: now,
 		});
+	}
+
+	/** Called by the host Sandbox at tool entry, before it creates the Docker snapshot. */
+	openPytestAttempt(workspace: string, toolCallId: string): ((receipt: PytestReceipt) => void) | undefined {
+		const service = this.service;
+		const binding = service?.activeBinding;
+		if (!service || !binding || this.closed || workspace !== this.scope?.rootPath) return;
+		const { taskId, stepId, sessionId } = binding;
+		const snapshot = service.get(taskId);
+		const step = snapshot?.steps.find((s) => s.stepId === stepId);
+		const rule = step?.validation;
+		if (
+			snapshot?.task.status !== "running" ||
+			!step ||
+			!["running", "verifying"].includes(step.status) ||
+			rule?.kind !== "pytest"
+		)
+			return;
+		const attempt = service.provider.getAttempts(taskId).find((a) => a.toolCallId === toolCallId);
+		if (
+			!attempt ||
+			attempt.sessionId !== sessionId ||
+			attempt.stepId !== stepId ||
+			attempt.toolName !== "run_tests" ||
+			attempt.state !== "started"
+		)
+			return;
+		return (receipt) => {
+			const current = service.activeBinding;
+			if (this.closed || current?.taskId !== taskId || current.stepId !== stepId || current.sessionId !== sessionId)
+				return;
+			const verified =
+				attempt.inputDigest === digestToolInput(receipt.usedDefaultTargets ? {} : { targets: [receipt.target] }) &&
+				receipt.status === "passed" &&
+				receipt.exitCode === 0 &&
+				(receipt.completedPasses ?? 0) > 0 &&
+				receipt.target === rule.target &&
+				receipt.testHash === rule.expectedSha256;
+			service.addEvidence({
+				taskId,
+				stepId,
+				toolCallId,
+				attemptId: attempt.attemptId,
+				kind: "sandbox_pytest",
+				sourceRef: `tool:${toolCallId}`,
+				pytest: receipt,
+				confidenceClass: verified ? "validated" : "observed",
+				outcome: verified ? "succeeded" : "failed",
+				digestSource: JSON.stringify(receipt),
+				inputDigest: attempt.inputDigest,
+				resultDigest: receipt.patchHash,
+			});
+		};
 	}
 
 	onToolEnd(event: ToolExecutionEndEvent, ctx: ExtensionContext): void {
@@ -152,7 +210,7 @@ export class TaskRuntime {
 		const binding = this.service.activeBinding;
 		return binding?.sessionId === ctx.sessionManager.getSessionId() ? binding : undefined;
 	}
-	private async summary(taskId: string): Promise<ScopedTaskSummary | null> {
+	private summary(taskId: string): ScopedTaskSummary | null {
 		if (this.closed || !this.service) throw new TaskError("TASK_RUNTIME_UNAVAILABLE", "Task reader is closed");
 		const binding = this.service.activeBinding;
 		if (!binding || binding.taskId !== taskId) return null;

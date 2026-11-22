@@ -200,7 +200,7 @@ describe("P3 verified Memory integration", () => {
 			memory: { enabled: true },
 			"task-manager": { enabled: true, contextSummary: true },
 		});
-		const source = "x".repeat(1_000) + "middle-evidence" + "y".repeat(2_000);
+		const source = "head-evidence" + "x".repeat(987) + "middle-evidence" + "y".repeat(900) + "\nAssertionError: unexpected key casing\n" + "y".repeat(1_100) + "tail-evidence";
 		writeFileSync(join(project, "fixture.txt"), source);
 		let reads = 0;
 		let memory: MemoryService | undefined;
@@ -265,7 +265,10 @@ describe("P3 verified Memory integration", () => {
 				const serialized = JSON.stringify(projected);
 				reference = /v1:[a-f0-9]{64}/u.exec(serialized)?.[0];
 				expect(reference).toBeDefined();
+				expect(serialized).toContain("head-evidence");
+				expect(serialized).toContain("tail-evidence");
 				expect(serialized).not.toContain("middle-evidence");
+				expect(serialized).toContain("AssertionError: unexpected key casing");
 				return fauxAssistantMessage("Inspection finished");
 			},
 		]);
@@ -273,7 +276,7 @@ describe("P3 verified Memory integration", () => {
 		expect(first.harness.getPendingResponseCount()).toBe(0);
 		expect(reference).toBeDefined();
 		const sessionFile = first.harness.sessionManager.getSessionFile()!;
-		expect(readFileSync(sessionFile, "utf8")).toContain(source);
+		expect(readFileSync(sessionFile, "utf8")).toContain(JSON.stringify(source).slice(1, -1));
 		await first.invoke("enhanced-task-evidence", `${taskId} inspect attest observed file content`);
 		await first.invoke("enhanced-task-step", `${taskId} inspect verify 2`);
 		await first.invoke("enhanced-task-step", `${taskId} inspect complete 3`);

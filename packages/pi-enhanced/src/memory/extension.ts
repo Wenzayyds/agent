@@ -1,6 +1,9 @@
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { registerMemoryContextPolicy } from "../context/request-policy.ts";
+import { requestScopedTaskReader } from "../task-manager/reader.ts";
 import { registerMemoryCandidateWriterBroker } from "./candidate-writer.ts";
 import { loadMemoryConfig } from "./config.ts";
+import { MemoryError } from "./errors.ts";
 import { registerMemoryInteractions, setMemorySearchToolAvailability } from "./interaction.ts";
 import { registerScopedMemoryReaderBroker } from "./reader.ts";
 import type { MemoryRuntime, OpenMemoryBackend } from "./runtime.ts";
@@ -16,7 +19,7 @@ function formatStatus(runtime: MemoryRuntime | undefined): string {
 		...(runtime.intelligence
 			? [
 					`Retrieval: ${runtime.intelligence.status.state} configured=${runtime.intelligence.status.configuredMode} active=${runtime.intelligence.status.activeMode}`,
-					`Embedding: ${runtime.intelligence.status.modelId ?? "not-loaded"} index=${runtime.intelligence.status.indexSize} reranker=${runtime.intelligence.status.reranker}`,
+					`Embedding: ${runtime.intelligence.status.modelId ?? "not-loaded"} revision=${runtime.intelligence.status.modelRevision ?? "none"} dimensions=${runtime.intelligence.status.vectorDimensions ?? "unknown"} index=${runtime.intelligence.status.indexSize ?? "unknown"} reranker=${runtime.intelligence.status.reranker}`,
 					...(runtime.intelligence.status.lastErrorCode
 						? [`Retrieval error: ${runtime.intelligence.status.lastErrorCode}`]
 						: []),
@@ -37,6 +40,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): (pi
 }
 
 function registerMemoryExtension(pi: ExtensionAPI, options: MemoryExtensionOptions): void {
+	registerMemoryContextPolicy(pi);
 	let runtime: MemoryRuntime | undefined;
 	let interactionsRegistered = false;
 	let unsubscribeReaderBroker: (() => void) | undefined;
@@ -66,6 +70,32 @@ function registerMemoryExtension(pi: ExtensionAPI, options: MemoryExtensionOptio
 			cwd: ctx.cwd,
 			agentDir,
 			sessionManager: ctx.sessionManager,
+			resolveVisibility: async () => {
+				if (!ctx.isProjectTrusted()) throw new MemoryError("MEMORY_RUNTIME_CLOSED", "Project trust was withdrawn");
+				const sessionId = ctx.sessionManager.getSessionId();
+				const conditions = [process.platform, `platform:${process.platform}`, `node:${process.versions.node}`];
+				if (runtime?.scope) conditions.push(`project:${runtime.scope.projectId}`);
+				for (const name of pi
+					.getActiveTools()
+					.filter((name) => /^[a-z_]{1,58}$/u.test(name))
+					.sort()
+					.slice(0, 28))
+					conditions.push(`tool:${name}`);
+				try {
+					const reader = await requestScopedTaskReader(pi.events, ctx, 100);
+					const task = await reader.getActive();
+					if (
+						task?.sessionId === sessionId &&
+						task.projectId === runtime?.scope?.projectId &&
+						(task.branchLeafId === null ||
+							ctx.sessionManager.getBranch().some(({ id }) => id === task.branchLeafId))
+					)
+						return { sessionId, taskId: task.taskId, taskBranchId: task.branchLeafId, conditions };
+				} catch {
+					// Memory can run without the Task extension.
+				}
+				return { sessionId, conditions };
+			},
 			openBackend: options.openBackend ?? openMemoryService,
 		});
 		runtime = next;
@@ -91,6 +121,20 @@ function registerMemoryExtension(pi: ExtensionAPI, options: MemoryExtensionOptio
 					service: next.backend,
 					scope: next.scope,
 					sessionId: ctx.sessionManager.getSessionId(),
+					isCompletedTask: async (taskId) => {
+						if (runtime !== next || !ctx.isProjectTrusted()) return false;
+						const reader = await requestScopedTaskReader(pi.events, ctx, 100);
+						const task = await reader.get(taskId);
+						return (
+							runtime === next &&
+							task?.taskId === taskId &&
+							task.status === "completed" &&
+							task.projectId === next.scope?.projectId &&
+							task.sessionId === ctx.sessionManager.getSessionId() &&
+							(task.branchLeafId === null ||
+								ctx.sessionManager.getBranch().some(({ id }) => id === task.branchLeafId))
+						);
+					},
 				});
 			}
 		}

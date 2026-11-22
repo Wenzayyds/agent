@@ -29,9 +29,16 @@ import {
 	type BeforeToolCallResult,
 	type PrepareNextTurnContext,
 	runToolCall,
+	type StreamFn,
 	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { contentText, getCurrentSystemMessage, getCurrentTools, retryDelayMs } from "@earendil-works/pi-ai";
+import {
+	contentText,
+	createAssistantMessageEventStream,
+	getCurrentSystemMessage,
+	getCurrentTools,
+	retryDelayMs,
+} from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -70,9 +77,11 @@ import {
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
+	createFileOps,
 	estimateContextTokens,
 	estimateProjectedContextTokens,
 	estimateTokens,
+	extractFileOpsFromMessage,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -114,7 +123,7 @@ import {
 } from "./extensions/index.ts";
 import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "./extensions/runner.ts";
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
-import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
+import { type BashExecutionMessage, type CustomMessage, convertToLlm, withRequestSourceMessages } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
@@ -376,6 +385,23 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 // AgentSession Class
 // ============================================================================
 
+// These adapters run the synchronous check at HTTP handoff (or at the local Faux response).
+function supportsDisclosureCheck(api: string, baseUrl: string): boolean {
+	switch (api) {
+		case "anthropic-messages":
+		case "azure-openai-responses":
+		case "bedrock-converse-stream":
+		case "mistral-conversations":
+		case "openai-codex-responses":
+		case "openai-completions":
+		case "openai-responses":
+		case "pi-messages":
+			return true;
+		default:
+			return api.startsWith("faux:") && baseUrl === "http://localhost:0";
+	}
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -517,6 +543,7 @@ export class AgentSession {
 		this._installAgentBoundaryHooks();
 		this._installHiddenDeclarationsProjection();
 		this._installAgentForcedPromptProjection();
+		this._installModelRequestPolicy();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -581,11 +608,15 @@ export class AgentSession {
 	}> {
 		// Route a virtual model first: summaries size their input and output from the model they get.
 		const { model, thinkingLevel } = isVirtualModel(selectedModel)
-			? await this._modelRuntime.resolveModel(selectedModel, convertToLlm(this.messages), {
-					reason: "direct",
-					thinkingLevel: this.thinkingLevel,
-					signal,
-				})
+			? await this._modelRuntime.resolveModel(
+					selectedModel,
+					convertToLlm(this._projectDerivedContext(this.messages)),
+					{
+						reason: "direct",
+						thinkingLevel: this.thinkingLevel,
+						signal,
+					},
+				)
 			: { model: selectedModel, thinkingLevel: this.thinkingLevel };
 		if (this.agent.streamFunction === streamSimple) {
 			return { ...(await this._getRequiredRequestAuth(model, signal)), thinkingLevel };
@@ -784,6 +815,98 @@ export class AgentSession {
 		return { ...context, messages: this.sessionManager.buildSessionProjection().messages };
 	}
 
+	private _projectDerivedContext(messages: AgentMessage[]): AgentMessage[] {
+		return this._extensionRunner.applyModelRequestPolicy("derived", messages).messages;
+	}
+
+	private _installModelRequestPolicy(): void {
+		const previous = this.agent.transformContext;
+		this.agent.transformContext = async (messages, signal) => {
+			const prepared = this._extensionRunner.applyModelRequestPolicy("transcript", messages).messages;
+			if (!previous) return prepared;
+			const transformed = await previous(prepared, signal);
+			return this._extensionRunner.applyModelRequestPolicy("transcript", transformed).messages;
+		};
+		const previousWrap = this.agent.wrapRequestStream;
+		this.agent.wrapRequestStream = (stream) => this._wrapModelRequestStream(previousWrap?.(stream) ?? stream);
+	}
+
+	private _wrapModelRequestStream(send: StreamFn): StreamFn {
+		return (model, context, options) => {
+			const sourceMessages = withRequestSourceMessages(context.messages);
+			let projection = this._extensionRunner.applyModelRequestPolicy("dispatch", sourceMessages);
+			if (
+				projection.beforeSend &&
+				(!supportsDisclosureCheck(model.api, model.baseUrl) ||
+					this._modelRuntime.getRegisteredProviderConfig(model.provider)?.streamSimple ||
+					this._modelRuntime.getRegisteredNativeProvider(model.provider))
+			) {
+				// An adapter without a guarded handoff may still process the independent transcript.
+				const safe = this._extensionRunner.applyModelRequestPolicy("derived", sourceMessages);
+				projection = {
+					...safe,
+					provenance:
+						projection.provenance &&
+						Object.fromEntries(Object.keys(projection.provenance).map((policy) => [policy, []])),
+				};
+			}
+			const messages =
+				projection.messages === context.messages &&
+				!projection.isolateTransport &&
+				!context.messages.some((message) => message.role === "assistant" && message.requestProvenance)
+					? context
+					: {
+							...context,
+							messages: convertToLlm(projection.messages).map((message) => {
+								if (message.role === "assistant" && message.requestProvenance) {
+									const { requestProvenance: _local, ...wire } = message;
+									return wire;
+								}
+								// Some provider adapters serialize the entire context object.
+								if (message.role === "toolResult" && projection.isolateTransport) {
+									const { details: _details, nestedCalls: _nestedCalls, ...wire } = message;
+									return wire;
+								}
+								return message;
+							}),
+						};
+			const check = projection.beforeSend;
+			const stream =
+				projection.isolateTransport || check
+					? send(model, messages, {
+							...options,
+							cacheRetention: "none",
+							transport: "sse",
+							...(check
+								? {
+										beforeSend: () => {
+											options?.beforeSend?.();
+											check();
+										},
+									}
+								: {}),
+						})
+					: send(model, messages, options);
+			const provenance = projection.provenance;
+			if (!provenance) return stream;
+			return Promise.resolve(stream).then((source) => {
+				const annotated = createAssistantMessageEventStream();
+				void (async () => {
+					for await (const event of source) {
+						if (event.type === "done") {
+							annotated.push({ ...event, message: { ...event.message, requestProvenance: provenance } });
+						} else {
+							annotated.push(event);
+						}
+					}
+					const result = await source.result();
+					annotated.end({ ...result, requestProvenance: provenance });
+				})();
+				return annotated;
+			});
+		};
+	}
+
 	private _installAgentRequestProjection(): void {
 		const previousPrepareRequest = this.agent.prepareRequest;
 		this.agent.prepareRequest = async (request, signal) => {
@@ -819,13 +942,17 @@ export class AgentSession {
 			const lastResponse = context.messages.findLastIndex((message) => message.role === "assistant");
 			const userTurn = context.messages.slice(lastResponse + 1).some((message) => message.role === "user");
 			const state = getVirtualModelState(this.sessionManager.getBranch(), model.provider, model.id);
-			const route = await this._modelRuntime.resolveModel(model, convertToLlm(context.messages), {
-				reason: failed ? "retry" : userTurn ? "user" : "continuation",
-				thinkingLevel,
-				signal,
-				failed,
-				state,
-			});
+			const route = await this._modelRuntime.resolveModel(
+				model,
+				convertToLlm(this._projectDerivedContext(context.messages)),
+				{
+					reason: failed ? "retry" : userTurn ? "user" : "continuation",
+					thinkingLevel,
+					signal,
+					failed,
+					state,
+				},
+			);
 			if (route.state !== undefined && route.state !== state) {
 				const data: VirtualModelStateData = { provider: model.provider, modelId: model.id, state: route.state };
 				const entry = this.sessionManager.getEntry(
@@ -1591,9 +1718,14 @@ export class AgentSession {
 	 * the registered, non-hidden ones; they are declared to the model. Active tools with a
 	 * `prepareLoadout` hook can change the declared descriptions and hide declarations from
 	 * requests (see {@link _installHiddenDeclarationsProjection}).
+	 *
+	 * The active tools are a set: tools that stay active keep their current order and newly active
+	 * ones are appended, so reordering the same names does not change the prompt (#11495).
 	 */
 	private _applyToolLoadout(toolNames: string[]): AgentTool[] {
-		const tools = [...new Set(toolNames)].flatMap((name) => {
+		const requested = new Set(toolNames);
+		const kept = this.getActiveToolNames().filter((name) => requested.has(name));
+		const tools = [...new Set([...kept, ...requested])].flatMap((name) => {
 			const tool = this._toolRegistry.get(name);
 			return tool && this._getToolExposure(name) !== "hidden" && this._isActivatable(name) ? [tool] : [];
 		});
@@ -2787,7 +2919,20 @@ export class AgentSession {
 		signal: AbortSignal,
 		reason: "manual" | "threshold" | "overflow",
 	): Promise<CompactionResult> {
-		// Resolve the request only when Pi summarizes itself: routing may call models or fail.
+		// Project before serializing, while message roles and tool identities are still available.
+		const prefix = this._extensionRunner.applyModelRequestPolicy("derived", preparation.turnPrefixMessages);
+		const history = this._extensionRunner.applyModelRequestPolicy("derived", preparation.messagesToSummarize);
+		if (prefix.isolateTransport || history.isolateTransport) {
+			const fileOps = createFileOps();
+			for (const message of [...history.messages, ...prefix.messages]) extractFileOpsFromMessage(message, fileOps);
+			preparation = {
+				...preparation,
+				messagesToSummarize: history.messages,
+				turnPrefixMessages: prefix.messages,
+				previousSummary: undefined,
+				fileOps,
+			};
+		}
 		const request = await this._getSummarizationRequestAuth(model, signal);
 		return compact(
 			preparation,
@@ -2797,7 +2942,7 @@ export class AgentSession {
 			customInstructions,
 			signal,
 			request.thinkingLevel,
-			this.agent.streamFunction,
+			this.agent.getRequestStream(),
 			request.env,
 			this.settingsManager.getRetrySettings(),
 			this._summarizationRetryCallbacks({ source: "compaction", reason }),
@@ -4123,7 +4268,8 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: this.agent.streamFunction,
+					projectMessages: (messages) => this._projectDerivedContext(messages),
+					streamFn: this.agent.getRequestStream(),
 					retry: this.settingsManager.getRetrySettings(),
 					callbacks: this._summarizationRetryCallbacks({ source: "branchSummary" }),
 				});
@@ -4386,10 +4532,10 @@ export class AgentSession {
 		}
 		return generateBugReportSummary({
 			...(await this._getSummarizationRequestAuth(model, options.signal)),
-			messages: this.messages,
+			messages: this._projectDerivedContext(this.messages),
 			hint: options.hint,
 			signal: options.signal,
-			streamFn: this.agent.streamFunction,
+			streamFn: this.agent.getRequestStream(),
 			retry: this.settingsManager.getRetrySettings(),
 			sessionId: this.sessionId,
 		});

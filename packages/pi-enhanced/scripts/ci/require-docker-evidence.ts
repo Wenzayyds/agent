@@ -95,12 +95,28 @@ export function requireDockerEvidence(report: DockerTestReport): void {
 	}
 }
 
+export function requireV4DockerEvidence(report: DockerTestReport): void {
+	const cases = report.testResults
+		.filter((suite) => suite.name.replaceAll("\\", "/").endsWith("/e2e/multi-local.test.ts"))
+		.flatMap((suite) => suite.assertionResults);
+	if (
+		!report.numTotalTests || report.numFailedTests || report.numPendingTests ||
+		![
+			"runs two isolated sessions, returns diagnosis to Code and verifies both public and independent pytest",
+			"repairs from an A2A diagnostic and recovers a dropped SendMessage response without repeating pytest",
+			"keeps revoked Knowledge and a source-bearing patch out after multi-a2a restart",
+		].every((name) => cases.filter((test) => test.fullName.endsWith(name) && test.status === "passed").length === 1)
+	) throw new Error("CI_DOCKER_V4_EVIDENCE_MISSING_OR_SKIPPED");
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	if (process.platform !== "linux") throw new Error("CI_LINUX_EVIDENCE_REQUIRED");
 	const path = process.argv[2];
 	if (!path) throw new Error("CI_DOCKER_REPORT_REQUIRED");
 	const report = JSON.parse(readFileSync(path, "utf8")) as DockerTestReport;
 	requireDockerEvidence(report);
+	const v4Path = process.argv[3];
+	if (v4Path) requireV4DockerEvidence(JSON.parse(readFileSync(v4Path, "utf8")) as DockerTestReport);
 	process.stdout.write(
 		`${JSON.stringify({ status: "passed", platform: process.platform, tests: report.numTotalTests, skipped: 0 })}\n`,
 	);

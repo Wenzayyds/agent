@@ -15,6 +15,7 @@ import {
 	getToolResult,
 	type Harness,
 } from "../../../coding-agent/test/suite/harness.ts";
+import { McpAbortError, McpClient, StdioTransport } from "../../../mcp/src/index.ts";
 import mcpPolicyExtension from "../../extensions/mcp-policy.ts";
 import { AuditTrail } from "../../src/mcp-policy/audit.ts";
 import { ENHANCED_CONFIG_FILE } from "../../src/shared/config.ts";
@@ -114,28 +115,50 @@ const allowReadDenyWrite = [
 ];
 
 describe("MCP policy with Pi native MCP paths", () => {
+	it("cancels an in-flight stdio call, accepts the next call and closes its server", async () => {
+		const log = join(tempDir(), "calls.jsonl");
+		const transport = new StdioTransport({ command: process.execPath, args: [fixture, log] });
+		const client = new McpClient({ name: "cancel-test", version: "1" });
+		await client.connect(transport);
+		const pid = transport.pid!;
+		try {
+			const abort = new AbortController();
+			const pending = client.callTool("read_symbol", { name: "fixture-timeout" }, { signal: abort.signal });
+			await vi.waitFor(() => expect(calls(log)).toEqual(["read_symbol"]));
+			abort.abort();
+			await expect(pending).rejects.toBeInstanceOf(McpAbortError);
+			expect((await client.callTool("read_symbol", { name: "next" })).content).toEqual([{ type: "text", text: "symbol:next" }]);
+		} finally { await client.close(); }
+		expect(client.connectionState).toBe("closed");
+		expect(() => process.kill(pid, 0)).toThrow();
+	});
+
 	it("preserves timeout and disconnect codes without replaying calls", async ({ onTestFinished }) => {
 		const finish = vi.spyOn(AuditTrail.prototype, "finish");
 		onTestFinished(() => { finish.mockRestore(); });
 		const { harness, callLog } = await setup("direct", allowReadDenyWrite);
 		const name = "mcp__fixture__read_symbol";
 		harness.setResponses([
-			...["fixture-timeout", "fixture-disconnect", "reconnected"].map(symbol =>
+			...["fixture-business", "fixture-invalid-params", "fixture-invalid-result", "fixture-invalid-frame", "fixture-timeout", "fixture-disconnect", "reconnected"].map(symbol =>
 				fauxAssistantMessage([fauxToolCall(name, { name: symbol })], { stopReason: "toolUse" })),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("Exercise local transport recovery.");
 		const results = harness.session.messages.filter(message => message.role === "toolResult");
 		expect(results).toMatchObject([
+			{ isError: true, details: { code: "server_error" } },
+			{ isError: true, details: { code: "invalid_params" } },
+			{ isError: true, details: { code: "protocol_error" } },
+			{ isError: true, details: { code: "timeout", connectionDiagnostic: "invalid_protocol_frame" } },
 			{ isError: true, details: { code: "timeout" } },
 			{ isError: true, details: { code: "connection_closed" } },
 			{ isError: false, content: [{ text: "symbol:reconnected" }] },
 		]);
 		const audit = finish.mock.contexts[0];
-		expect(audit.snapshot().map(record => record.outcome)).toEqual(["timeout", "transport", "success"]);
+		expect(audit.snapshot().map(record => record.outcome)).toEqual(["server_error", "schema_error", "protocol_error", "timeout_after_invalid_frame", "timeout", "transport", "success"]);
 		expect(audit.pendingCount()).toBe(0);
-		expect(calls(callLog)).toEqual(["read_symbol", "read_symbol", "read_symbol"]);
-	}, 15_000);
+		expect(calls(callLog)).toEqual(Array(7).fill("read_symbol"));
+	}, 25_000);
 
 	it("allows direct reads and blocks a lying write tool before any side effect", async () => {
 		const { harness, callLog, root } = await setup("direct", allowReadDenyWrite);

@@ -1,23 +1,31 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type {
-	MaintenanceProposal,
-	MemoryCategory,
-	MemoryKind,
-	MemoryLifecycle,
-	MemoryRecord,
-	MemoryRelation,
-	MemoryRelationType,
-	MemorySearchStatus,
-	MemorySource,
-	MemorySourceType,
-	MemoryStatus,
-	MemoryVerification,
-	ProjectScope,
+import {
+	inferMemoryScope,
+	inferMemoryType,
+	type MaintenanceProposal,
+	type MemoryCategory,
+	type MemoryData,
+	type MemoryKind,
+	type MemoryLifecycle,
+	type MemoryRecord,
+	type MemoryRelation,
+	type MemoryRelationType,
+	type MemoryScope,
+	type MemorySearchStatus,
+	type MemorySource,
+	type MemorySourceType,
+	type MemoryStatus,
+	type MemoryType,
+	type MemoryVerification,
+	type ProjectScope,
+	recordScope,
+	type ScopedSearchQuery,
 } from "./contracts.ts";
 import { MemoryError } from "./errors.ts";
+import { createVectorOutbox, VectorOutbox } from "./vector-outbox.ts";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const MAX_LITERAL_SCAN_ROWS = 500;
@@ -29,6 +37,7 @@ interface MemoryRow {
 	project_id: string;
 	kind: MemoryKind;
 	content: string;
+	normalized_content: string;
 	status: MemoryStatus;
 	content_hash: string;
 	revision: number;
@@ -54,6 +63,10 @@ interface VerificationRow {
 }
 
 interface MetadataRow {
+	memory_type: MemoryType;
+	scope_kind: MemoryScope["kind"] | "unbound";
+	scope_id: string;
+	data_json: string;
 	category: MemoryCategory;
 	subject_key: string | null;
 	tags_json: string;
@@ -82,6 +95,9 @@ interface ProposalRow {
 }
 
 export interface StoredCandidateInput {
+	type?: MemoryType;
+	scope?: MemoryScope;
+	data?: MemoryData;
 	id?: string;
 	kind: MemoryKind;
 	content: string;
@@ -89,6 +105,7 @@ export interface StoredCandidateInput {
 	contentHash: string;
 	source: MemorySource;
 	now: number;
+	derivation?: { id: string; revision: number; reason: string };
 	metadata?: {
 		category: MemoryCategory;
 		subjectKey?: string;
@@ -99,14 +116,7 @@ export interface StoredCandidateInput {
 	};
 }
 
-export interface ProviderSearchQuery {
-	text: string;
-	limit?: number;
-	kinds?: MemoryKind[];
-	statuses?: MemoryStatus[];
-	sourceTypes?: MemorySourceType[];
-	categories?: MemoryCategory[];
-	lifecycles?: MemoryLifecycle[];
+export interface ProviderSearchQuery extends ScopedSearchQuery {
 	includeExpired?: boolean;
 }
 
@@ -119,6 +129,7 @@ export class LocalMemoryProvider {
 	readonly searchStatus: MemorySearchStatus;
 	readonly databasePath: string;
 	readonly databaseLimitBytes: number;
+	readonly vectorOutbox: VectorOutbox;
 	private readonly database: DatabaseSync;
 	private closed = false;
 
@@ -135,6 +146,7 @@ export class LocalMemoryProvider {
 			this.database.exec("PRAGMA foreign_keys=ON");
 			this.databaseLimitBytes = configureDatabaseSizeLimit(this.database);
 			runCoreMigrations(this.database);
+			this.vectorOutbox = new VectorOutbox(this.database, this.projectId);
 			this.searchStatus = initializeSearchIndex(this.database, options.ftsMode ?? "auto");
 		} catch (error) {
 			this.database.close();
@@ -144,14 +156,87 @@ export class LocalMemoryProvider {
 
 	async saveCandidate(input: StoredCandidateInput): Promise<MemoryRecord> {
 		this.assertOpen();
-		this.storageOperation(() =>
+		const recordScope = input.scope ?? inferMemoryScope([input.source], input.metadata?.category ?? "other");
+		const type =
+			input.type ?? inferMemoryType(input.kind, input.metadata?.category ?? "other", recordScope?.kind === "task");
+		const scopeKind = recordScope?.kind ?? "unbound";
+		const scopeId = recordScope && recordScope.kind !== "project" ? recordScope.id : "";
+		const dataJson = JSON.stringify(input.data ?? {});
+		const recordId = this.storageOperation(() =>
 			this.transaction(() => {
 				this.assertNotForgotten(input.kind, input.contentHash);
+				// Host task proposals have a stable source token, even if their record was later edited.
+				if (scopeKind === "task" && /^task:[^:\s]+:experience:[a-f0-9]{64}$/u.test(input.source.ref)) {
+					const forgottenEvent = this.database
+						.prepare(`SELECT 1 FROM memory_governance_audit a
+						JOIN json_each(a.before_json, '$.sources') s
+						WHERE a.project_id=? AND a.action='deleted' AND json_extract(s.value, '$.ref')=? LIMIT 1`)
+						.get(this.projectId, input.source.ref);
+					if (forgottenEvent)
+						throw new MemoryError("MEMORY_VALIDATION_ERROR", "This task event was explicitly forgotten");
+					const replay = this.database
+						.prepare(`SELECT m.id FROM memories m
+						JOIN memory_metadata md ON md.memory_id=m.id JOIN memory_sources s ON s.memory_id=m.id
+						WHERE m.project_id=? AND md.scope_kind='task' AND md.scope_id=? AND md.memory_type=?
+						AND s.source_type=? AND s.source_ref=? ORDER BY m.created_at, m.id LIMIT 1`)
+						.get(this.projectId, scopeId, type, input.source.type, input.source.ref) as
+						| { id: string }
+						| undefined;
+					if (replay) return replay.id;
+				}
+				if (
+					input.derivation &&
+					!this.database
+						.prepare("SELECT 1 FROM memories WHERE project_id=? AND id=? AND revision=? AND status='verified'")
+						.get(this.projectId, input.derivation.id, input.derivation.revision)
+				)
+					this.throwMissingOrRevision(input.derivation.id);
 				const existing = this.database
-					.prepare("SELECT id, content_hash FROM memories WHERE project_id=? AND kind=? AND content_hash=?")
-					.get(this.projectId, input.kind, input.contentHash) as { id: string; content_hash: string } | undefined;
+					.prepare(`SELECT m.id, m.content_hash, md.data_json FROM memories m JOIN memory_metadata md ON md.memory_id=m.id
+						WHERE m.project_id=? AND m.kind=? AND m.normalized_content=? AND md.memory_type=? AND md.scope_kind=? AND md.scope_id=?
+						AND json_extract(md.data_json, '$.taskId') IS ?
+						ORDER BY m.created_at, m.id LIMIT 1`)
+					.get(
+						this.projectId,
+						input.kind,
+						input.normalizedContent,
+						type,
+						scopeKind,
+						scopeId,
+						input.data?.taskId ?? null,
+					) as { id: string; content_hash: string; data_json: string } | undefined;
+				if (existing && existing.data_json !== dataJson) {
+					throw new MemoryError("MEMORY_CONTENT_CONFLICT", "Duplicate memory has different structured data");
+				}
+				const competing =
+					input.metadata?.subjectKey &&
+					this.database
+						.prepare(`SELECT m.id FROM memories m
+					JOIN memory_metadata md ON md.memory_id=m.id
+					WHERE m.project_id=? AND md.scope_kind=? AND md.scope_id=? AND md.memory_type=? AND md.subject_key=?
+					AND md.lifecycle='active' AND m.status='verified' AND m.normalized_content<>?
+					AND coalesce(md.valid_until, 9007199254740991)>? AND coalesce(md.valid_from, 0)<?
+					ORDER BY m.id LIMIT 1`)
+						.get(
+							this.projectId,
+							scopeKind,
+							scopeId,
+							type,
+							input.metadata.subjectKey,
+							input.normalizedContent,
+							input.metadata.validFrom ?? input.now,
+							input.metadata.validUntil ?? Number.MAX_SAFE_INTEGER,
+						);
 				const id = existing?.id ?? input.id ?? randomUUID();
 				if (!existing) {
+					if (
+						this.database
+							.prepare(
+								"SELECT 1 FROM memory_governance_audit WHERE project_id=? AND memory_id=? AND action='deleted'",
+							)
+							.get(this.projectId, id)
+					)
+						throw new MemoryError("MEMORY_VALIDATION_ERROR", "Deleted memory IDs cannot be reused");
 					this.database
 						.prepare(
 							"INSERT INTO memories (id, project_id, kind, content, normalized_content, status, content_hash, revision, content_revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'candidate', ?, 1, 1, ?, ?)",
@@ -169,7 +254,7 @@ export class LocalMemoryProvider {
 					this.database.prepare("INSERT INTO memory_usage_stats (memory_id, use_count) VALUES (?, 0)").run(id);
 					this.database
 						.prepare(
-							"INSERT INTO memory_metadata (memory_id, category, subject_key, tags_json, importance, valid_from, valid_until, lifecycle, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)",
+							"INSERT INTO memory_metadata (memory_id, category, subject_key, tags_json, importance, valid_from, valid_until, lifecycle, created_at, updated_at, memory_type, scope_kind, scope_id, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)",
 						)
 						.run(
 							id,
@@ -181,6 +266,10 @@ export class LocalMemoryProvider {
 							input.metadata?.validUntil ?? null,
 							input.now,
 							input.now,
+							type,
+							scopeKind,
+							scopeId,
+							dataJson,
 						);
 				}
 				const sourceResult = this.database
@@ -194,7 +283,7 @@ export class LocalMemoryProvider {
 						input.source.observedAt,
 						id,
 						this.projectId,
-						input.contentHash,
+						existing?.content_hash ?? input.contentHash,
 					);
 				if (!existing && Number(sourceResult.changes) !== 1) {
 					throw new MemoryError(
@@ -202,15 +291,57 @@ export class LocalMemoryProvider {
 						"Memory content changed before its source was attached",
 					);
 				}
+				if (!existing)
+					this.writeAudit(
+						id,
+						null,
+						"candidate_created",
+						null,
+						{
+							revision: 1,
+							contentHash: input.contentHash,
+							type,
+							scopeKind,
+							scopeId,
+							source: input.source,
+							possibleConflictId: competing ? competing.id : undefined,
+							derivation: input.derivation,
+						},
+						input.now,
+					);
+				if (input.derivation && input.derivation.id !== id)
+					this.database
+						.prepare(`INSERT OR IGNORE INTO memory_relations
+						(project_id, source_memory_id, target_memory_id, relation, created_at)
+						VALUES (?, ?, ?, 'derived_from', ?)`)
+						.run(this.projectId, id, input.derivation.id, input.now);
+				if (existing && Number(sourceResult.changes) === 1)
+					this.writeAudit(id, null, "source_attached", null, input.source, input.now);
 				return id;
 			}),
 		);
-		const record = await this.getByUniqueKey(input.kind, input.contentHash);
+		const record = await this.get(recordId);
 		if (!record) throw new MemoryError("MEMORY_STORAGE_ERROR", "Saved memory could not be read back");
 		return record;
 	}
 
+	countAll(): number {
+		this.assertOpen();
+		return this.storageOperation(
+			() =>
+				(
+					this.database
+						.prepare("SELECT count(*) AS amount FROM memories WHERE project_id=?")
+						.get(this.projectId) as { amount: number }
+				).amount,
+		);
+	}
+
 	async get(id: string): Promise<MemoryRecord | null> {
+		return this.getCurrent(id);
+	}
+
+	getCurrent(id: string): MemoryRecord | null {
 		this.assertOpen();
 		return this.storageOperation(() => {
 			const row = this.database
@@ -225,9 +356,12 @@ export class LocalMemoryProvider {
 		const limit = Math.max(1, Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
 		const text = query.text.trim();
 		return this.storageOperation(() => {
-			if (!text) return this.selectLiteral("", query, limit);
-
+			if (query.preferenceKey !== undefined || !text) return this.selectLiteral("", query, limit);
 			const records = new Map<string, MemoryRecord>();
+			if (!query.types || query.types.includes("preference")) {
+				for (const record of this.selectLiteral("", { ...query, preferenceKey: text }, limit))
+					records.set(record.id, record);
+			}
 			if (this.searchStatus === "fts-ready") {
 				for (const record of this.selectFts(text, query, limit)) records.set(record.id, record);
 			}
@@ -238,17 +372,39 @@ export class LocalMemoryProvider {
 		});
 	}
 
-	async listVerified(limit: number): Promise<MemoryRecord[]> {
+	async listVerified(limit: number, query?: ScopedSearchQuery): Promise<MemoryRecord[]> {
 		this.assertOpen();
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_SNAPSHOT_ROWS) {
 			throw new MemoryError("MEMORY_VALIDATION_ERROR", "Verified snapshot limit is invalid");
 		}
 		return this.storageOperation(() => {
+			const filters = buildFilters(this.projectId, {
+				...query,
+				text: query?.text ?? "",
+				...(query ? { visibility: query.visibility ?? {} } : {}),
+				types: (["semantic", "episodic", "procedural"] as const).filter(
+					(type) => !query?.types || query.types.includes(type),
+				),
+				statuses: ["verified"],
+				lifecycles: ["active"],
+			});
 			const rows = this.database
-				.prepare(
-					"SELECT m.* FROM memories m JOIN memory_metadata md ON md.memory_id=m.id WHERE m.project_id=? AND m.status='verified' AND md.lifecycle='active' AND (md.valid_until IS NULL OR md.valid_until > ?) ORDER BY m.updated_at DESC, m.id LIMIT ?",
-				)
-				.all(this.projectId, Date.now(), limit) as unknown as MemoryRow[];
+				.prepare(`SELECT m.* FROM memories m JOIN memory_metadata md ON md.memory_id=m.id
+				WHERE ${filters.clauses.join(" AND ")} ORDER BY m.updated_at DESC, m.id LIMIT ?`)
+				.all(...filters.parameters, limit) as unknown as MemoryRow[];
+			return rows.map((row) => this.hydrate(row));
+		});
+	}
+
+	indexCandidates(after: string, limit: number): MemoryRecord[] {
+		this.assertOpen();
+		return this.storageOperation(() => {
+			const rows = this.database
+				.prepare(`SELECT m.* FROM memories m JOIN memory_metadata md ON md.memory_id=m.id
+				WHERE m.project_id=? AND m.id>? AND m.status='verified' AND md.lifecycle='active'
+				AND md.scope_kind<>'unbound' AND md.memory_type IN ('semantic','episodic','procedural')
+				AND (md.valid_until IS NULL OR md.valid_until>?) ORDER BY m.id LIMIT ?`)
+				.all(this.projectId, after, Date.now(), limit) as unknown as MemoryRow[];
 			return rows.map((row) => this.hydrate(row));
 		});
 	}
@@ -302,7 +458,20 @@ export class LocalMemoryProvider {
 					)
 					.run(options.now, options.id, this.projectId, options.expectedRevision);
 				if (Number(update.changes) !== 1) this.throwMissingOrRevision(options.id);
-				this.writeAudit(options.id, null, "metadata_changed", current, options, options.now);
+				const action =
+					options.lifecycle && current.lifecycle !== options.lifecycle
+						? options.lifecycle === "archived"
+							? "archived"
+							: "restored"
+						: "metadata_changed";
+				this.writeAudit(
+					options.id,
+					null,
+					action,
+					current,
+					{ ...options, revision: current.revision + 1 },
+					options.now,
+				);
 			}),
 		);
 		return this.require(options.id);
@@ -325,25 +494,69 @@ export class LocalMemoryProvider {
 		content: string;
 		normalizedContent: string;
 		contentHash: string;
+		data?: MemoryData;
+		change?: { source: MemorySource; reason: string };
 		expectedRevision: number;
 		now: number;
 	}): Promise<MemoryRecord> {
 		this.assertOpen();
 		try {
-			const result = this.database
-				.prepare(
-					"UPDATE memories SET content=?, normalized_content=?, content_hash=?, status='candidate', revision=revision+1, content_revision=content_revision+1, updated_at=? WHERE id=? AND project_id=? AND revision=?",
-				)
-				.run(
-					options.content,
-					options.normalizedContent,
-					options.contentHash,
-					options.now,
+			this.transaction(() => {
+				const current = this.database
+					.prepare("SELECT * FROM memories WHERE id=? AND project_id=? AND revision=?")
+					.get(options.id, this.projectId, options.expectedRevision) as MemoryRow | undefined;
+				if (!current) this.throwMissingOrRevision(options.id);
+				this.assertNotForgotten(current.kind, options.contentHash);
+				const duplicate = this.database
+					.prepare(`SELECT m.id FROM memories m JOIN memory_metadata md ON md.memory_id=m.id
+				JOIN memory_metadata current ON current.memory_id=? AND current.memory_type=md.memory_type
+				AND current.scope_kind=md.scope_kind AND current.scope_id=md.scope_id
+				AND json_extract(current.data_json, '$.taskId') IS json_extract(md.data_json, '$.taskId')
+				WHERE m.project_id=? AND m.id<>? AND m.kind=? AND m.normalized_content=? LIMIT 1`)
+					.get(current.id, this.projectId, current.id, current.kind, options.normalizedContent);
+				if (duplicate)
+					throw new MemoryError("MEMORY_CONTENT_CONFLICT", "Another memory already has the updated content");
+				const result = this.database
+					.prepare(
+						"UPDATE memories SET content=?, normalized_content=?, content_hash=?, status='candidate', revision=revision+1, content_revision=content_revision+1, updated_at=? WHERE id=? AND project_id=? AND revision=?",
+					)
+					.run(
+						options.content,
+						options.normalizedContent,
+						options.contentHash,
+						options.now,
+						options.id,
+						this.projectId,
+						options.expectedRevision,
+					);
+				if (Number(result.changes) !== 1) this.throwMissingOrRevision(options.id);
+				if (options.data !== undefined) {
+					this.database
+						.prepare("UPDATE memory_metadata SET data_json=?, updated_at=? WHERE memory_id=?")
+						.run(JSON.stringify(options.data), options.now, options.id);
+				}
+				if (options.change) {
+					const source = options.change.source;
+					this.database
+						.prepare(`INSERT OR IGNORE INTO memory_sources
+						(memory_id, source_type, source_ref, source_commit, observed_at) VALUES (?, ?, ?, ?, ?)`)
+						.run(options.id, source.type, source.ref, source.commit ?? "", source.observedAt);
+				}
+				this.writeAudit(
 					options.id,
-					this.projectId,
-					options.expectedRevision,
+					null,
+					"content_changed",
+					auditRevision(current),
+					{
+						status: "candidate",
+						revision: current.revision + 1,
+						contentRevision: current.content_revision + 1,
+						contentHash: options.contentHash,
+						change: options.change,
+					},
+					options.now,
 				);
-			if (Number(result.changes) !== 1) this.throwMissingOrRevision(options.id);
+			});
 		} catch (error) {
 			if (isUniqueConstraint(error)) {
 				throw new MemoryError("MEMORY_CONTENT_CONFLICT", "Another memory already has the updated content", {
@@ -359,16 +572,19 @@ export class LocalMemoryProvider {
 		id: string;
 		status: MemoryStatus;
 		verification?: Omit<MemoryVerification, "verifiedContentRevision">;
+		reason?: string;
 		expectedRevision: number;
 		now: number;
-		reflection?: readonly { evidenceRef: string; previousSha256: string; observedSha256: string }[];
+		reflection?: readonly { evidenceRef: string; previousSha256: string; observedSha256: string | null }[];
 	}): Promise<MemoryRecord> {
 		this.assertOpen();
+		if (options.status === "verified" && !options.verification)
+			throw new MemoryError("MEMORY_VALIDATION_ERROR", "Verification evidence is required");
 		this.storageOperation(() =>
 			this.transaction(() => {
 				const current = this.database
-					.prepare("SELECT content_revision FROM memories WHERE id=? AND project_id=? AND revision=?")
-					.get(options.id, this.projectId, options.expectedRevision) as { content_revision: number } | undefined;
+					.prepare("SELECT * FROM memories WHERE id=? AND project_id=? AND revision=?")
+					.get(options.id, this.projectId, options.expectedRevision) as MemoryRow | undefined;
 				if (!current) this.throwMissingOrRevision(options.id);
 				const result = this.database
 					.prepare(
@@ -376,6 +592,19 @@ export class LocalMemoryProvider {
 					)
 					.run(options.status, options.now, options.id, this.projectId, options.expectedRevision);
 				if (Number(result.changes) !== 1) this.throwMissingOrRevision(options.id);
+				this.writeAudit(
+					options.id,
+					null,
+					"status_changed",
+					auditRevision(current),
+					{
+						status: options.status,
+						revision: current.revision + 1,
+						verification: options.verification,
+						reason: options.reason,
+					},
+					options.now,
+				);
 				if (options.reflection)
 					this.writeAudit(
 						options.id,
@@ -410,12 +639,32 @@ export class LocalMemoryProvider {
 		this.storageOperation(() =>
 			this.transaction(() => {
 				const current = this.database
-					.prepare("SELECT id, revision, kind, content_hash, status FROM memories WHERE id=? AND project_id=?")
-					.get(id, this.projectId) as
-					| { id: string; revision: number; kind: MemoryKind; content_hash: string; status: string }
-					| undefined;
+					.prepare("SELECT * FROM memories WHERE id=? AND project_id=?")
+					.get(id, this.projectId) as MemoryRow | undefined;
 				if (!current || current.revision !== expectedRevision) this.throwMissingOrRevision(id);
-				this.writeAudit(id, null, "deleted", current, null, Date.now());
+				const record = this.hydrate(current);
+				this.writeAudit(
+					id,
+					null,
+					"deleted",
+					{
+						...auditRevision(current),
+						type: record.type,
+						scope: record.scope,
+						lifecycle: record.lifecycle,
+						dedupe_hash: scopedContentHash(
+							current.normalized_content,
+							record.kind,
+							record.type ?? inferMemoryType(record.kind, record.category),
+							recordScope(record),
+							record.data?.taskId,
+						),
+						sources: record.sources,
+						verifications: record.verifications,
+					},
+					{ deleted: true, revision: current.revision + 1 },
+					Date.now(),
+				);
 				const result = this.database
 					.prepare("DELETE FROM memories WHERE id=? AND project_id=? AND revision=?")
 					.run(id, this.projectId, expectedRevision);
@@ -525,8 +774,24 @@ export class LocalMemoryProvider {
 				} else if (proposal.action === "compress" || proposal.action === "merge") {
 					if (!proposal.proposedContent || records.length < 2)
 						throw new MemoryError("MEMORY_VALIDATION_ERROR", "Consolidation proposal is incomplete");
+					const sourceRecords = records.map((record) => this.hydrate(record));
+					const scope = recordScope(sourceRecords[0]);
+					if (
+						!scope ||
+						sourceRecords.some(
+							(record) =>
+								JSON.stringify(recordScope(record)) !== JSON.stringify(scope) ||
+								record.type === "working" ||
+								record.type === "preference",
+						)
+					)
+						throw new MemoryError(
+							"MEMORY_VALIDATION_ERROR",
+							"Consolidation requires compatible memory scopes and types",
+						);
+					const type = scope.kind === "task" ? "episodic" : "procedural";
 					const normalized = proposal.proposedContent.normalize("NFKC").replace(/\s+/gu, " ").trim();
-					const hash = createContentHash(normalized);
+					const hash = scopedContentHash(normalized, "experience", type, scope);
 					this.assertNotForgotten("experience", hash);
 					const targetId = randomUUID();
 					this.database
@@ -536,9 +801,17 @@ export class LocalMemoryProvider {
 						.run(targetId, this.projectId, proposal.proposedContent, normalized, hash, now, now);
 					this.database
 						.prepare(
-							"INSERT INTO memory_metadata (memory_id, category, tags_json, importance, lifecycle, created_at, updated_at) VALUES (?, ?, '[]', 1, 'active', ?, ?)",
+							"INSERT INTO memory_metadata (memory_id, category, tags_json, importance, lifecycle, created_at, updated_at, memory_type, scope_kind, scope_id) VALUES (?, ?, '[]', 1, 'active', ?, ?, ?, ?, ?)",
 						)
-						.run(targetId, proposal.proposedCategory ?? "procedure", now, now);
+						.run(
+							targetId,
+							proposal.proposedCategory ?? "procedure",
+							now,
+							now,
+							type,
+							scope.kind,
+							scope.kind === "project" ? "" : scope.id,
+						);
 					this.database
 						.prepare("INSERT INTO memory_usage_stats (memory_id, use_count) VALUES (?, 0)")
 						.run(targetId);
@@ -586,7 +859,14 @@ export class LocalMemoryProvider {
 		this.database
 			.prepare("UPDATE memories SET revision=revision+1, updated_at=? WHERE id=? AND project_id=? AND revision=?")
 			.run(now, record.id, this.projectId, record.revision);
-		this.writeAudit(record.id, null, lifecycle === "archived" ? "archived" : "restored", record, { lifecycle }, now);
+		this.writeAudit(
+			record.id,
+			null,
+			lifecycle === "archived" ? "archived" : "restored",
+			auditRevision(record),
+			{ lifecycle },
+			now,
+		);
 	}
 
 	private applyStatus(record: MemoryRow, status: MemoryStatus, now: number): void {
@@ -595,7 +875,7 @@ export class LocalMemoryProvider {
 				"UPDATE memories SET status=?, revision=revision+1, updated_at=? WHERE id=? AND project_id=? AND revision=?",
 			)
 			.run(status, now, record.id, this.projectId, record.revision);
-		this.writeAudit(record.id, null, "status_changed", record, { status }, now);
+		this.writeAudit(record.id, null, "status_changed", auditRevision(record), { status }, now);
 	}
 
 	private applyCategory(record: MemoryRow, category: MemoryCategory, now: number): void {
@@ -605,17 +885,17 @@ export class LocalMemoryProvider {
 		this.database
 			.prepare("UPDATE memories SET revision=revision+1, updated_at=? WHERE id=? AND project_id=? AND revision=?")
 			.run(now, record.id, this.projectId, record.revision);
-		this.writeAudit(record.id, null, "retagged", record, { category }, now);
+		this.writeAudit(record.id, null, "retagged", auditRevision(record), { category }, now);
 	}
 
 	private assertNotForgotten(kind: MemoryKind, hash: string): void {
 		const deleted = this.database
 			.prepare(
 				`SELECT 1 FROM memory_governance_audit WHERE project_id=? AND action='deleted'
-			 AND json_extract(before_json, '$.content_hash')=?
+			 AND (json_extract(before_json, '$.content_hash')=? OR json_extract(before_json, '$.dedupe_hash')=?)
 			 AND (json_extract(before_json, '$.kind')=? OR json_extract(before_json, '$.kind') IS NULL) LIMIT 1`,
 			)
-			.get(this.projectId, hash, kind);
+			.get(this.projectId, hash, hash, kind);
 		if (deleted) throw new MemoryError("MEMORY_VALIDATION_ERROR", "This exact memory was explicitly forgotten");
 	}
 
@@ -632,13 +912,6 @@ export class LocalMemoryProvider {
 				"INSERT INTO memory_governance_audit (id, project_id, memory_id, proposal_id, action, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			)
 			.run(randomUUID(), this.projectId, memoryId, proposalId, action, safeJson(before), safeJson(after), now);
-	}
-
-	private async getByUniqueKey(kind: MemoryKind, contentHash: string): Promise<MemoryRecord | null> {
-		const row = this.database
-			.prepare("SELECT * FROM memories WHERE project_id=? AND kind=? AND content_hash=?")
-			.get(this.projectId, kind, contentHash) as MemoryRow | undefined;
-		return row ? this.hydrate(row) : null;
 	}
 
 	private async require(id: string): Promise<MemoryRecord> {
@@ -667,6 +940,13 @@ export class LocalMemoryProvider {
 		return {
 			id: row.id,
 			projectId: row.project_id,
+			type: metadata.memory_type,
+			...(metadata.scope_kind === "project"
+				? { scope: { kind: "project" } as const }
+				: metadata.scope_kind === "unbound"
+					? { scope: null }
+					: { scope: { kind: metadata.scope_kind, id: metadata.scope_id } }),
+			...(metadata.data_json === "{}" ? {} : { data: JSON.parse(metadata.data_json) as MemoryData }),
 			kind: row.kind,
 			content: row.content,
 			status: row.status,
@@ -711,7 +991,7 @@ export class LocalMemoryProvider {
 		const { clauses, parameters } = buildFilters(this.projectId, query);
 		const rows = this.database
 			.prepare(
-				`SELECT m.* FROM memory_fts JOIN memories m ON m.rowid=memory_fts.rowid JOIN memory_metadata md ON md.memory_id=m.id WHERE memory_fts MATCH ? AND ${clauses.join(" AND ")} ORDER BY bm25(memory_fts), m.updated_at DESC LIMIT ?`,
+				`SELECT m.* FROM memory_fts JOIN memories m ON m.rowid=memory_fts.rowid JOIN memory_metadata md ON md.memory_id=m.id WHERE memory_fts MATCH ? AND ${clauses.join(" AND ")} ORDER BY ${searchOrdering(query, "bm25(memory_fts)")} LIMIT ?`,
 			)
 			.all(fts, ...parameters, limit) as unknown as MemoryRow[];
 		return rows.map((row) => this.hydrate(row));
@@ -724,10 +1004,10 @@ export class LocalMemoryProvider {
 			parameters.push(text.normalize("NFKC"));
 		}
 		const rows = this.database
-			.prepare(
-				`SELECT m.* FROM (SELECT * FROM memories WHERE project_id=? ORDER BY updated_at DESC LIMIT ?) m JOIN memory_metadata md ON md.memory_id=m.id WHERE ${clauses.join(" AND ")} ORDER BY m.updated_at DESC LIMIT ?`,
-			)
-			.all(this.projectId, MAX_LITERAL_SCAN_ROWS, ...parameters, limit) as unknown as MemoryRow[];
+			.prepare(`SELECT m.* FROM memories m JOIN memory_metadata md ON md.memory_id=m.id
+			WHERE ${clauses.join(" AND ")} ORDER BY ${searchOrdering(query)} LIMIT ?`)
+			.all(...parameters, limit) as unknown as MemoryRow[];
+		if (query.types?.length === 1 && query.types[0] === "working" && query.order === undefined) rows.reverse();
 		return rows.map((row) => this.hydrate(row));
 	}
 
@@ -764,7 +1044,7 @@ export class LocalMemoryProvider {
 	}
 }
 
-export function runCoreMigrations(database: DatabaseSync): void {
+export function runCoreMigrations(database: DatabaseSync, targetVersion = SCHEMA_VERSION): void {
 	database.exec("BEGIN IMMEDIATE");
 	try {
 		database.exec(`
@@ -887,6 +1167,11 @@ export function runCoreMigrations(database: DatabaseSync): void {
 			`);
 			database.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)").run(Date.now());
 		}
+		if (targetVersion >= 3 && !versions.some(({ version }) => version === 3)) {
+			migrateTypedMemory(database);
+			createVectorOutbox(database);
+			database.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)").run(Date.now());
+		}
 		database.exec("COMMIT");
 	} catch (error) {
 		if (database.isTransaction) database.exec("ROLLBACK");
@@ -894,9 +1179,40 @@ export function runCoreMigrations(database: DatabaseSync): void {
 	}
 }
 
+function migrateTypedMemory(database: DatabaseSync): void {
+	database.exec(`
+		ALTER TABLE memory_metadata ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'semantic'
+			CHECK(memory_type IN ('working','semantic','episodic','procedural','preference'));
+		ALTER TABLE memory_metadata ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'project'
+			CHECK(scope_kind IN ('project','session','task','unbound'));
+		ALTER TABLE memory_metadata ADD COLUMN scope_id TEXT NOT NULL DEFAULT '';
+		ALTER TABLE memory_metadata ADD COLUMN data_json TEXT NOT NULL DEFAULT '{}'
+			CHECK(json_valid(data_json) AND json_type(data_json)='object');
+		CREATE INDEX memory_metadata_scope ON memory_metadata(scope_kind, scope_id, memory_type);
+	`);
+	const rows = database.prepare(
+		"SELECT m.id, m.kind, md.category FROM memories m JOIN memory_metadata md ON md.memory_id=m.id",
+	);
+	const sourceRefs = database.prepare("SELECT source_ref AS ref FROM memory_sources WHERE memory_id=?");
+	const setScope = database.prepare(
+		"UPDATE memory_metadata SET memory_type=?, scope_kind=?, scope_id=? WHERE memory_id=?",
+	);
+	for (const row of rows.iterate() as Iterable<{ id: string; kind: MemoryKind; category: MemoryCategory }>) {
+		const scope = inferMemoryScope(sourceRefs.all(row.id) as { ref: string }[], row.category);
+		setScope.run(
+			inferMemoryType(row.kind, row.category, scope?.kind === "task"),
+			scope?.kind ?? "unbound",
+			scope && scope.kind !== "project" ? scope.id : "",
+			row.id,
+		);
+	}
+}
+
 export function rollbackMemoryGovernanceMigration(database: DatabaseSync): void {
 	database.exec("BEGIN IMMEDIATE");
 	try {
+		if (database.prepare("SELECT 1 FROM schema_migrations WHERE version>=3").get())
+			throw new Error("Cannot roll back v2 after typed memory migration");
 		const present = database.prepare("SELECT 1 AS present FROM schema_migrations WHERE version=2").get();
 		if (!present) throw new Error("Memory governance schema v2 is not installed");
 		database.exec(`
@@ -973,6 +1289,17 @@ function setMetadata(database: DatabaseSync, key: string, value: string): void {
 		.run(key, value);
 }
 
+function auditRevision(row: MemoryRow) {
+	return {
+		id: row.id,
+		kind: row.kind,
+		revision: row.revision,
+		contentRevision: row.content_revision,
+		content_hash: row.content_hash,
+		status: row.status,
+	};
+}
+
 function buildFilters(
 	projectId: string,
 	query: ProviderSearchQuery,
@@ -980,12 +1307,56 @@ function buildFilters(
 	const clauses = ["m.project_id=?"];
 	const parameters: Array<string | number> = [projectId];
 	addInFilter(clauses, parameters, "m.kind", query.kinds);
+	if (query.types) {
+		if (query.types.length === 0) clauses.push("0");
+		addInFilter(clauses, parameters, "md.memory_type", query.types);
+	}
+	if (query.visibility) {
+		clauses.push(
+			"(md.scope_kind='project' OR (md.scope_kind='session' AND md.scope_id=?) OR (md.scope_kind='task' AND md.scope_id=?))",
+		);
+		parameters.push(query.visibility.sessionId ?? "", query.visibility.taskId ?? "");
+	}
 	addInFilter(clauses, parameters, "m.status", query.statuses);
 	addInFilter(clauses, parameters, "md.category", query.categories);
 	addInFilter(clauses, parameters, "md.lifecycle", query.lifecycles ?? ["active"]);
+	if (query.preferenceKey !== undefined) {
+		clauses.push("md.memory_type='preference' AND md.subject_key=?");
+		parameters.push(query.preferenceKey);
+	} else if (!query.includeExpired) {
+		clauses.push("(md.memory_type<>'preference' OR json_type(md.data_json, '$.value') IS NULL OR md.subject_key=?)");
+		parameters.push(query.text);
+	}
+	if (query.visibility) {
+		clauses.push(
+			"(md.memory_type<>'working' OR json_extract(md.data_json, '$.taskId') IS NULL OR json_extract(md.data_json, '$.taskId')=?)",
+		);
+		parameters.push(query.visibility.taskId ?? "");
+	}
+	if (query.episodeOutcome !== undefined) {
+		clauses.push("md.memory_type='episodic' AND json_extract(md.data_json, '$.outcome')=?");
+		parameters.push(query.episodeOutcome);
+	}
+	if (query.occurredAfter !== undefined) {
+		clauses.push(
+			"md.memory_type='episodic' AND coalesce(json_extract(md.data_json, '$.occurredAt'), m.created_at)>=?",
+		);
+		parameters.push(query.occurredAfter);
+	}
+	if (query.occurredBefore !== undefined) {
+		clauses.push(
+			"md.memory_type='episodic' AND coalesce(json_extract(md.data_json, '$.occurredAt'), m.created_at)<?",
+		);
+		parameters.push(query.occurredBefore);
+	}
 	if (!query.includeExpired) {
-		clauses.push("(md.valid_until IS NULL OR md.valid_until > ?)");
-		parameters.push(Date.now());
+		const now = Date.now();
+		clauses.push("(md.valid_until IS NULL OR md.valid_until > ?) AND (md.valid_from IS NULL OR md.valid_from <= ?)");
+		parameters.push(now, now);
+		const conditions = query.conditions ?? [];
+		clauses.push(`(md.memory_type<>'procedural' OR NOT EXISTS (SELECT 1 FROM json_each(md.data_json, '$.conditions')
+			${conditions.length ? `WHERE value NOT IN (${conditions.map(() => "?").join(",")})` : ""}))`);
+		parameters.push(...conditions);
 	}
 	if (query.sourceTypes && query.sourceTypes.length > 0) {
 		clauses.push(
@@ -994,6 +1365,20 @@ function buildFilters(
 		parameters.push(...query.sourceTypes);
 	}
 	return { clauses, parameters };
+}
+
+function searchOrdering(query: ProviderSearchQuery, rank?: string): string {
+	if (query.preferenceKey !== undefined)
+		return `(SELECT max(verified_at) FROM memory_verifications v WHERE v.memory_id=m.id
+		AND v.verification_type='user_confirmed' AND v.verified_content_revision=m.content_revision) DESC, m.updated_at DESC, m.id`;
+	if (query.order === "priority")
+		return `md.importance DESC,
+		coalesce((SELECT last_used_at FROM memory_usage_stats WHERE memory_id=m.id), m.updated_at) DESC, m.id`;
+	if (query.order === "successful")
+		return "(json_extract(md.data_json, '$.outcome') IS 'success') DESC, coalesce(json_extract(md.data_json, '$.occurredAt'), m.created_at) DESC, m.id";
+	if (query.order === "recent" || (query.types?.length === 1 && query.types[0] === "working"))
+		return "coalesce(json_extract(md.data_json, '$.occurredAt'), m.created_at) DESC, m.id";
+	return rank ? `${rank}, m.updated_at DESC, m.id` : "m.updated_at DESC, m.id";
 }
 
 function hydrateProposal(row: ProposalRow): MaintenanceProposal {
@@ -1034,8 +1419,22 @@ function safeJson(value: unknown): string {
 	return JSON.stringify(value ?? null, (_key, item) => (typeof item === "bigint" ? item.toString() : item));
 }
 
-function createContentHash(normalized: string): string {
-	return createHash("sha256").update(normalized).digest("hex");
+export function scopedContentHash(
+	normalized: string,
+	kind: MemoryKind,
+	type: MemoryType,
+	scope?: MemoryScope,
+	workingTask?: string,
+): string {
+	const key =
+		type === "working" && workingTask !== undefined
+			? JSON.stringify([type, scope ?? null, workingTask, normalized])
+			: scope?.kind === "project" && type === inferMemoryType(kind, "other")
+				? normalized
+				: scope?.kind === "task" && type === "episodic"
+					? JSON.stringify([scope.id, normalized])
+					: JSON.stringify([type, scope ?? null, normalized]);
+	return createHash("sha256").update(key).digest("hex");
 }
 
 function addInFilter(

@@ -25,8 +25,7 @@ export function assessPytest(
 ): { state: RepairState; eligible: boolean; reason: string } {
 	if (evidence.status === "passed") return { state: initialRepairState, eligible: false, reason: "pytest_passed" };
 	if (evidence.status !== "failed") return { state, eligible: false, reason: evidence.status };
-	if (!hasRepair || state.failedVersions.includes(version))
-		return { state, eligible: false, reason: "no_new_repair" };
+	if (!hasRepair || state.failedVersions.includes(version)) return { state, eligible: false, reason: "no_new_repair" };
 
 	const failures = state.target === target ? state.failures + 1 : 1;
 	const next = { failures, target, failedVersions: [...state.failedVersions, version] };
@@ -59,9 +58,25 @@ export function registerAdaptiveRouter(
 		hasRepair = false;
 		evidence = undefined;
 	};
-	const disable = () => { active = false; resetTask(); };
-	const record = (ctx: ExtensionContext, reason: string, model = ctx.model?.id, target = repair.target, version?: string) => {
-		pi.appendEntry("ccr-adaptive", { model, failures: repair.failures, target, version, upgrades: Number(upgraded), reason });
+	const disable = () => {
+		active = false;
+		resetTask();
+	};
+	const record = (
+		ctx: ExtensionContext,
+		reason: string,
+		model = ctx.model?.id,
+		target = repair.target,
+		version?: string,
+	) => {
+		pi.appendEntry("ccr-adaptive", {
+			model,
+			failures: repair.failures,
+			target,
+			version,
+			upgrades: Number(upgraded),
+			reason,
+		});
 		ctx.ui.setStatus("ccr-adaptive", "CCR " + model + " · " + reason);
 	};
 	pi.on("session_start", (event, ctx) => {
@@ -69,9 +84,13 @@ export function registerAdaptiveRouter(
 		upgraded = false;
 		input = 0;
 		output = 0;
-		active = (event.reason === "startup" || event.reason === "new") &&
-			ctx.model?.provider === provider && ctx.model.id === flash &&
-			!ctx.sessionManager.getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant");
+		active =
+			(event.reason === "startup" || event.reason === "new") &&
+			ctx.model?.provider === provider &&
+			ctx.model.id === flash &&
+			!ctx.sessionManager
+				.getBranch()
+				.some((entry) => entry.type === "message" && entry.message.role === "assistant");
 	});
 	pi.on("session_before_switch", disable);
 	pi.on("session_before_fork", disable);
@@ -80,7 +99,8 @@ export function registerAdaptiveRouter(
 	pi.on("user_bash", disable);
 	pi.on("input", resetTask);
 	pi.on("model_select", (event) => {
-		if (event.previousModel?.id !== event.model.id || event.previousModel?.provider !== event.model.provider) disable();
+		if (event.previousModel?.id !== event.model.id || event.previousModel?.provider !== event.model.provider)
+			disable();
 	});
 	pi.on("before_agent_start", () => {
 		resetTask();
@@ -118,12 +138,22 @@ export function registerAdaptiveRouter(
 		const call = calls[0];
 		const result = event.toolResults[0];
 		const paired = calls.length === 1 && event.toolResults.length === 1 && call?.id === result?.toolCallId;
-		const hasUnknownTools = calls.some((tool) => !readOnlyTools.has(tool.name) && tool.name !== "edit" && tool.name !== "write" && tool.name !== "run_tests");
+		const hasUnknownTools = calls.some(
+			(tool) =>
+				!readOnlyTools.has(tool.name) && tool.name !== "edit" && tool.name !== "write" && tool.name !== "run_tests",
+		);
 		const write = calls.some((tool) => tool.name === "edit" || tool.name === "write");
 		if (hasUnknownTools || write || changed.length > 0) {
 			const isWrite = paired && (call.name === "edit" || call.name === "write");
-			const path = isWrite && typeof call.arguments.path === "string" ? relativePath(call.arguments.path) : undefined;
-			if (!path || !current.has(path) || testFiles().includes(path) || result.isError || changed.some((file) => file !== path)) {
+			const path =
+				isWrite && typeof call.arguments.path === "string" ? relativePath(call.arguments.path) : undefined;
+			if (
+				!path ||
+				!current.has(path) ||
+				testFiles().includes(path) ||
+				result.isError ||
+				changed.some((file) => file !== path)
+			) {
 				record(ctx, "unverified_write", ctx.model.id, repair.target, version);
 				resetTask();
 				return;
@@ -147,8 +177,13 @@ export function registerAdaptiveRouter(
 		record(ctx, decision.reason, ctx.model.id, target, version);
 		if (!decision.eligible) return;
 
-		const model = ctx.scopedModels.find(({ model }) =>
-			model.provider === provider && model.id === pro && model.api === ctx.model?.api && model.baseUrl === ctx.model?.baseUrl)?.model;
+		const model = ctx.scopedModels.find(
+			({ model }) =>
+				model.provider === provider &&
+				model.id === pro &&
+				model.api === ctx.model?.api &&
+				model.baseUrl === ctx.model?.baseUrl,
+		)?.model;
 		if (!model || !ctx.hasUI || !ctx.signal || ctx.signal.aborted || ctx.hasPendingMessages()) {
 			record(ctx, "upgrade_unavailable", ctx.model.id, target, version);
 			return;
@@ -156,14 +191,23 @@ export function registerAdaptiveRouter(
 		const promptEpoch = epoch;
 		const approved = await ctx.ui.confirm(
 			"CCR 切换到 DeepSeek Pro",
-			"两次代码修复后的 pytest 均失败。当前 DeepSeek Flash 已知会话用量为输入 " + input +
-				"、输出 " + output + " Token。CCR 没有会话费用硬上限。是否允许本会话接下来使用 Pro？",
+			"两次代码修复后的 pytest 均失败。当前 DeepSeek Flash 已知会话用量为输入 " +
+				input +
+				"、输出 " +
+				output +
+				" Token。CCR 没有会话费用硬上限。是否允许本会话接下来使用 Pro？",
 			{ signal: ctx.signal },
 		);
 		if (!active || epoch !== promptEpoch || ctx.signal.aborted || ctx.hasPendingMessages()) return;
 		const latest = readVersions();
 		if (!approved || !latest || versionId(latest) !== version) {
-			record(ctx, approved ? "source_changed_during_confirmation" : "upgrade_declined", ctx.model.id, target, version);
+			record(
+				ctx,
+				approved ? "source_changed_during_confirmation" : "upgrade_declined",
+				ctx.model.id,
+				target,
+				version,
+			);
 			disable();
 			return;
 		}
@@ -175,16 +219,27 @@ export function registerAdaptiveRouter(
 		}
 		// model_select invalidates previous evidence, including our own switch.
 		if (upgraded) {
-			pi.appendEntry("ccr-adaptive", { model: model.id, failures, target, version, upgrades: 1, reason: "upgrade_confirmed" });
+			pi.appendEntry("ccr-adaptive", {
+				model: model.id,
+				failures,
+				target,
+				version,
+				upgrades: 1,
+				reason: "upgrade_confirmed",
+			});
 			ctx.ui.setStatus("ccr-adaptive", "CCR " + model.id + " · upgrade_confirmed");
 		} else {
 			record(ctx, "model_switch_failed", ctx.model.id, target, version);
 			disable();
 		}
 	});
-	return (id, result) => { if (active) evidence = { id, result }; };
+	return (id, result) => {
+		if (active) evidence = { id, result };
+	};
 }
 
 function versionId(files: Versions): string {
-	return createHash("sha256").update(JSON.stringify([...files].sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
+	return createHash("sha256")
+		.update(JSON.stringify([...files].sort(([a], [b]) => a.localeCompare(b))))
+		.digest("hex");
 }

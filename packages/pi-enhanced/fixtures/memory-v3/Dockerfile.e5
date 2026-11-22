@@ -1,0 +1,6 @@
+FROM python:3.11-slim@sha256:65bd3d9f1d7fa268dd1909973ba7eb4bdf41f6dcf2cfbe76ba9528b170f3fd79
+RUN pip install --no-cache-dir torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir sentence-transformers==5.1.2 pytest==8.4.2
+ENV HF_HOME=/opt/hf
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('intfloat/multilingual-e5-small', revision='614241f622f53c4eeff9890bdc4f31cfecc418b3', allow_patterns=['*.json', 'model.safetensors', 'sentencepiece.bpe.model'])"
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PI_ENHANCED_MEMORY_MODEL_CACHE=/opt/hf/hub

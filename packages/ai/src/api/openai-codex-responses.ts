@@ -27,6 +27,7 @@ import {
 } from "../utils/diagnostics.ts";
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { guardedFetch } from "../utils/guarded-fetch.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
@@ -412,12 +413,15 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						httpTimeoutMs !== undefined && httpTimeoutMs > 0 ? AbortSignal.timeout(httpTimeoutMs) : undefined;
 					const combinedSignal = combineAbortSignals([options?.signal, headerTimeoutSignal]);
 					try {
-						response = await (options?.fetch ?? globalThis.fetch)(resolveCodexUrl(model.baseUrl), {
-							method: "POST",
-							headers: sseHeaders,
-							body: sseBody,
-							signal: combinedSignal.signal,
-						});
+						response = await (guardedFetch(options?.fetch, options?.beforeSend) ?? globalThis.fetch)(
+							resolveCodexUrl(model.baseUrl),
+							{
+								method: "POST",
+								headers: sseHeaders,
+								body: sseBody,
+								signal: combinedSignal.signal,
+							},
+						);
 					} catch (error) {
 						if (headerTimeoutSignal?.aborted && !options?.signal?.aborted) {
 							throw new Error(`Codex SSE response headers timed out after ${httpTimeoutMs}ms`);

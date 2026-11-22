@@ -1,16 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type {
-	CoreMemoryDocument,
-	CoreMemoryName,
-	MemoryRecord,
-	ProjectScope,
-	ReadonlyMemoryQuery,
-	ScopedMemoryReader,
+import {
+	type CoreMemoryDocument,
+	type CoreMemoryName,
+	isVisibleVerifiedMemory,
+	type MemoryRecord,
+	type MemoryVisibility,
+	matchesMemoryQuery,
+	type ProjectScope,
+	type ReadonlyMemoryQuery,
+	restrictMemoryVisibility,
+	type ScopedMemoryReader,
+	sameMemoryRevision,
 } from "./contracts.ts";
 import { MemoryError } from "./errors.ts";
 import { redactMemoryOutput } from "./output-safety.ts";
+import type { SemanticSearchAdapter } from "./semantic-search-adapter.ts";
 import type { MemoryService } from "./service.ts";
 
 export const MEMORY_READER_REQUEST_CHANNEL = "pi-enhanced:memory:reader:request";
@@ -41,27 +47,77 @@ export interface MemoryReaderBrokerBinding {
 export class ScopedMemoryReaderAdapter implements ScopedMemoryReader {
 	readonly scope: ProjectScope;
 	private readonly service: MemoryService;
+	private readonly intelligence?: SemanticSearchAdapter;
+	private readonly sessionId?: string;
+	private readonly resolveVisibility?: () => Promise<MemoryVisibility>;
 	private closed = false;
 
-	constructor(service: MemoryService) {
+	constructor(
+		service: MemoryService,
+		intelligence?: SemanticSearchAdapter,
+		sessionId?: string,
+		resolveVisibility?: () => Promise<MemoryVisibility>,
+	) {
 		this.service = service;
+		this.intelligence = intelligence;
+		this.sessionId = sessionId;
+		this.resolveVisibility = resolveVisibility;
 		this.scope = service.scope;
+	}
+
+	getVisibleNow(id: string, visibility: MemoryVisibility): MemoryRecord | null {
+		this.assertOpen();
+		const record = this.service.getVisibleNow(id, visibility);
+		return record && matchesMemoryQuery(record, { text: record.subjectKey ?? "", conditions: visibility.conditions })
+			? record
+			: null;
+	}
+
+	async visibility(): Promise<MemoryVisibility> {
+		this.assertOpen();
+		const current = await this.resolveVisibility?.();
+		this.assertOpen();
+		return { ...current, sessionId: this.sessionId ?? current?.sessionId };
 	}
 
 	async search(query: ReadonlyMemoryQuery): Promise<readonly MemoryRecord[]> {
 		this.assertOpen();
-		return this.service.search({
-			text: query.text,
-			...(query.limit === undefined ? {} : { limit: query.limit }),
-			...(query.kinds === undefined ? {} : { kinds: query.kinds }),
-			statuses: ["verified"],
-		});
+		const visibility = restrictMemoryVisibility(await this.visibility(), query.visibility);
+		const conditions = visibility.conditions?.filter(
+			(condition) => !query.conditions || query.conditions.includes(condition),
+		);
+		const scoped = { ...query, visibility, conditions };
+		const records = this.intelligence
+			? (await this.intelligence.search(scoped)).records
+			: await this.service.search({ ...scoped, statuses: ["verified"] });
+		const current = restrictMemoryVisibility(await this.visibility(), visibility);
+		const finalQuery = {
+			...scoped,
+			conditions: conditions?.filter((condition) => current.conditions?.includes(condition)),
+		};
+		const verified = await Promise.all(
+			records.map(async (record) => {
+				const latest = await this.service.getVisible(record.id, current);
+				return latest && sameMemoryRevision(record, latest) && matchesMemoryQuery(latest, finalQuery)
+					? latest
+					: null;
+			}),
+		);
+		this.assertOpen();
+		return verified.filter((record) => record !== null);
 	}
 
-	async get(id: string): Promise<MemoryRecord | null> {
+	async get(id: string, visibility?: MemoryVisibility): Promise<MemoryRecord | null> {
 		this.assertOpen();
-		const record = await this.service.getVerified(id);
-		return record?.lifecycle === "active" ? record : null;
+		const bound = restrictMemoryVisibility(await this.visibility(), visibility);
+		const current = restrictMemoryVisibility(await this.visibility(), bound);
+		const record = await this.service.getVisible(id, current);
+		this.assertOpen();
+		return record &&
+			isVisibleVerifiedMemory(record, current) &&
+			matchesMemoryQuery(record, { text: record.subjectKey ?? "", conditions: current.conditions })
+			? record
+			: null;
 	}
 
 	async getCore(name: CoreMemoryName): Promise<CoreMemoryDocument | null> {
@@ -103,6 +159,26 @@ export function registerScopedMemoryReaderBroker(events: EventBus, binding: Memo
 		};
 		events.emit(MEMORY_READER_RESPONSE_CHANNEL, response);
 	});
+}
+
+export function currentScopedMemoryReader(events: EventBus, ctx: Pick<ExtensionContext, "cwd" | "sessionManager">) {
+	const request = { requestId: randomUUID(), sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd };
+	let reader: Pick<ScopedMemoryReaderAdapter, "scope" | "getVisibleNow"> | undefined;
+	const off = events.on(MEMORY_READER_RESPONSE_CHANNEL, (data) => {
+		const response = parseResponse(data);
+		if (response?.requestId !== request.requestId || response.sessionId !== request.sessionId) return;
+		const candidate = response.reader as
+			| Partial<Pick<ScopedMemoryReaderAdapter, "scope" | "getVisibleNow">>
+			| undefined;
+		if (candidate?.scope && typeof candidate.getVisibleNow === "function")
+			reader = { scope: candidate.scope, getVisibleNow: candidate.getVisibleNow.bind(candidate) };
+	});
+	try {
+		events.emit(MEMORY_READER_REQUEST_CHANNEL, request);
+		return reader;
+	} finally {
+		off();
+	}
 }
 
 export function requestScopedMemoryReader(

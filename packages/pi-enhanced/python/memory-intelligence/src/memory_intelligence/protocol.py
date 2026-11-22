@@ -10,6 +10,7 @@ MAX_REQUEST_ID_LENGTH = 100
 ALLOWED_OPERATIONS = frozenset(
     {
         "health",
+        "encode_e5",
         "sync_snapshot",
         "upsert_vectors",
         "remove_vectors",

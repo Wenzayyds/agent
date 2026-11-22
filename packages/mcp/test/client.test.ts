@@ -7,6 +7,7 @@ import {
 	McpClient,
 	McpError,
 	McpTimeoutError,
+	parseJsonRpcMessage,
 } from "../src/index.ts";
 import { createInMemoryTransportPair, type InMemoryTransport } from "../src/testing/index.ts";
 
@@ -68,6 +69,47 @@ afterEach(() => {
 });
 
 describe("McpClient", () => {
+	it("rejects an envelope combining a request with a response", () => {
+		expect(() => parseJsonRpcMessage({ jsonrpc: "2.0", id: 2, method: "ping", result: {} })).toThrow(
+			"Invalid JSON-RPC message",
+		);
+		expect(() =>
+			parseJsonRpcMessage({ jsonrpc: "2.0", method: "ping", error: { code: -1, message: "invalid" } }),
+		).toThrow("Invalid JSON-RPC message");
+	});
+
+	it("ignores duplicate and late replies while another request is pending", async () => {
+		const { client, server } = await connect();
+		const ids: (string | number)[] = [];
+		server.setHandler("tools/call", (request) => {
+			ids.push(request.id);
+			return new Promise(() => {});
+		});
+		await expect(client.callTool("late", {}, { timeoutMs: 25 })).rejects.toBeInstanceOf(McpTimeoutError);
+		const second = client.callTool("current");
+		await vi.waitFor(() => expect(ids).toHaveLength(2));
+		const reply = (id: string | number, text: string) =>
+			server.transport.send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }] } });
+		await reply(ids[0]!, "stale");
+		await reply(ids[1]!, "current");
+		await reply(ids[1]!, "duplicate");
+		expect((await second).content).toEqual([{ type: "text", text: "current" }]);
+		await client.close();
+	});
+
+	it.each([
+		{},
+		{ isError: 0, content: [] },
+		{ content: [null] },
+		{ content: [{ type: "text", text: 7 }] },
+		{ content: [{ type: "resource", resource: { uri: "test:x", text: "x", blob: "eA==" } }] },
+	])("rejects invalid tools/call fields %#", async (result) => {
+		const { client, server } = await connect();
+		server.setHandler("tools/call", () => result);
+		await expect(client.callTool("invalid")).rejects.toThrow("Invalid MCP tools/call result");
+		await client.close();
+	});
+
 	it("initializes the connection before exposing server information", async () => {
 		const { client, server } = await connect();
 		expect(client.connectionState).toBe("connected");

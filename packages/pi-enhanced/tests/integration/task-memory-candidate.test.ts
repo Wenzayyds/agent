@@ -28,8 +28,10 @@ describe("Task to Memory candidate bridge", () => {
 		const service = await openMemoryService(scope);
 		services.push(service);
 		const events = createEventBus();
-		const off = registerMemoryCandidateWriterBroker(events, { service, scope, sessionId: "session-1" });
+		const off = registerMemoryCandidateWriterBroker(events, { service, scope, sessionId: "session-1", isCompletedTask: async (id) => id === "task-1" });
 		const context = { cwd: project, sessionManager: { getSessionId: () => "session-1" } } as never;
+		await expect(requestMemoryCandidateWrite(events, context, { taskId: "task-1-other", content: "forged task" }))
+			.rejects.toMatchObject({ code: "MEMORY_VALIDATION_ERROR" });
 		const first = await requestMemoryCandidateWrite(events, context, { taskId: "task-1", content: "A reviewed task experience" });
 		const second = await requestMemoryCandidateWrite(events, context, { taskId: "task-1", content: "A reviewed task experience" });
 		expect(second).toEqual(first);
@@ -44,9 +46,17 @@ describe("Task to Memory candidate bridge", () => {
 		await service.close(); services.splice(services.indexOf(service), 1);
 		const reopened = await openMemoryService(scope); services.push(reopened);
 		const restartedBus = createEventBus();
-		const stopRestarted = registerMemoryCandidateWriterBroker(restartedBus, { service: reopened, scope, sessionId: "session-1" });
+		const stopRestarted = registerMemoryCandidateWriterBroker(restartedBus, { service: reopened, scope, sessionId: "session-1", isCompletedTask: async (id) => id === "task-1" });
 		const afterRestart = await requestMemoryCandidateWrite(restartedBus, context, { taskId: "task-1", content: "A reviewed task experience" });
 		expect(afterRestart.id).toBe(first.id);
+		const edited = await reopened.updateContent(first.id, "Revised task experience", afterRestart.revision);
+		const replay = await requestMemoryCandidateWrite(restartedBus, context, { taskId: "task-1", content: "A reviewed task experience" });
+		expect(replay).toMatchObject({ id: first.id, revision: edited.revision });
+		expect(await reopened.list()).toHaveLength(1);
+		await reopened.delete(first.id, edited.revision);
+		await expect(requestMemoryCandidateWrite(restartedBus, context, { taskId: "task-1", content: "A reviewed task experience" }))
+			.rejects.toMatchObject({ code: "MEMORY_VALIDATION_ERROR" });
+		expect(await reopened.list()).toEqual([]);
 		stopRestarted();
 	});
 });

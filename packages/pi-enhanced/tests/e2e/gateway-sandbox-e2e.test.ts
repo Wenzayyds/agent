@@ -3,9 +3,12 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { startBudgetGateway } from "../../benchmarks/real-agent/budget-gateway.ts";
 import { gatewayModelsConfig, isolatedAgentEnvironment } from "../../benchmarks/real-agent/gateway-integration.ts";
+import { fillEvaluationBudget } from "../../benchmarks/real-agent/evaluation-policy.ts";
 import {
 	close,
 	dockerImageAvailable,
@@ -25,6 +28,62 @@ const closers: Array<() => Promise<void>> = [];
 afterEach(async () => {
 	await Promise.allSettled(closers.splice(0).map((close) => close()));
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe.skipIf(!existsSync(cli))("shared CLI task budget", () => {
+	it.each([[undefined, "standard", 25_000], ["economy", "economy", 20_000], ["premium", "premium", 30_000]] as const)(
+		"keeps %s in the native CLI ledger and controlled plan", async (selection, tier, limit) => {
+			const provider = await startProvider((body, response) => {
+				expect(body.max_tokens).toBeLessThanOrEqual(512);
+				response.writeHead(200, { "Content-Type": "text/event-stream" }).end(textSse("offline budget", 25, 5));
+			});
+			const root = mkdtempSync(join(tmpdir(), "pi-tier-"));
+			roots.push(root);
+			const agentDir = join(root, "agent");
+			mkdirSync(agentDir);
+			writeFileSync(join(agentDir, "models.json"), JSON.stringify({
+				providers: { deepseek: { baseUrl: tier === "premium" ? `${provider.url}/v1` : provider.url, apiKey: "$PI_ENHANCED_GATEWAY_TOKEN" } },
+			}));
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
+			const configuration = join(agentDir, "pi-enhanced.json");
+			writeFileSync(configuration, JSON.stringify(selection ? { budget: { tier: selection } } : {}));
+			const extension = join(root, "context.ts");
+			const contextFactory = pathToFileURL(join(repositoryRoot, "packages", "pi-enhanced", "src", "context", "extension.ts")).href;
+			writeFileSync(extension, `import { createContextExtension } from ${JSON.stringify(contextFactory)};
+export default createContextExtension({ agentDir: ${JSON.stringify(agentDir)}, budgetProvider: ${JSON.stringify({
+				provider: "deepseek", model: "deepseek-flash", baseUrl: provider.url,
+				pricing: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
+			})} });\n`);
+			const env = isolatedAgentEnvironment(process.env, {
+				providerApiKeyEnv: "DEEPSEEK_API_KEY", gatewayToken: "mock-upstream-key", agentDir, tempDir: root, evaluation: {},
+			});
+			const id = randomUUID();
+			const args = ["--mode", "json", "--print", "--provider", "deepseek", "--model", "deepseek-flash",
+				"--extension", extension, "--session-id", id, "--no-mcp", "--no-skills", "--no-context-files"];
+			const readLedger = () => {
+				const db = new DatabaseSync(join(agentDir, "pi-enhanced-budget.sqlite3"), { readOnly: true });
+				try {
+					const rows = db.prepare("SELECT body FROM gateway_budget_runs").all() as { body: string }[];
+					expect(rows).toHaveLength(1);
+					return JSON.parse(rows[0]!.body);
+				} finally { db.close(); }
+			};
+			const first = await run(cli, root, env, [...args, "inspect the budget"]);
+			expect(first.status, first.stderr).toBe(0);
+			expect(first.stdout).toContain("offline budget");
+			const a = readLedger();
+			expect(a.status).toMatchObject({ requestsStarted: 1, actualTotalTokens: 30, limits: { tier,
+				maxTotalTokens: limit, maxRequests: 8, maxTotalCostUsd: 0.03, maxOutputTokensPerRequest: 512 } });
+			expect(fillEvaluationBudget({ budgetTier: selection })).toMatchObject({ budgetTier: tier, maxTokensPerTask: String(limit) });
+			writeFileSync(configuration, JSON.stringify({ budget: { tier: tier === "premium" ? "economy" : "premium" } }));
+			const resumed = await run(cli, root, env, [...args, "continue"]);
+			expect(resumed.status, resumed.stderr).toBe(0);
+			expect(resumed.stdout).toContain("offline budget");
+			const b = readLedger();
+			expect(b.deadlineAt).toBe(a.deadlineAt);
+			expect(b.status).toMatchObject({ requestsStarted: 2, actualTotalTokens: 60, limits: a.status.limits });
+		}, 50_000,
+	);
 });
 
 describe.skipIf(!dockerAvailable || !existsSync(cli))("Batch H model gateway plus Docker tools", () => {

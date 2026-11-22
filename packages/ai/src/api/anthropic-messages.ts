@@ -37,6 +37,7 @@ import type {
 } from "../types.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { guardedFetch } from "../utils/guarded-fetch.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { parseJsonWithRepair } from "../utils/json-parse.ts";
@@ -632,7 +633,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					model,
 					apiKey,
 					options?.headers,
-					options?.fetch,
+					guardedFetch(options?.fetch, options?.beforeSend),
 					copilotDynamicHeaders,
 					cacheSessionId,
 					federation,

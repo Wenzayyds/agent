@@ -135,7 +135,8 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 			ALTER TABLE task_attempts DROP COLUMN input_digest;
 			ALTER TABLE task_checkpoints DROP COLUMN workspace_json;
 			ALTER TABLE task_checkpoints DROP COLUMN plan_revision;
-			DELETE FROM schema_migrations WHERE version=2;
+			ALTER TABLE task_evidence DROP COLUMN pytest_json;
+			DELETE FROM schema_migrations WHERE version>=2;
 		`);
 		v1.close();
 		const upgraded = new TaskService(new TaskProvider(storage), 10); services.push(upgraded);
@@ -144,7 +145,7 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 			lastCheckpoint: { planRevision: 1, workspaceObservation: { realRoot: "" } },
 		});
 		const database = new DatabaseSync(storage.databasePath);
-		expect((database.prepare("SELECT max(version) AS version FROM schema_migrations").get() as { version: number }).version).toBe(2);
+		expect((database.prepare("SELECT max(version) AS version FROM schema_migrations").get() as { version: number }).version).toBe(3);
 		database.close();
 	});
 
@@ -164,4 +165,20 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 		const attempts = service.provider.getAttempts(created.task.taskId); expect(attempts).toHaveLength(4); expect(attempts.find(({ toolCallId }) => toolCallId === "parallel-a/1")?.parentToolCallId).toBe("parallel-a"); expect(attempts.find(({ toolCallId }) => toolCallId === "parallel-b")?.state).toBe("failed");
 		expect(service.get(created.task.taskId)?.evidence).toHaveLength(3); expect(JSON.stringify(service.get(created.task.taskId))).not.toContain("secret-not-stored"); expect(service.provider.markOpenAttemptsForReconciliation(Date.now())).toBe(1);
 	});
+});
+
+it("requires a matching Sandbox receipt for a pytest step even after manual attestation", () => {
+	const { service } = fixture();
+	const plan = service.create("verify the repair", [{
+		stepId: "test", title: "check", expectedOutcome: "public tests pass",
+		validation: { kind: "pytest", target: "test_calc.py", expectedSha256: "a".repeat(64) },
+	}], "session", null);
+	const id = plan.task.taskId;
+	service.transitionTask(id, 1, "queued");
+	service.transitionTask(id, 2, "running");
+	service.transitionStep(id, "test", 1, "running");
+	service.transitionStep(id, "test", 2, "verifying");
+	service.addEvidence({ taskId: id, stepId: "test", kind: "manual_review", sourceRef: "user",
+		outcome: "succeeded", confidenceClass: "manual_attested", digestSource: "pytest passed" });
+	expect(() => service.transitionStep(id, "test", 3, "completed")).toThrow(/pytest/i);
 });

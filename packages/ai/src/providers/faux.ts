@@ -531,6 +531,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 
 		queueMicrotask(async () => {
 			try {
+				streamOptions?.beforeSend?.();
 				await streamOptions?.onResponse?.({ status: 200, headers: {} }, requestModel);
 				if (!step) {
 					let message = createErrorMessage(
