@@ -137,6 +137,30 @@ export function quality(samples: readonly QualitySample[]) {
 	};
 }
 
+export function qualityAt10(samples: readonly QualitySample[]) {
+	const positive = samples.filter(({ relevantIds }) => relevantIds.length);
+	if (!positive.length) return { mrrAt10: null, ndcgAt10: null };
+	const discount = (index: number) => 1 / Math.log2(index + 2);
+	let reciprocalRank = 0;
+	let normalizedGain = 0;
+	for (const { relevantIds, actualIds } of positive) {
+		const expected = new Set(relevantIds);
+		const returned = actualIds.slice(0, 10);
+		const first = returned.findIndex((id) => expected.has(id));
+		if (first >= 0) reciprocalRank += 1 / (first + 1);
+		const seen = new Set<string>();
+		const gain = returned.reduce((sum, id, index) => {
+			if (!expected.has(id) || seen.has(id)) return sum;
+			seen.add(id);
+			return sum + discount(index);
+		}, 0);
+		const ideal = Array.from({ length: Math.min(10, expected.size) }, (_, index) => discount(index))
+			.reduce((sum, value) => sum + value, 0);
+		normalizedGain += gain / ideal;
+	}
+	return { mrrAt10: reciprocalRank / positive.length, ndcgAt10: normalizedGain / positive.length };
+}
+
 export function percentile(samples: readonly number[], fraction: number): number | null {
 	const sorted = [...samples].sort((a, b) => a - b);
 	return sorted[Math.ceil(sorted.length * fraction) - 1] ?? null;

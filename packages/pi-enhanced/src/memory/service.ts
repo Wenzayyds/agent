@@ -36,6 +36,7 @@ import {
 	matchesMemoryScope,
 	type NewMemoryInput,
 	type ProjectScope,
+	parseTaskDreamSource,
 	recordScope,
 	type ScopedSearchQuery,
 	type VerifiedMemorySnapshot,
@@ -47,6 +48,7 @@ import { type LocalMemoryProvider, scopedContentHash } from "./provider.ts";
 import { openLocalMemoryProvider } from "./storage.ts";
 
 const MAX_CONTENT_LENGTH = 8_000;
+const DREAM_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const WORKING_TTL_MS = 24 * 60 * 60 * 1_000;
 const MAX_QUERY_LENGTH = 500;
 const MAX_SOURCE_REF_LENGTH = 1_000;
@@ -68,6 +70,18 @@ const SECRET_PATTERNS = [
 
 export type MemoryReviewAction = "reject" | "mark_stale" | "restore_candidate";
 
+function dreamOrigins(record: MemoryRecord) {
+	return record.sources.flatMap(({ ref }) => {
+		const origin = parseTaskDreamSource(ref);
+		return origin ? [origin] : [];
+	});
+}
+
+function summarizeTaskExperience(record: MemoryRecord): string {
+	// Extract only words already verified in the cited file. Never copy task logs or raw model messages.
+	return record.content.slice(0, 500).trimEnd();
+}
+
 export class MemoryService {
 	readonly scope: ProjectScope;
 	readonly searchStatus: LocalMemoryProvider["searchStatus"];
@@ -85,6 +99,7 @@ export class MemoryService {
 	}
 
 	async saveCandidate(input: NewMemoryInput): Promise<MemoryRecord> {
+		if (parseTaskDreamSource(input.source?.ref ?? "")) throw validationError("Reserved Task Dream source");
 		return this.saveCandidateRecord(input);
 	}
 
@@ -319,6 +334,7 @@ export class MemoryService {
 		validateRevision(expectedRevision);
 		const current = await this.require(memoryId);
 		if (current.revision !== expectedRevision) throw revisionConflict();
+		if (dreamOrigins(current).length) throw validationError("Task Dream content is fixed to its source revision");
 		const validated = validateContent(content);
 		const normalized = normalizeMemoryText(validated);
 		const type = current.type ?? inferMemoryType(current.kind, current.category);
@@ -333,7 +349,7 @@ export class MemoryService {
 		)
 			return current;
 		const source = change?.source ?? current.sources[0];
-		if (!source || !MEMORY_SOURCE_TYPES.includes(source.type))
+		if (!source || !MEMORY_SOURCE_TYPES.includes(source.type) || parseTaskDreamSource(source.ref))
 			throw validationError("A revision requires a traceable source");
 		const reason = change
 			? validateContent(validateText(change.reason, "Change reason", 500))
@@ -359,6 +375,114 @@ export class MemoryService {
 		});
 	}
 
+	async taskDreamCandidates(taskId: string): Promise<readonly MemoryRecord[]> {
+		this.assertOpen();
+		const records = await this.provider.list({
+			limit: 50,
+			types: ["episodic"],
+			statuses: ["verified"],
+			visibility: { taskId },
+		});
+		return records.filter((record) => this.isDreamEvidence(record, taskId)).slice(0, 5);
+	}
+
+	async reviewTaskDream(taskId: string): Promise<readonly MemoryRecord[]> {
+		this.assertOpen();
+		validateId(taskId);
+		const rows = await this.provider.list({
+			limit: 50,
+			types: ["semantic"],
+			statuses: ["verified"],
+			visibility: { taskId },
+		});
+		const reminders = rows.filter((record) => dreamOrigins(record).some((origin) => origin.taskId === taskId));
+		return Promise.all(reminders.map((record) => this.reflectFileEvidence(record.id, record.revision)));
+	}
+
+	async saveTaskDreamCandidate(taskId: string, taskRevision: number, sourceId: string, sourceRevision: number) {
+		this.assertOpen();
+		validateId(taskId);
+		validateRevision(taskRevision);
+		validateRevision(sourceRevision);
+		const source = this.provider.getCurrent(validateId(sourceId));
+		if (!source || source.revision !== sourceRevision || !this.isDreamEvidence(source, taskId))
+			throw validationError("Task Dream requires current, verified file evidence from the same task");
+		if (source.subjectKey) {
+			const records = await this.provider.list({
+				limit: 50,
+				types: ["episodic"],
+				statuses: ["verified"],
+				visibility: { taskId },
+			});
+			if (
+				records.some(
+					(other) =>
+						other.subjectKey === source.subjectKey &&
+						this.isDreamEvidence(other, taskId) &&
+						normalizeMemoryText(other.content) !== normalizeMemoryText(source.content),
+				)
+			)
+				throw new MemoryError("MEMORY_CONTENT_CONFLICT", "Current file evidence disagrees on this task subject");
+		}
+		return this.saveCandidateRecord(
+			{
+				kind: "experience",
+				type: "semantic",
+				scope: { kind: "task", id: taskId },
+				content: summarizeTaskExperience(source),
+				source: {
+					type: "user",
+					ref: `task:${taskId}:dream:v1:${taskRevision}:${sourceId}:${sourceRevision}`,
+				},
+				metadata: {
+					category: "procedure",
+					tags: ["auto-dream"],
+					subjectKey: source.subjectKey,
+					validUntil: Math.min(source.validUntil ?? Infinity, Date.now() + DREAM_TTL_MS),
+				},
+			},
+			{ id: sourceId, revision: sourceRevision, reason: "Extractive task memory review" },
+		);
+	}
+
+	private isDreamEvidence(record: MemoryRecord, taskId: string): boolean {
+		const evidence = record.verifications.filter(
+			({ verifiedContentRevision }) => verifiedContentRevision === record.contentRevision,
+		);
+		const scope = recordScope(record);
+		return (
+			scope?.kind === "task" &&
+			scope.id === taskId &&
+			record.type === "episodic" &&
+			!dreamOrigins(record).length &&
+			isVisibleVerifiedMemory(record, { taskId }) &&
+			evidence.length > 0 &&
+			evidence.every(({ type }) => type === "file_observed") &&
+			this.hasCurrentFileEvidence(record)
+		);
+	}
+
+	private hasCurrentDreamEvidence(record: MemoryRecord): boolean {
+		const origins = dreamOrigins(record);
+		if (!origins.length) return true;
+		if (record.lifecycle !== "active" || (record.validUntil !== undefined && record.validUntil <= Date.now()))
+			return false;
+		const scope = recordScope(record);
+		return (
+			scope?.kind === "task" &&
+			origins.every((origin) => {
+				if (origin.taskId !== scope.id || origin.memoryId === record.id) return false;
+				const source = this.provider.getCurrent(origin.memoryId);
+				return (
+					!!source &&
+					source.revision === origin.memoryRevision &&
+					this.isDreamEvidence(source, origin.taskId) &&
+					record.content === summarizeTaskExperience(source)
+				);
+			})
+		);
+	}
+
 	async proposeProjectPromotion(
 		id: string,
 		expectedRevision: number,
@@ -372,6 +496,7 @@ export class MemoryService {
 		const explanation = validateContent(validateText(reason, "Promotion reason", 500));
 		if (
 			recordScope(record)?.kind !== "task" ||
+			dreamOrigins(record).length > 0 ||
 			!this.hasValidEvidence(record) ||
 			record.lifecycle !== "active" ||
 			(record.validFrom !== undefined && record.validFrom > Date.now()) ||
@@ -430,6 +555,8 @@ export class MemoryService {
 			throw validationError("User confirmation failed");
 		}
 		if (!confirmed) throw validationError("User did not confirm the memory");
+		if (!this.hasCurrentDreamEvidence(current))
+			throw validationError("Task Dream source changed or is no longer available");
 		return this.provider.setStatus({
 			id: memoryId,
 			status: "verified",
@@ -454,6 +581,7 @@ export class MemoryService {
 		if (current.status !== "candidate" && current.status !== "stale") {
 			throw validationError(`Cannot verify a ${current.status} memory`);
 		}
+		if (dreamOrigins(current).length) throw validationError("Task Dream requires interactive approval");
 		const relativePath = validateText(evidence.relativePath, "Evidence path", MAX_SOURCE_REF_LENGTH);
 		const { pathFromRoot, fileContent, fileHash } = this.readEvidenceFile(relativePath);
 		const excerpt = validateText(evidence.exactExcerpt, "Evidence excerpt", MAX_CONTENT_LENGTH);
@@ -483,6 +611,21 @@ export class MemoryService {
 		validateRevision(expectedRevision);
 		const record = await this.require(validateId(id));
 		if (record.revision !== expectedRevision) throw revisionConflict();
+		if (dreamOrigins(record).length) {
+			if (record.status !== "verified") throw validationError("Review requires an approved Task Dream memory");
+			if (
+				this.hasCurrentDreamEvidence(record) &&
+				(record.validUntil === undefined || record.validUntil > Date.now())
+			)
+				return record;
+			return this.provider.setStatus({
+				id: record.id,
+				status: "stale",
+				expectedRevision,
+				now: Date.now(),
+				reason: "Auto Dream source or review period is no longer current",
+			});
+		}
 		const proof = record.verifications.filter((item) => item.verifiedContentRevision === record.contentRevision);
 		const files = proof.filter((item) => item.type === "file_observed");
 		if (record.status !== "verified" || !files.length || files.length !== proof.length)
@@ -513,6 +656,7 @@ export class MemoryService {
 
 	/** Suppress obsolete file-only claims at retrieval. Governance still owns status transitions. */
 	private hasCurrentFileEvidence(record: MemoryRecord): boolean {
+		if (!this.hasCurrentDreamEvidence(record)) return false;
 		const proof = record.verifications.filter((item) => item.verifiedContentRevision === record.contentRevision);
 		if (!proof.length || proof.some((item) => item.type !== "file_observed")) return true;
 		const checked = new Set<string>();
@@ -601,7 +745,15 @@ export class MemoryService {
 		this.assertOpen();
 		validateRevision(expectedRevision);
 		const validated = validateMetadataPatch(patch);
-		return this.provider.setMetadata({ id: validateId(id), expectedRevision, ...validated, now: Date.now() });
+		const memoryId = validateId(id);
+		const current = await this.require(memoryId);
+		if (
+			dreamOrigins(current).length &&
+			validated.validUntil !== undefined &&
+			(validated.validUntil === null || validated.validUntil > (current.validUntil ?? 0))
+		)
+			throw validationError("Task Dream expiration cannot be extended without fresh evidence");
+		return this.provider.setMetadata({ id: memoryId, expectedRevision, ...validated, now: Date.now() });
 	}
 
 	async archive(id: string, expectedRevision: number): Promise<MemoryRecord> {

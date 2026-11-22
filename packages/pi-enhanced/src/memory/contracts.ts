@@ -132,6 +132,14 @@ export function inferMemoryType(kind: MemoryKind, category: MemoryCategory, task
 	return kind === "experience" ? "episodic" : "semantic";
 }
 
+const DREAM_SOURCE = /^task:([^:\s]+):dream:v1:(\d+):([^:\s]+):(\d+)$/u;
+
+export function parseTaskDreamSource(ref: string) {
+	const match = DREAM_SOURCE.exec(ref);
+	if (!match) return undefined;
+	return { taskId: match[1]!, taskRevision: Number(match[2]), memoryId: match[3]!, memoryRevision: Number(match[4]) };
+}
+
 export function inferMemoryScope(
 	sources: readonly Pick<MemorySource, "ref">[],
 	category: MemoryCategory,

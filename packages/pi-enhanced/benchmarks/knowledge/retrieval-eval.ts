@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startVectorLab } from "../../fixtures/knowledge/vector-lab.ts";
 import { prepareKnowledgeDocument } from "../../src/knowledge/ingestion.ts";
-import { KnowledgeService } from "../../src/knowledge/service.ts";
+import { createLocalKnowledgeReranker, RERANKER_REVISION } from "../../src/knowledge/reranker.ts";
+import { KNOWLEDGE_RERANK_DEPTH, KnowledgeService } from "../../src/knowledge/service.ts";
 import { DocumentStore, embeddingText, type SearchScope, type StoredChunk } from "../../src/knowledge/store.ts";
 import {
 	type EvidenceStatus, KNOWLEDGE_SEARCH, knowledgeSearchResult, projectKnowledgeToolContent,
@@ -16,6 +17,7 @@ import {
 	type Candidates,
 	percentile,
 	quality,
+	qualityAt10,
 	reciprocalRanks,
 	runRanking,
 	type Scheme,
@@ -30,6 +32,7 @@ import {
 	documentText,
 	evidenceChallenge,
 	legacy,
+	projectDocumentation,
 	type QueryFixture,
 	type RetrievalDataset,
 	validation,
@@ -127,6 +130,7 @@ function summarize(samples: Sample[]) {
 	const negative = [...last.values()].filter(({ queryType }) => queryType === "negative");
 	return {
 		...quality([...last.values()]),
+		...(isRerank && qualityAt10([...last.values()])),
 		scopeViolations,
 		citations: { ...citations, accuracy: citations.expected ? citations.correct / citations.expected : null },
 		negativeQueriesWithHits: negative.filter(({ actualIds }) => actualIds.length > 0).length,
@@ -171,12 +175,15 @@ const isHoldout = action === "holdout";
 const isDevelopment = action === "dev";
 const isReplay = action === "legacy";
 const isEvidence = action === "k7";
+const isRerank = action === "rerank";
+const trialTopK = isRerank ? 10 : TOP_K;
+const trialDepth = isRerank ? trialTopK * 8 : BASE_DEPTH;
 const evidenceSets: Record<string, RetrievalDataset> = {
 	fixed: legacy, dev: development, holdout: validation, challenge: evidenceChallenge,
 };
-if ((isEvidence && !Object.hasOwn(evidenceSets, option)) ||
-	(!isEvidence && !isHoldout && !isDevelopment && !isReplay && action !== "legacy-compare"))
-	throw new Error("Usage: retrieval-eval.ts legacy | dev | legacy-compare [weight] | holdout <lock.json> | k7 fixed|dev|holdout|challenge");
+if (((isEvidence || isRerank) && !Object.hasOwn(evidenceSets, option) && !(isRerank && option === "docs")) ||
+	(!isEvidence && !isRerank && !isHoldout && !isDevelopment && !isReplay && action !== "legacy-compare"))
+	throw new Error("Usage: retrieval-eval.ts legacy | dev | legacy-compare [weight] | holdout <lock.json> | k7|rerank fixed|dev|holdout|challenge|docs");
 
 const locked: { protocol: string; experimentSha256: string; challenger: Scheme; weight: Weight } | undefined = isHoldout
 	? JSON.parse(readFileSync(option, "utf8"))
@@ -186,9 +193,9 @@ if (locked) {
 	equal(locked.experimentSha256, experimentSha256);
 	ok(["A", "B", "C", "D", "E"].includes(locked.challenger));
 }
-const weight = loadWeight(locked ? String(locked.weight) : isEvidence ? undefined : option);
-const dataset = isEvidence ? evidenceSets[option] : isHoldout ? validation : isDevelopment ? development : legacy;
-const schemes: Scheme[] = isEvidence ? ["A"] : isHoldout
+const weight = loadWeight(locked ? String(locked.weight) : (isEvidence || isRerank) ? undefined : option);
+const dataset = isRerank && option === "docs" ? projectDocumentation() : (isEvidence || isRerank) ? evidenceSets[option] : isHoldout ? validation : isDevelopment ? development : legacy;
+const schemes: Scheme[] = (isEvidence || isRerank) ? ["A"] : isHoldout
 	? [...new Set<Scheme>(["A", locked!.challenger, "lexical", "semantic"])]
 	: isReplay
 		? ["A", "lexical", "semantic"]
@@ -273,6 +280,11 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 	} as const;
 	const service = new KnowledgeService({ ...options, projectId: PROJECT, filename: file });
 	resources.push(service);
+	const ranked = isRerank ? new KnowledgeService({
+		...options, projectId: PROJECT, filename: file, reranker: createLocalKnowledgeReranker(),
+	}) : undefined;
+	if (ranked) resources.push(ranked);
+	const rerankSamples: (Sample & { state: string; candidateRecall: number | null; baselineMs: number })[] = [];
 	const foreign = new KnowledgeService({ ...options, projectId: FOREIGN, filename: join(root, "foreign.sqlite3") });
 	resources.push(foreign);
 	const fixture = await catalog(dataset, root, service, foreign);
@@ -314,7 +326,7 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 			return { ...query, scope, labels: relevant };
 		});
 		const gather = async (query: (typeof labeled)[number], scheme: Scheme): Promise<Candidates> => {
-			const depth = scheme === "B" ? WIDE_DEPTH : BASE_DEPTH;
+			const depth = scheme === "B" ? WIDE_DEPTH : trialDepth;
 			lastPoints = [];
 			requested = 0;
 			const lexical =
@@ -355,7 +367,7 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 					const live = store.chunk(chunk.chunkId, query.scope);
 					return live ? [{ ...live, score }] : [];
 				})
-				.slice(0, TOP_K);
+				.slice(0, trialTopK);
 		}
 		function sample(
 			query: (typeof labeled)[number],
@@ -392,7 +404,7 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 				citations: citationCheck(hits, store, query.scope),
 				hits: hits.map(describeHit),
 				candidateCounts: {
-					requestedPerLeg: scheme === "lexical" ? TOP_K : scheme === "B" ? WIDE_DEPTH : BASE_DEPTH,
+					requestedPerLeg: scheme === "lexical" ? TOP_K : scheme === "B" ? WIDE_DEPTH : trialDepth,
 					lexical: candidates.lexical.length,
 					semantic: candidates.semantic.length,
 					rawSemantic: lastPoints.length,
@@ -410,9 +422,33 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 					const candidates = await gather(query, scheme);
 					const current = sample(query, scheme, weight, repetition, candidates, start);
 					samples.push(current);
+					if (ranked) {
+						const baselineStarted = performance.now();
+						const baseline = await service.search(query.text, query.scope, trialTopK);
+						const baselineMs = performance.now() - baselineStarted;
+						equal(baseline.mode, "hybrid", baseline.fallback);
+						deepStrictEqual(baseline.hits.map(describeHit), current.hits);
+						const before = performance.now();
+						const reranked = await ranked.search(query.text, query.scope, trialTopK);
+						const elapsedMs = performance.now() - before;
+						equal(reranked.mode, "hybrid", reranked.fallback);
+						const pool = runRanking("A", query.text, candidates, 1, KNOWLEDGE_RERANK_DEPTH)
+							.map(({ chunk }) => chunk.chunkId);
+						const actualIds = reranked.hits.map(({ chunk }) => chunk.chunkId);
+						const scopeViolations = actualIds.filter((id) => fixture.forbidden.has(id) || !store.chunk(id, query.scope));
+						equal(scopeViolations.length, 0);
+						rerankSamples.push({
+							...current, actualIds, scopeViolations, elapsedMs, baselineMs,
+							hits: reranked.hits.map(describeHit), citations: citationCheck(reranked.hits, store, query.scope),
+							state: reranked.rerank ?? "not-needed",
+							candidateRecall: current.relevantIds.length
+								? current.relevantIds.filter((id) => pool.includes(id)).length / current.relevantIds.length
+								: null,
+						});
+					}
 					if (isEvidence) {
 						const before = performance.now();
-						const live = await service.search(query.text, query.scope, TOP_K, "hybrid");
+						const live = await service.search(query.text, query.scope, trialTopK, "hybrid");
 						const nativeMs = performance.now() - before;
 						deepStrictEqual(live.hits.map(describeHit), current.hits);
 						const project = (evidenceOnly: boolean) => {
@@ -443,7 +479,7 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 						});
 					}
 					if (scheme === "A" && repetition === 0) {
-						const live = await service.search(query.text, query.scope, TOP_K, "hybrid");
+						const live = await service.search(query.text, query.scope, trialTopK, "hybrid");
 						equal(live.mode, "hybrid");
 						deepStrictEqual(live.hits.map(describeHit), current.hits, "Baseline fusion diverged from production");
 						const rrf = reciprocalRanks(candidates).map(({ hit, ...rank }, i) => ({
@@ -457,7 +493,8 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 							text: query.text,
 							scope: query.scope,
 							relevant: query.labels,
-							topK: TOP_K,
+							topK: trialTopK,
+
 							requestedPerLeg: BASE_DEPTH,
 							lexical: candidates.lexical.map((hit, i) => ({ rank: i + 1, ...describeHit(hit) })),
 							semantic: candidates.semantic.map((hit, i) => ({ rank: i + 1, ...describeHit(hit) })),
@@ -490,6 +527,7 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 			protocol,
 			experimentSha256,
 			dataset: dataset.id,
+			datasetSha256: createHash("sha256").update(JSON.stringify(dataset)).digest("hex"),
 			action,
 			topK: TOP_K,
 			repetitions: REPETITIONS,
@@ -511,6 +549,20 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 			samples,
 			traces,
 			...(isEvidence && { evidenceChecks }),
+			...(ranked && {
+				rerank: {
+					revision: RERANKER_REVISION, depth: KNOWLEDGE_RERANK_DEPTH,
+					candidateRecall: (() => {
+						const positives = rerankSamples.flatMap((row) => row.candidateRecall === null ? [] : [row.candidateRecall]);
+						return positives.length ? positives.reduce((sum, recall) => sum + recall, 0) / positives.length : null;
+					})(),
+					...summarize(rerankSamples), samples: rerankSamples,
+					pairedBaselineLatencyMs: {
+						p50: percentile(rerankSamples.map((row) => row.baselineMs), 0.5),
+						p95: percentile(rerankSamples.map((row) => row.baselineMs), 0.95),
+					},
+				},
+			}),
 			perScheme: schemes.map((scheme) => {
 				const selected = samples.filter((row) => row.scheme === scheme);
 				const groups = [...new Set(selected.map(({ queryType }) => queryType))].map((type) => ({

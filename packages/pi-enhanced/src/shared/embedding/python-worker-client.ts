@@ -11,6 +11,7 @@ const MAX_STDERR_BYTES = 4_096;
 export type MemoryWorkerOperation =
 	| "health"
 	| "encode_e5"
+	| "rerank_pairs"
 	| "sync_snapshot"
 	| "upsert_vectors"
 	| "remove_vectors"

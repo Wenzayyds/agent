@@ -22,6 +22,8 @@ export interface BudgetGatewayPricing {
 
 export interface BudgetGatewayModel {
 	modelId: string;
+	/** A trusted proxy may return the physical model ID rather than its route selector. */
+	responseModelId?: string;
 	pricing: BudgetGatewayPricing;
 	contextWindow: number;
 	maxOutputTokens: number;
@@ -30,9 +32,10 @@ export interface BudgetGatewayModel {
 
 export function isBudgetGatewayModel(value: unknown): value is BudgetGatewayModel {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const { modelId, contextWindow, maxOutputTokens, supportsTools, pricing } = value as Partial<BudgetGatewayModel>;
+	const { modelId, responseModelId, contextWindow, maxOutputTokens, supportsTools, pricing } = value as Partial<BudgetGatewayModel>;
+	const isModelId = (id: unknown) => typeof id === "string" && id.length > 0 && id.length <= 512 && id.trim() === id;
 	return (
-		typeof modelId === "string" && modelId.length > 0 && modelId.length <= 512 && modelId.trim() === modelId &&
+		isModelId(modelId) && (responseModelId === undefined || isModelId(responseModelId)) &&
 		supportsTools === true && typeof contextWindow === "number" && Number.isSafeInteger(contextWindow) &&
 		typeof maxOutputTokens === "number" && Number.isSafeInteger(maxOutputTokens) &&
 		maxOutputTokens > 0 && maxOutputTokens <= contextWindow && !!pricing &&
@@ -46,7 +49,9 @@ function cost(pricing: BudgetGatewayPricing, input: number, output: number): num
 }
 
 export function isBudgetGatewayUpstreamAllowed(url: string): boolean {
-	return /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(url) || url === "https://api.deepseek.com";
+	return /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(url) ||
+		/^http:\/\/127\.0\.0\.1(?::[1-9]\d{0,4})?\/v1$/u.test(url) ||
+		url === "https://api.deepseek.com";
 }
 
 export interface BudgetGatewayOptions {
@@ -591,7 +596,8 @@ export async function startBudgetGateway(configuration: BudgetGatewayOptions): P
 		...(options.guardedClientRetry ? ["guarded-client-retry-v1"] : []),
 		...(options.models ? ["model-pricing-v1", [...options.models].sort((a, b) => a.modelId.localeCompare(b.modelId))
 			.map((model) => [model.modelId, model.contextWindow, model.maxOutputTokens, model.supportsTools,
-				model.pricing.inputUsdPerMillion, model.pricing.outputUsdPerMillion])] : []),
+				model.pricing.inputUsdPerMillion, model.pricing.outputUsdPerMillion,
+				...(model.responseModelId === undefined ? [] : [model.responseModelId])])] : []),
 	]);
 	const ledger = new BudgetLedger(
 		options.runId,
@@ -896,7 +902,7 @@ async function dispatchRequest(
 		}
 		let pending = "";
 		let modelConfirmed = false;
-		const expectedModel = upstream.ok ? reservation.model?.modelId : undefined;
+		const expectedModel = upstream.ok ? reservation.model : undefined;
 		const verifyModel = (parsed: ReturnType<typeof consumeSseLines>, final: boolean) => {
 			if (parsed.modelMismatch) throw new GatewayRejection("GATEWAY_UPSTREAM_MODEL_MISMATCH");
 			modelConfirmed ||= parsed.modelConfirmed;
@@ -1019,7 +1025,7 @@ function upstreamTransportCode(error: unknown): string | undefined {
 function consumeSseLines(
 	input: string,
 	responseIds?: Set<string>,
-	expectedModel?: string,
+	expectedModel?: BudgetGatewayModel,
 ): {
 	remainder: string;
 	usage: ProviderUsage | null;
@@ -1057,8 +1063,9 @@ function consumeSseLines(
 				choices?: { finish_reason?: string; delta?: { tool_calls?: unknown[]; function_call?: unknown } }[];
 			};
 			if (expectedModel && parsed.model !== undefined) {
-				modelConfirmed ||= parsed.model === expectedModel;
-				modelMismatch ||= parsed.model !== expectedModel;
+				const matches = parsed.model === expectedModel.modelId || parsed.model === expectedModel.responseModelId;
+				modelConfirmed ||= matches;
+				modelMismatch ||= !matches;
 			}
 			const choice = parsed.choices?.[0];
 			const finish = choice?.finish_reason;
@@ -1161,9 +1168,13 @@ function validateOptions(options: BudgetGatewayOptions): void {
 		throw new Error("GATEWAY_OUTPUT_LIMIT_INVALID");
 	for (const rate of Object.values(options.pricing))
 		if (!Number.isFinite(rate) || rate < 0) throw new Error("GATEWAY_PRICING_INVALID");
-	if (options.models && (!options.models.length || !options.models.every(isBudgetGatewayModel) ||
-		new Set(options.models.map(({ modelId }) => modelId)).size !== options.models.length))
-		throw new Error("GATEWAY_MODEL_CONFIG_INVALID");
+	if (options.models) {
+		if (!options.models.length || !options.models.every(isBudgetGatewayModel))
+			throw new Error("GATEWAY_MODEL_CONFIG_INVALID");
+		const identifiers = options.models.flatMap(({ modelId, responseModelId }) =>
+			responseModelId === undefined ? [modelId] : [modelId, responseModelId]);
+		if (new Set(identifiers).size !== identifiers.length) throw new Error("GATEWAY_MODEL_CONFIG_INVALID");
+	}
 	if (options.limits.maxConcurrency !== 1) throw new Error("GATEWAY_CONCURRENCY_MUST_BE_ONE");
 }
 

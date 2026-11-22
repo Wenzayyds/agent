@@ -19,6 +19,7 @@ import {
 	type MemoryType,
 	type MemoryVerification,
 	type ProjectScope,
+	parseTaskDreamSource,
 	recordScope,
 	type ScopedSearchQuery,
 } from "./contracts.ts";
@@ -166,7 +167,8 @@ export class LocalMemoryProvider {
 			this.transaction(() => {
 				this.assertNotForgotten(input.kind, input.contentHash);
 				// Host task proposals have a stable source token, even if their record was later edited.
-				if (scopeKind === "task" && /^task:[^:\s]+:experience:[a-f0-9]{64}$/u.test(input.source.ref)) {
+				const dream = parseTaskDreamSource(input.source.ref);
+				if (scopeKind === "task" && (dream || /^task:[^:\s]+:experience:[a-f0-9]{64}$/u.test(input.source.ref))) {
 					const forgottenEvent = this.database
 						.prepare(`SELECT 1 FROM memory_governance_audit a
 						JOIN json_each(a.before_json, '$.sources') s
@@ -205,6 +207,9 @@ export class LocalMemoryProvider {
 						scopeId,
 						input.data?.taskId ?? null,
 					) as { id: string; content_hash: string; data_json: string } | undefined;
+				if (existing && dream) {
+					throw new MemoryError("MEMORY_CONTENT_CONFLICT", "A separate record already owns this task summary");
+				}
 				if (existing && existing.data_json !== dataJson) {
 					throw new MemoryError("MEMORY_CONTENT_CONFLICT", "Duplicate memory has different structured data");
 				}

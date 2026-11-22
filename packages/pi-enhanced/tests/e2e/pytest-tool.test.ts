@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
+import { DatabaseSync } from "node:sqlite";
+import { fauxAssistantMessage, fauxToolCall, getModel } from "@earendil-works/pi-ai/compat";
+import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { AuthStorage } from "../../../coding-agent/src/core/auth-storage.ts";
+import { createInMemoryModelRegistry, getModelRuntime } from "../../../coding-agent/test/model-runtime-test-utils.ts";
 import { describe, expect, it, vi } from "vitest";
 import { createHarness, createTestUiContext, getMessageText } from "../../../coding-agent/test/suite/harness.ts";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
@@ -14,6 +18,9 @@ import { createTaskManagerExtension } from "../../src/task-manager/extension.ts"
 import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
 import { taskPytestSource, type TaskPytestSource } from "../../src/sandbox/task-evidence.ts";
+import type { BudgetGatewayStatus } from "../../benchmarks/real-agent/budget-gateway.ts";
+import { createContextExtension } from "../../src/context/extension.ts";
+import { installCcrSessionBudget } from "../../src/context/session-budget.ts";
 import { assessPytest } from "../../src/ccr/adaptive.ts";
 import type { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
@@ -22,7 +29,7 @@ import { createPytestExecutor, type PytestConfig } from "../../src/sandbox/pytes
 import { createSweTestFeedback, sweVerificationStatus } from "../../benchmarks/real-agent/swe-test-feedback.ts";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
 import { readSwePatch } from "../../benchmarks/real-agent/swe-patch.ts";
-import { sandboxConfigForTesting } from "../fixtures/runner-support.ts";
+import { close, sandboxConfigForTesting, startStubProvider, textSse, toolCallSse } from "../fixtures/runner-support.ts";
 
 const image = process.env.PI_TEST_PYTEST_IMAGE ?? "";
 const policy = (files = ["calc.py", "test_calc.py"]): PytestConfig => ({ image, files, tests: ["test_calc.py"] });
@@ -350,6 +357,113 @@ describe.skipIf(!image)("isolated pytest", () => {
 			if (scenario.usePro) expect(readFileSync(join(harness.tempDir, "calc.py"), "utf8")).toContain("return max(0, x)");
 		} finally { broker?.stop(); harness.cleanup(); }
 	}, 60_000);
+
+
+	it("shares one durable Gateway budget when CCR switches from Flash to Pro after Docker pytest", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-pytest-test-ccr-budget-"));
+		const agentDir = join(root, "agent");
+		mkdirSync(agentDir);
+		const flash = "DeepSeek/deepseek-flash";
+		const pro = "DeepSeek/deepseek-v4-pro";
+		const calls: Record<string, unknown>[] = [];
+		const edit = (oldText: string, newText: string, input: number) => toolCallSse(
+			"edit", { path: "calc.py", edits: [{ oldText, newText }] }, input, 20,
+		);
+		const test = (input: number) => toolCallSse("run_tests", { targets: ["test_calc.py"] }, input, 20);
+		const responses = [
+			edit("return 0", "return 1", 101), test(102), edit("return 1", "return 2", 103), test(104),
+			edit("return 2", "return max(0, x)", 105), test(106), textSse("Verified through Pro.", 107, 20),
+		];
+		const stub = await startStubProvider((body, response) => {
+			const sse = responses[calls.length];
+			calls.push(body);
+			if (!sse) { response.writeHead(500).end(); return; }
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(
+				sse.replaceAll('"model":"deepseek-flash"', '"model":' + JSON.stringify(body.model)),
+			);
+		});
+		const baseUrl = stub.url + "/v1";
+		const ledger = () => {
+			const db = new DatabaseSync(join(agentDir, "pi-enhanced-budget.sqlite3"), { readOnly: true });
+			try {
+				return (db.prepare("SELECT id, body FROM gateway_budget_runs").all() as { id: string; body: string }[])
+					.map(({ id, body }) => ({ id, ...JSON.parse(body) as { deadlineAt: number; status: BudgetGatewayStatus } }));
+			} finally { db.close(); }
+		};
+		let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+		let broker: DockerSandboxBroker | undefined;
+		try {
+			vi.stubEnv("PI_ENHANCED_CCR_BUDGET", JSON.stringify({ baseUrl, models: [flash, pro] }));
+			vi.stubEnv("PI_ENHANCED_CCR_BUDGET_KEY", "mock-upstream-key");
+			writeFileSync(join(agentDir, ENHANCED_CONFIG_FILE), JSON.stringify({ budget: { maxRequests: 7 } }));
+			writeFileSync(join(root, "calc.py"), "def clamp(x):\n    return 0\n");
+			writeFileSync(join(root, "test_calc.py"), "from calc import clamp\ndef test_clamp(): assert clamp(4) == 4\n");
+
+			const auth = AuthStorage.inMemory();
+			const registry = await createInMemoryModelRegistry(auth);
+			registry.registerProvider("local-ccr", {
+				baseUrl, api: "openai-completions", apiKey: "deliberately-invalid-sdk-token",
+				models: [flash, pro].map((id) => ({ ...getModel("openai", "gpt-4o"), id, name: id, baseUrl, provider: "local-ccr", api: "openai-completions" as const })),
+			});
+			const models = [registry.find("local-ccr", flash)!, registry.find("local-ccr", pro)!];
+			const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false, provider: { maxRetries: 0 } } });
+			settingsManager.setProjectTrusted(true);
+			const resourceLoader = new DefaultResourceLoader({
+				cwd: root, agentDir, settingsManager, noExtensions: true,
+				extensionFactories: [
+					(pi) => installCcrSessionBudget(pi, agentDir),
+					createContextExtension({ agentDir }),
+					createSandboxExtension((cwd) => sandboxConfigForTesting({ workspace: cwd, runId: "ccr-shared-budget" }),
+						(value) => { broker = value; }, policy(), true),
+				],
+			});
+			await resourceLoader.reload();
+			expect(process.env.PI_ENHANCED_CCR_BUDGET_KEY).toBeUndefined();
+			({ session } = await createAgentSession({
+				cwd: root, agentDir, modelRuntime: getModelRuntime(registry), model: models[0]!,
+				settingsManager, resourceLoader, sessionManager: SessionManager.inMemory(), noBuiltinTools: true,
+			}));
+			let before: ReturnType<typeof ledger> | undefined;
+			const confirm = vi.fn(async () => { before = ledger(); return true; });
+			session.setScopedModels(models.map((model) => ({ model })));
+			await session.bindExtensions({ mode: "tui", uiContext: createTestUiContext({ confirm }) });
+			await session.prompt("Repair clamp and run the approved pytest case.");
+			expect(confirm, JSON.stringify({ calls: calls.map(({ model }) => model),
+				last: session.messages.at(-1), tools: session.messages.filter((m) => m.role === "toolResult").map(getMessageText), audit: session.sessionManager.getEntries().filter(
+					(entry) => entry.type === "custom" && entry.customType === "ccr-adaptive",
+				),
+			})).toHaveBeenCalledTimes(1);
+			expect(before).toHaveLength(1);
+			const [flashRow] = before!;
+			expect(flashRow?.status).toMatchObject({ requestsStarted: 4, requestsCompleted: 4, actualTotalTokens: 490,
+				actualCostUsd: 0.000219, reservedCostUsd: 0 });
+			const rows = ledger();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({ id: flashRow?.id, deadlineAt: flashRow?.deadlineAt,
+				status: { requestsStarted: 7, requestsCompleted: 7, actualTotalTokens: 868, reservedCostUsd: 0 } });
+			expect(rows[0]!.status.actualCostUsd).toBeCloseTo(0.00087636, 12);
+			expect(rows[0]!.status.requestOutcomes.map(({ modelId }) => modelId)).toEqual([flash, flash, flash, flash, pro, pro, pro]);
+			expect(calls.map(({ model }) => model)).toEqual([flash, flash, flash, flash, pro, pro, pro]);
+			expect(calls.every(({ max_tokens, stream_options }) =>
+				Number(max_tokens) <= 512 && (stream_options as { include_usage?: boolean }).include_usage)).toBe(true);
+			const outcomes = session.messages.filter((m) => m.role === "toolResult" && m.toolName === "run_tests")
+				.map((message) => JSON.parse(getMessageText(message)).status);
+			expect(outcomes).toEqual(["failed", "failed", "passed"]);
+			expect(getMessageText(session.messages.at(-1))).toBe("Verified through Pro.");
+			await session.prompt("One more request after reaching the shared count.");
+			expect(calls).toHaveLength(7);
+			expect(ledger()[0]?.status.denials.at(-1)).toMatchObject({ code: "GATEWAY_REQUEST_LIMIT", upstreamForwarded: false });
+		} finally {
+			if (session) {
+				await session.extensionRunner.emit({ type: "session_shutdown" });
+				session.dispose();
+			}
+			await broker?.stop();
+			vi.unstubAllEnvs();
+			await close(stub.server);
+			clean(root);
+		}
+	}, 90_000);
 
 	it("denies host data, writes, network and Docker socket; caps output and call count", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-pytest-test-"));

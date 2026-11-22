@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { registerMemoryContextPolicy } from "../context/request-policy.ts";
+import { currentScopedTaskReader } from "../task-manager/reader.ts";
 import {
 	CORE_MEMORY_NAMES,
 	type CoreMemoryName,
@@ -43,6 +44,7 @@ const INTERACTION_COMMANDS = [
 	"enhanced-memory-update",
 	"enhanced-memory-promote",
 	"enhanced-memory-reflect",
+	"enhanced-memory-dream",
 	"enhanced-memory-core",
 	"enhanced-memory-list",
 	"enhanced-memory-inspect",
@@ -71,7 +73,94 @@ export function registerMemoryInteractions(pi: ExtensionAPI, getRuntime: Runtime
 	registerRevisionCommands(pi, getRuntime);
 	registerCoreCommand(pi, getRuntime);
 	registerGovernanceCommands(pi, getRuntime);
+	registerTaskDreamCommand(pi, getRuntime);
 	registerSearchTool(pi, getRuntime, true);
+}
+
+function registerTaskDreamCommand(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
+	pi.registerCommand("enhanced-memory-dream", {
+		description: "Preview and optionally save task-scoped summaries of verified file evidence",
+		handler: async (args, ctx) => {
+			const [taskId, action, ...extra] = args.trim().split(/\s+/u);
+			if (!taskId || extra.length || (action && action !== "save" && action !== "review"))
+				return notifyUsage(ctx, "/enhanced-memory-dream <task-id> [save|review]");
+			try {
+				const { service } = readyService(getRuntime());
+				const resolveTask = async () => {
+					if (!ctx.isProjectTrusted() || getRuntime()?.backend !== service) return undefined;
+					const task = await currentScopedTaskReader(pi.events, ctx)?.get(taskId);
+					return task?.taskId === taskId &&
+						task.status === "completed" &&
+						task.projectId === service.scope.projectId &&
+						task.sessionId === ctx.sessionManager.getSessionId() &&
+						(task.branchLeafId === null ||
+							ctx.sessionManager.getBranch().some(({ id }) => id === task.branchLeafId))
+						? task
+						: undefined;
+				};
+				const task = await resolveTask();
+				if (!task)
+					throw new MemoryError("MEMORY_VALIDATION_ERROR", "Auto Dream requires a completed task in this session");
+				if (action === "review") {
+					if (
+						!ctx.hasUI ||
+						!(await ctx.ui.confirm(
+							"复核 Auto Dream",
+							"检查当前任务的已审批记录，失效或过期的条目会标记为 stale。",
+						))
+					)
+						return;
+					if ((await resolveTask())?.revision !== task.revision)
+						throw new MemoryError("MEMORY_REVISION_CONFLICT", "Task changed during Auto Dream review");
+					const results = await service.reviewTaskDream(taskId);
+					ctx.ui.notify(
+						"复核 " +
+							results.length +
+							" 条，失效 " +
+							results.filter(({ status }) => status === "stale").length +
+							" 条。",
+						"info",
+					);
+					return;
+				}
+				const evidence = await service.taskDreamCandidates(taskId);
+				if (!evidence.length) {
+					ctx.ui.notify("当前任务没有可用于整理的已验证文件证据。", "info");
+					return;
+				}
+				const preview = evidence
+					.map(
+						(record) =>
+							`${record.id} ${redactMemoryOutput(record.content.slice(0, 500), service.scope.rootPath)}`,
+					)
+					.join("\n");
+				ctx.ui.notify(preview, "info");
+				if (
+					action !== "save" ||
+					!ctx.hasUI ||
+					!(await ctx.ui.confirm("保存 Auto Dream 候选", "候选保留在当前任务范围，需单独审批后才能使用。"))
+				)
+					return;
+				if ((await resolveTask())?.revision !== task.revision)
+					throw new MemoryError("MEMORY_REVISION_CONFLICT", "Task changed during Auto Dream review");
+				for (const record of evidence) {
+					try {
+						const result = await service.saveTaskDreamCandidate(
+							taskId,
+							task.revision,
+							record.id,
+							record.revision,
+						);
+						ctx.ui.notify(`记忆 ${result.id}，revision=${result.revision}，状态 ${result.status}`, "info");
+					} catch (error) {
+						notifyFailure(ctx, `无法保存来源 ${record.id}`, error);
+					}
+				}
+			} catch (error) {
+				notifyFailure(ctx, "Auto Dream 失败", error);
+			}
+		},
+	});
 }
 
 function registerGovernanceCommands(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {

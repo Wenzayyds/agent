@@ -195,7 +195,7 @@ export function registerAdaptiveRouter(
 				input +
 				"、输出 " +
 				output +
-				" Token。CCR 没有会话费用硬上限。是否允许本会话接下来使用 Pro？",
+				" Token。是否允许本会话接下来使用 Pro？",
 			{ signal: ctx.signal },
 		);
 		if (!active || epoch !== promptEpoch || ctx.signal.aborted || ctx.hasPendingMessages()) return;
