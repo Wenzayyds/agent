@@ -21,6 +21,15 @@ const EXCLUDED = new Set(["@earendil-works/pi-env"]);
 
 class UsageError extends Error {}
 
+// The registry is shared. Publish and remove only refs belonging to this repository.
+function registryRef(ref) {
+	const id = process.env.GITHUB_REPOSITORY_ID;
+	if (!/^[1-9]\d*$/.test(id ?? "") || !/^(main|pr-[1-9]\d*)$/.test(ref)) {
+		throw new UsageError("Expected a GitHub repository ID and a main or pr-N ref");
+	}
+	return `repo-${id}-${ref}`;
+}
+
 function assertSha(sha) {
 	if (typeof sha !== "string" || !FULL_SHA.test(sha)) {
 		throw new UsageError(`--sha must be a full commit SHA, got ${sha}`);
@@ -88,7 +97,9 @@ async function getOidcToken() {
 async function call(method, url, token, body) {
 	const response = await fetch(url, { method, headers: { authorization: `Bearer ${token}` }, body });
 	const text = await response.text();
+	if (method === "DELETE" && response.status === 404) return;
 	if (!response.ok) throw new Error(`${method} ${url} failed: ${response.status} ${text}`);
+	if (method === "DELETE") return;
 	return JSON.parse(text);
 }
 
@@ -119,7 +130,8 @@ async function publish(argv) {
 		},
 	});
 	assertSha(values.sha);
-	const { sha, ref: refs, event } = values;
+	const { sha, event } = values;
+	const refs = values.ref.map(registryRef);
 	const run = Number(values.run);
 	if (!/^\d+$/.test(values.run ?? "") || !Number.isSafeInteger(run)) {
 		throw new UsageError(`--run must be the CI run ID, got ${values.run}`);
@@ -168,9 +180,10 @@ async function deleteRef(argv) {
 		args: argv,
 		options: { ref: { type: "string" }, "base-url": { type: "string", default: BASE_URL } },
 	});
-	if (!values.ref) throw new UsageError("delete-ref needs --ref");
-	await call("DELETE", `${values["base-url"]}/_/refs/${encodeURIComponent(values.ref)}`, await getOidcToken());
-	console.error(`deleted ${values.ref}`);
+	if (!/^pr-[1-9]\d*$/.test(values.ref ?? "")) throw new UsageError("delete-ref requires a pr-N ref");
+	const ref = registryRef(values.ref);
+	await call("DELETE", `${values["base-url"]}/_/refs/${encodeURIComponent(ref)}`, await getOidcToken());
+	console.error(`PR ref ${ref} is absent`);
 }
 
 const USAGE = `Usage:
@@ -183,6 +196,9 @@ const [command, ...argv] = process.argv.slice(2);
 const commands = { pack, publish, "delete-ref": deleteRef };
 try {
 	if (!commands[command]) throw new UsageError(USAGE);
+	if (command !== "pack" && process.env.EXTERNAL_PREVIEW_PACKAGES?.toLowerCase() !== "true") {
+		throw new UsageError("External preview publishing is disabled");
+	}
 	await commands[command](argv);
 } catch (error) {
 	console.error(error instanceof UsageError ? error.message : `preview-packages: ${error.message}`);
