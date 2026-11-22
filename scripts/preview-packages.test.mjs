@@ -40,6 +40,10 @@ async function startServer(t, { refsSha = sha, uploadBody } = {}) {
 			const name = decodeURIComponent(url.pathname.split("/").slice(4).join("/"));
 			return res.end(uploadBody ?? JSON.stringify({ name, sha, existing: false }));
 		}
+		if (req.method === "DELETE") {
+			res.writeHead(url.pathname.endsWith("-pr-2") ? 404 : 204);
+			return res.end();
+		}
 		const { refs } = JSON.parse(body);
 		res.end(JSON.stringify({ refs: refs.map((ref) => ({ ref, sha: refsSha })) }));
 	});
@@ -55,12 +59,21 @@ function writeArtifact(directory) {
 	writeFileSync(join(directory, "manifest.json"), JSON.stringify({ sha, packages }));
 }
 
-function publish(server, dir) {
+function runRegistry(server, args, enabled = "true") {
 	const { GITHUB_STEP_SUMMARY: _, ...env } = process.env;
-	const args = ["publish", "--sha", sha, "--run", "7", "--event", "pull_request", "--ref", "pr-1", "--dir", dir];
 	return run(process.execPath, [script, ...args, "--base-url", server.url], {
-		env: { ...env, ACTIONS_ID_TOKEN_REQUEST_URL: `${server.url}/token`, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "runner" },
+		env: {
+			...env,
+			EXTERNAL_PREVIEW_PACKAGES: enabled,
+			GITHUB_REPOSITORY_ID: "42",
+			ACTIONS_ID_TOKEN_REQUEST_URL: `${server.url}/token`,
+			ACTIONS_ID_TOKEN_REQUEST_TOKEN: "runner",
+		},
 	});
+}
+
+function publish(server, dir, enabled) {
+	return runRegistry(server, ["publish", "--sha", sha, "--run", "7", "--event", "pull_request", "--ref", "pr-1", "--dir", dir], enabled);
 }
 
 test("pack points internal dependencies at the commit's builds and restores package.json", async (t) => {
@@ -102,8 +115,8 @@ test("publish uploads each tarball, moves refs and prints install commands", asy
 			body: "tarball a",
 		},
 	);
-	assert.deepEqual(JSON.parse(refs.body), { sha, refs: ["pr-1"], run: 7 });
-	assert.match(stdout, new RegExp(`npm i ${server.url}/@scope/a@pr-1`));
+	assert.deepEqual(JSON.parse(refs.body), { sha, refs: ["repo-42-pr-1"], run: 7 });
+	assert.match(stdout, new RegExp(`npm i ${server.url}/@scope/a@repo-42-pr-1`));
 	assert.match(stdout, new RegExp(`npm i ${server.url}/@scope/a@${sha}`));
 });
 
@@ -114,7 +127,7 @@ test("publish leaves the summary to a newer run that already owns the ref", asyn
 
 	const { stdout, stderr } = await publish(server, dir);
 	assert.equal(stdout, "");
-	assert.match(stderr, new RegExp(`a newer run already published pr-1 \\(${newerSha}\\)`));
+	assert.match(stderr, new RegExp(`a newer run already published repo-42-pr-1 \\(${newerSha}\\)`));
 });
 
 test("publish fails on a successful response that is not JSON", async (t) => {
@@ -124,4 +137,20 @@ test("publish fails on a successful response that is not JSON", async (t) => {
 
 	await assert.rejects(publish(server, dir), /not valid JSON/);
 	assert.equal(server.requests.filter((request) => request.method === "POST").length, 0);
+});
+
+test("disabled publishing and cleanup make no requests; cleanup only accepts repository-owned PR refs", async (t) => {
+	const server = await startServer(t);
+	const dir = temporaryDirectory(t);
+	writeArtifact(dir);
+	const cleanup = (ref, enabled) => runRegistry(server, ["delete-ref", "--ref", ref], enabled);
+	await assert.rejects(publish(server, dir, ""), /disabled/);
+	await assert.rejects(cleanup("pr-1", ""), /disabled/);
+	await assert.rejects(cleanup("repo-99-pr-1", "true"), /requires a pr-N ref/);
+	await assert.rejects(cleanup("main", "true"), /requires a pr-N ref/);
+	assert.equal(server.requests.length, 0);
+	await cleanup("pr-1", "true");
+	assert.equal(server.requests.at(-1).method, "DELETE");
+	assert.equal(server.requests.at(-1).url, "/_/refs/repo-42-pr-1");
+	await cleanup("pr-2", "true");
 });
