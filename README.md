@@ -22,7 +22,7 @@ Use Pi [interactively](packages/coding-agent/docs/usage.md), automate it in [pri
 
 ## Pi Enhanced
 
-This fork adds scoped context, verified project memory, and task checkpoints to the Pi agent loop. See the [Pi Enhanced README and joint-recovery demo](packages/pi-enhanced/README.md#v3-联合恢复-demo).
+Pi Enhanced adds scoped context, verified project memory, task checkpoints, Knowledge/RAG, and Docker-backed tools to Pi. The default is single-agent mode. V4 local and A2A collaboration are opt-in. See the [Pi Enhanced README](packages/pi-enhanced/README.md) and [V4 operations guide](packages/pi-enhanced/docs/v4-architecture.md) for configuration and offline checks.
 
 The previous Python wzAgent project is archived in [legacy/wzagent](legacy/wzagent/README.md).
 

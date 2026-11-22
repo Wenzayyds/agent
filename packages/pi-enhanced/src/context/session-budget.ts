@@ -106,7 +106,7 @@ export function installSessionBudget(
 	const manages = (modelId: string) =>
 		host.models ? host.models.some((model) => model.modelId === modelId) : modelId === host.model;
 	const clientToken = randomUUID();
-	const permits = new Map<string, (modelId: string) => void>();
+	const permits = new Map<string, { check(modelId: string): void; retryableUndelivered: boolean }>();
 	const databasePath = join(agentDir, "pi-enhanced-budget.sqlite3");
 	let active: { id: string; gateway: RunningBudgetGateway } | undefined;
 	let selection: { id: string; tier: TaskBudgetTier } | undefined;
@@ -182,7 +182,13 @@ export function installSessionBudget(
 				pricing: host.pricing,
 				models: host.models,
 				guardedClientRetry: true,
-				dispatchCheck: (permit) => (permit ? permits.get(permit) : undefined),
+				dispatchCheck: (permit) => (permit ? permits.get(permit)?.check : undefined),
+				onRetryableUndelivered: ccr
+					? (permit) => {
+							const dispatch = permits.get(permit);
+							if (dispatch) dispatch.retryableUndelivered = true;
+						}
+					: undefined,
 				limits: previous?.limits ?? {
 					tier,
 					maxTotalTokens: TASK_TOKEN_TIERS[tier],
@@ -240,26 +246,45 @@ export function installSessionBudget(
 			const request = new Request(input, init);
 			if ((request.url !== endpoint && request.url !== alternateEndpoint) || request.method !== "POST")
 				throw new Error("GATEWAY_UPSTREAM_NOT_ALLOWED");
-			const permit = randomUUID();
-			permits.set(permit, (modelId) => {
-				if (modelId !== model.id) throw new Error("GATEWAY_BUDGET_MODEL_CHANGE_DENIED");
-				beforeSend?.();
-			});
-			try {
-				return await fetch(`${gateway.url}/v1/chat/completions`, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${clientToken}`,
-						"Content-Type": "application/json",
-						"x-pi-budget-permit": permit,
+			const body = await request.text();
+			const send = async () => {
+				request.signal.throwIfAborted();
+				const permit = randomUUID();
+				const dispatch = {
+					check(modelId: string) {
+						if (modelId !== model.id) throw new Error("GATEWAY_BUDGET_MODEL_CHANGE_DENIED");
+						beforeSend?.();
 					},
-					body: await request.text(),
-					signal: request.signal,
-					redirect: "error",
-				});
-			} finally {
-				permits.delete(permit);
-			}
+					retryableUndelivered: false,
+				};
+				permits.set(permit, dispatch);
+				try {
+					const response = await fetch(`${gateway.url}/v1/chat/completions`, {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${clientToken}`,
+							"Content-Type": "application/json",
+							"x-pi-budget-permit": permit,
+						},
+						body,
+						signal: request.signal,
+						redirect: "error",
+					});
+					return { response, retryableUndelivered: dispatch.retryableUndelivered };
+				} finally {
+					permits.delete(permit);
+				}
+			};
+			const first = await send();
+			// A status or header alone cannot authorize replay. Only this local Gateway can attest
+			// that this attempt's bytes were not sent and its durable reservation was released.
+			if (
+				!first.retryableUndelivered ||
+				first.response.status !== 503 ||
+				first.response.headers.get("x-should-retry") !== "true"
+			) return first.response;
+			await first.response.body?.cancel();
+			return (await send()).response;
 		};
 	});
 	pi.on("session_shutdown", async () => {

@@ -359,7 +359,7 @@ describe.skipIf(!image)("isolated pytest", () => {
 	}, 60_000);
 
 
-	it("shares one durable Gateway budget when CCR switches from Flash to Pro after Docker pytest", async () => {
+	it.each([false, true])("shares one durable Gateway budget when CCR switches from Flash to Pro after Docker pytest (retry %s)", async (retry) => {
 		const root = mkdtempSync(join(tmpdir(), "pi-pytest-test-ccr-budget-"));
 		const agentDir = join(root, "agent");
 		mkdirSync(agentDir);
@@ -383,6 +383,8 @@ describe.skipIf(!image)("isolated pytest", () => {
 			);
 		});
 		const baseUrl = stub.url + "/v1";
+		const maxRequests = retry ? 8 : 7;
+		let connectAttempts = 0;
 		const ledger = () => {
 			const db = new DatabaseSync(join(agentDir, "pi-enhanced-budget.sqlite3"), { readOnly: true });
 			try {
@@ -395,7 +397,18 @@ describe.skipIf(!image)("isolated pytest", () => {
 		try {
 			vi.stubEnv("PI_ENHANCED_CCR_BUDGET", JSON.stringify({ baseUrl, models: [flash, pro] }));
 			vi.stubEnv("PI_ENHANCED_CCR_BUDGET_KEY", "mock-upstream-key");
-			writeFileSync(join(agentDir, ENHANCED_CONFIG_FILE), JSON.stringify({ budget: { maxRequests: 7 } }));
+			writeFileSync(join(agentDir, ENHANCED_CONFIG_FILE), JSON.stringify({ budget: { maxRequests } }));
+			if (retry) {
+				const send = globalThis.fetch;
+				vi.stubGlobal("fetch", (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+					if (input === `${baseUrl}/chat/completions` && ++connectAttempts === 2) {
+						// The first edit has already committed. The retried request asks the model for the next action.
+						expect(readFileSync(join(root, "calc.py"), "utf8")).toContain("return 1");
+						throw new TypeError("fetch failed", { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+					}
+					return send(input, init);
+				});
+			}
 			writeFileSync(join(root, "calc.py"), "def clamp(x):\n    return 0\n");
 			writeFileSync(join(root, "test_calc.py"), "from calc import clamp\ndef test_clamp(): assert clamp(4) == 4\n");
 
@@ -435,14 +448,24 @@ describe.skipIf(!image)("isolated pytest", () => {
 			})).toHaveBeenCalledTimes(1);
 			expect(before).toHaveLength(1);
 			const [flashRow] = before!;
-			expect(flashRow?.status).toMatchObject({ requestsStarted: 4, requestsCompleted: 4, actualTotalTokens: 490,
+			expect(flashRow?.status).toMatchObject({ requestsStarted: retry ? 5 : 4, requestsCompleted: 4, actualTotalTokens: 490,
 				actualCostUsd: 0.000219, reservedCostUsd: 0 });
 			const rows = ledger();
 			expect(rows).toHaveLength(1);
 			expect(rows[0]).toMatchObject({ id: flashRow?.id, deadlineAt: flashRow?.deadlineAt,
-				status: { requestsStarted: 7, requestsCompleted: 7, actualTotalTokens: 868, reservedCostUsd: 0 } });
+				status: { requestsStarted: maxRequests, requestsCompleted: 7, actualTotalTokens: 868, reservedCostUsd: 0 } });
 			expect(rows[0]!.status.actualCostUsd).toBeCloseTo(0.00087636, 12);
-			expect(rows[0]!.status.requestOutcomes.map(({ modelId }) => modelId)).toEqual([flash, flash, flash, flash, pro, pro, pro]);
+			const verdicts = rows[0]!.status.requestOutcomes;
+			expect(verdicts.filter(({ usageSeen }) => usageSeen).map(({ modelId }) => modelId))
+				.toEqual([flash, flash, flash, flash, pro, pro, pro]);
+			if (retry) {
+				expect(connectAttempts).toBe(8);
+				expect(verdicts[1]).toMatchObject({ outcome: "GATEWAY_UPSTREAM_CONNECT_TIMEOUT",
+					settlement: { committedTokens: 0, committedCostUsd: 0 } });
+			}
+			const editResults = session.messages.filter((m) => m.role === "toolResult" && m.toolName === "edit");
+			expect(editResults).toHaveLength(3);
+			expect(editResults.every((m) => m.role === "toolResult" && !m.isError)).toBe(true);
 			expect(calls.map(({ model }) => model)).toEqual([flash, flash, flash, flash, pro, pro, pro]);
 			expect(calls.every(({ max_tokens, stream_options }) =>
 				Number(max_tokens) <= 512 && (stream_options as { include_usage?: boolean }).include_usage)).toBe(true);
@@ -459,6 +482,7 @@ describe.skipIf(!image)("isolated pytest", () => {
 				session.dispose();
 			}
 			await broker?.stop();
+			vi.unstubAllGlobals();
 			vi.unstubAllEnvs();
 			await close(stub.server);
 			clean(root);

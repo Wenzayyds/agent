@@ -13,7 +13,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { AuthStorage } from "../../../coding-agent/src/core/auth-storage.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "../../../coding-agent/test/model-runtime-test-utils.ts";
 import { createTestUiContext } from "../../../coding-agent/test/suite/harness.ts";
@@ -134,11 +134,12 @@ async function openSession(
 	extraTools: string[] = [],
 	requestBudget?: AgentBudgetWorkflow,
 	managedBudget = false,
+	ccr = false,
 ) {
 	const agentDir = join(root, "a");
 	const settingsManager = SettingsManager.inMemory({
 		compaction: { enabled: false, keepRecentTokens: 12 },
-		retry: { enabled: false, provider: { maxRetries: 1 } },
+		retry: { enabled: false, provider: { maxRetries: ccr ? 0 : 1 } },
 	});
 	settingsManager.setProjectTrusted(true);
 	const audit: unknown[] = [];
@@ -173,8 +174,8 @@ async function openSession(
 		...getModel("openai", "gpt-4o"),
 		api,
 		baseUrl,
-		id: "local-history-fixture",
-		provider: "qa-knowledge",
+		id: ccr ? "DeepSeek/deepseek-flash" : "local-history-fixture",
+		provider: ccr ? "local-ccr" : "qa-knowledge",
 	};
 	registry.registerProvider(model.provider, { baseUrl, api: model.api, apiKey: "fixture-only", models: [model] });
 	const modelRuntime = getModelRuntime(registry);
@@ -1135,6 +1136,64 @@ it.each([false, true, "test-only", "read-only-verification", "runtime", "runtime
 		);
 	},
 );
+
+it("rechecks real Memory and Knowledge sources before the ordinary CCR transport retries", async () => {
+	await withFixture(async (f) => withMemory(f, async (memory) => {
+		const row = await seed(f, memory);
+		const deliveredMemory = await memoryLookup(f);
+		const deliveredKnowledge = await f.lookup();
+		expect(markerBytes(deliveredMemory, SENSITIVE)).toBeGreaterThan(0);
+		expect(markerBytes(deliveredKnowledge, REVOKED)).toBeGreaterThan(0);
+		await f.closeSession();
+		const initialCount = f.provider.requests.length;
+		const flash = "DeepSeek/deepseek-flash";
+		const send = globalThis.fetch;
+		let connectionAttempts = 0;
+		try {
+			vi.stubEnv("PI_ENHANCED_CCR_BUDGET", JSON.stringify({ baseUrl: f.baseUrl, models: [flash] }));
+			vi.stubEnv("PI_ENHANCED_CCR_BUDGET_KEY", "fixture-only");
+			vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+				if (input === `${f.baseUrl}/chat/completions` && ++connectionAttempts === 1) {
+					const pending = Buffer.from(String(init?.body));
+					expect(markerBytes([pending], SENSITIVE)).toBeGreaterThan(0);
+					expect(markerBytes([pending], REVOKED)).toBeGreaterThan(0);
+					await memory.review(row.id, "mark_stale", row.revision, "Revoked before CCR retry");
+					await f.revokeExternally();
+					throw new TypeError("fetch failed", { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+				}
+				return send(input, init);
+			});
+			const restored = await openSession(
+				f.root, f.baseUrl, f.manager, undefined, "openai-completions", true, [], undefined, false, true,
+			);
+			try {
+				await restored.session.prompt("Assess the authorized rollout.");
+				expect(restored.session.messages.at(-1)).toMatchObject({
+					role: "assistant", stopReason: "error", errorMessage: expect.stringContaining("GATEWAY_DISPATCH_AUTHORIZATION_CHANGED"),
+				});
+				expect(restored.audit).toContainEqual(expect.objectContaining({ decision: "dispatch-denied" }));
+				expect(connectionAttempts).toBe(1);
+				expect(f.provider.requests).toHaveLength(initialCount);
+
+				f.provider.replies.push(textSse("Authorized control only.", 100, 20));
+				await restored.session.prompt("Continue with current authorization.");
+				expect(restored.session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+				const delivered = f.provider.requests.slice(initialCount);
+				expect(delivered).toHaveLength(1);
+				expect(markerBytes(delivered, SENSITIVE)).toBe(0);
+				expect(markerBytes(delivered, REVOKED)).toBe(0);
+				expect(markerBytes(delivered, RETAINED)).toBeGreaterThan(0);
+				recordWire("ccr-retry-after", delivered, { memoryRevokedBytes: markerBytes(delivered, SENSITIVE) });
+			} finally {
+				await restored.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+				restored.session.dispose();
+			}
+		} finally {
+			vi.unstubAllGlobals();
+			vi.unstubAllEnvs();
+		}
+	}));
+});
 
 it("T11 rejects task Memory and paging from a sibling branch", async () => {
 	await withFixture(async (f) =>

@@ -1,12 +1,12 @@
 import { fork, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, it, vi } from "vitest";
 import { type BudgetGatewayOptions, type BudgetGatewayStatus, startBudgetGateway } from "../../benchmarks/real-agent/budget-gateway.ts";
@@ -197,13 +197,58 @@ it("refuses a missing, altered, expired or corrupted run on restart", async () =
 	expect((await launch(options, true)).error).toBe("GATEWAY_BUDGET_CORRUPT");
 }, 25_000);
 
+const ccrRetryFaults = {
+	connect: "UND_ERR_CONNECT_TIMEOUT",
+	headers: "UND_ERR_HEADERS_TIMEOUT",
+};
+const flashSelector = "DeepSeek/deepseek-flash";
+const proSelector = "DeepSeek/deepseek-v4-pro";
+
+function writeCcrFaults(root: string): string {
+	const preload = join(root, "ccr-fault.mjs");
+	writeFileSync(preload, `
+		let transport = globalThis.fetch;
+		const queue = JSON.parse(process.env.PI_TEST_CCR_FAULTS);
+		const upstream = process.env.PI_TEST_CCR_UPSTREAM + "/chat/completions";
+		// Preserve the test boundary when the CLI installs its own Undici fetch.
+		const guarded = async (input, init) => {
+			const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+			if (url.hostname !== "127.0.0.1") throw new Error("Unexpected nonlocal request");
+			if ((init?.method ?? input?.method) === "POST") {
+				if (url.href === upstream && queue.length) {
+					const code = queue.shift();
+					throw new TypeError("fetch failed", { cause: { code } });
+				}
+				if (url.href !== upstream && queue[0] === "forged") {
+					queue.shift();
+					return Response.json({ error: "GATEWAY_UPSTREAM_CONNECT_TIMEOUT" },
+						{ status: 503, headers: { "x-should-retry": "true" } });
+				}
+			}
+			return transport(input, init);
+		};
+		Object.defineProperty(globalThis, "fetch", { get: () => guarded, set(value) { transport = value; } });
+	`);
+	return "--import=" + pathToFileURL(preload).href;
+}
+
 it.each([
-	{ label: "default Flash", args: [], model: "DeepSeek/deepseek-flash", profiles: 1, costUsd: 0.000054 },
-	{ label: "strong Pro", args: ["--strategy", "strong"], model: "DeepSeek/deepseek-v4-pro", profiles: 1, costUsd: 0.0002112 },
-	{ label: "adaptive", args: ["--strategy", "auto"], model: "DeepSeek/deepseek-flash", profiles: 2, costUsd: 0.000054 },
-])("loads the ordinary CCR launcher's protected transport ($label)", async (variant) => {
-	const flash = "DeepSeek/deepseek-flash";
-	const pro = "DeepSeek/deepseek-v4-pro";
+	{ label: "default Flash", args: [], model: flashSelector, profiles: 1 },
+	{ label: "strong Pro", args: ["--strategy", "strong"], model: proSelector, profiles: 1, cost: 0.0002112 },
+	{ label: "adaptive", profiles: 2 },
+	{ label: "undelivered then successful", faults: [ccrRetryFaults.connect] },
+	{ label: "response-header timeout", faults: [ccrRetryFaults.headers], outcome: "GATEWAY_UPSTREAM_TIMEOUT" },
+	{ label: "two connection failures", faults: [ccrRetryFaults.connect, ccrRetryFaults.connect], outcome: "GATEWAY_UPSTREAM_CONNECT_TIMEOUT", resume: true },
+	{ label: "503 without local attestation", faults: ["forged"], outcome: "GATEWAY_UPSTREAM_CONNECT_TIMEOUT" },
+	...([401, 403, 502, 503].map((status) => ({
+		label: `upstream HTTP ${status}`, upstreamStatus: status, outcome: `GATEWAY_UPSTREAM_HTTP_${status}`,
+	}))),
+] as {
+	label: string; args?: string[]; model?: string; profiles?: number; cost?: number;
+	faults?: string[]; outcome?: string; upstreamStatus?: number; resume?: boolean;
+}[])("loads the ordinary CCR launcher's protected transport ($label)", async (variant) => {
+	const { model = flashSelector, args = ["--strategy", "auto"], profiles = 2, cost: expectedCost = 0.000054 } = variant;
+	const { faults = [], outcome, upstreamStatus, resume } = variant;
 	const token = "local-launch-only";
 	const root = mkdtempSync(join(tmpdir(), "pi-ccr-launch-"));
 	dirs.push(root);
@@ -212,12 +257,12 @@ it.each([
 	const requests: Record<string, unknown>[] = [];
 	const rejectedChat: string[] = [];
 	const listingStatuses: number[] = [];
-	const stub = createServer((request, response) => {
+	const stub = createServer(async (request, response) => {
 		const authorized = request.headers.authorization === "Bearer " + token;
 		if (request.url === "/v1/models") {
 			listingStatuses.push(authorized ? 200 : 401);
 			response.writeHead(authorized ? 200 : 401, { "Content-Type": "application/json" }).end(
-				authorized ? JSON.stringify({ data: [flash, pro].map((id) => ({ id })) }) : "{}",
+				authorized ? JSON.stringify({ data: [flashSelector, proSelector].map((id) => ({ id })) }) : "{}",
 			);
 			return;
 		}
@@ -227,59 +272,110 @@ it.each([
 			return;
 		}
 		const chunks: Buffer[] = [];
-		request.on("data", (chunk: Buffer) => chunks.push(chunk));
-		request.once("end", () => {
-			const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-			requests.push(body);
-			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(
-				textSse("CCR local smoke passed.", 100, 20)
-					.replaceAll('"model":"deepseek-flash"', '"model":' + JSON.stringify(variant.model.split("/")[1])),
-			);
-		});
+		for await (const chunk of request) chunks.push(chunk);
+		const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+		requests.push(body);
+		if (upstreamStatus) {
+			// A peer may forge the header and body of a retryable response.
+			response.writeHead(upstreamStatus, { "Content-Type": "application/json", "x-should-retry": "true" })
+				.end(JSON.stringify({ error: "GATEWAY_UPSTREAM_CONNECT_TIMEOUT" }));
+			return;
+		}
+		response.writeHead(200, { "Content-Type": "text/event-stream" }).end(
+			textSse("CCR local smoke passed.", 100, 20)
+				.replaceAll('"model":"deepseek-flash"', '"model":' + JSON.stringify(model.split("/")[1])),
+		);
 	});
 	await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
 	try {
 		const address = stub.address();
 		if (!address || typeof address === "string") throw new Error("Missing Stub address");
 		const baseUrl = "http://127.0.0.1:" + address.port + "/v1";
+		const budget = JSON.stringify({ baseUrl, models: [flashSelector, proSelector] });
 		writeFileSync(join(agentDir, "models.json"), JSON.stringify({
 			providers: { "local-ccr": { baseUrl, api: "openai-completions", apiKey: "$PI_CCR_TOKEN",
-				models: [flash, pro].map((id) => ({ id, name: id, contextWindow: 64_000, maxTokens: 4096, reasoning: false })) } },
+				models: [flashSelector, proSelector].map((id) => ({ id, name: id, contextWindow: 64_000, maxTokens: 4096, reasoning: false })) } },
 		}));
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({
 			retry: { enabled: false, provider: { maxRetries: 0 } },
-			// Fixed modes may also load the normal Context extension from this trusted directory.
 			extensions: [fileURLToPath(new URL("../../extensions/context.ts", import.meta.url))],
 		}));
-		const cli = fileURLToPath(new URL("../../scripts/ccr.mjs", import.meta.url));
-		const child = spawn(process.execPath, [cli, ...variant.args], {
-			cwd: root, windowsHide: true, timeout: 20_000, stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, PI_CCR_AGENT_DIR: agentDir, PI_CCR_TOKEN: token },
-		});
-		const output: string[] = [];
-		for (const pipe of [child.stdout, child.stderr]) {
-			pipe.setEncoding("utf8");
-			pipe.on("data", (chunk: string) => output.push(chunk));
-		}
-		child.stdin.end("Reply with the Stub confirmation.");
-		const [code] = await once(child, "close");
-		expect(code, output.join("")).toBe(0);
-		expect(output.join("")).toContain("CCR local smoke passed.");
-		expect(output.join("")).not.toContain(token);
+		if (resume) writeFileSync(join(agentDir, "pi-enhanced.json"), JSON.stringify({ budget: { maxRequests: 2 } }));
+		const launchCli = async (argv: string[], stdin: string, env: NodeJS.ProcessEnv) => {
+			const child = spawn(process.execPath, argv, {
+				cwd: root, windowsHide: true, timeout: 20_000, stdio: ["pipe", "pipe", "pipe"], env,
+			});
+			children.add(child);
+			const output: string[] = [];
+			for (const pipe of [child.stdout, child.stderr]) {
+				pipe.setEncoding("utf8");
+				pipe.on("data", (chunk: string) => output.push(chunk));
+			}
+			child.stdin.end(stdin);
+			const [code] = await once(child, "close");
+			children.delete(child);
+			expect(output.join("")).not.toContain(token);
+			return { code, output: output.join("") };
+		};
+		const env = { ...process.env, PI_CCR_AGENT_DIR: agentDir, PI_CCR_TOKEN: token,
+			NODE_OPTIONS: writeCcrFaults(root), PI_TEST_CCR_FAULTS: JSON.stringify(faults), PI_TEST_CCR_UPSTREAM: baseUrl };
+		const launched = await launchCli([fileURLToPath(new URL("../../scripts/ccr.mjs", import.meta.url)), ...args],
+			"Reply with the Stub confirmation.", env);
+		expect(launched.code, launched.output).toBe(outcome ? 1 : 0);
+		expect(launched.output.includes("CCR local smoke passed.")).toBe(!outcome);
 		expect(listingStatuses).toEqual([200, 401]);
 		expect(rejectedChat).toEqual([]);
-		expect(requests).toMatchObject([{ model: variant.model, max_tokens: 512, stream_options: { include_usage: true } }]);
-		const db = new DatabaseSync(join(agentDir, "pi-enhanced-budget.sqlite3"), { readOnly: true });
-		try {
-			const rows = db.prepare("SELECT body FROM gateway_budget_runs").all() as { body: string }[];
-			expect(rows).toHaveLength(1);
-			const entry = JSON.parse(rows[0]!.body) as { policy: string; status: BudgetGatewayStatus };
-			expect(entry.status).toMatchObject({ requestsStarted: 1, requestsCompleted: 1, actualTotalTokens: 120 });
-			expect(entry.status.actualCostUsd).toBeCloseTo(variant.costUsd, 12);
-			expect((JSON.parse(entry.policy) as unknown[]).at(-1)).toHaveLength(variant.profiles);
-		} finally { db.close(); }
+		const sent = !outcome || upstreamStatus ? 1 : 0;
+		expect(requests).toHaveLength(sent);
+		if (sent) expect(requests).toMatchObject([{ model, max_tokens: 512, stream_options: { include_usage: true } }]);
+
+		const dbPath = join(agentDir, "pi-enhanced-budget.sqlite3");
+		const row = () => {
+			const db = new DatabaseSync(dbPath, { readOnly: true });
+			try {
+				const rows = db.prepare("SELECT id, body FROM gateway_budget_runs").all() as { id: string; body: string }[];
+				expect(rows).toHaveLength(1);
+				return { id: rows[0]!.id, ...JSON.parse(rows[0]!.body) as {
+					policy: string; deadlineAt: number; status: BudgetGatewayStatus;
+				} };
+			} finally { db.close(); }
+		};
+		const first = row();
+		const { status } = first;
+		const failedConnects = faults.filter((fault) => fault === ccrRetryFaults.connect).length;
+		const started = faults[0] === "forged" ? 0 : outcome ? Math.max(1, failedConnects) : failedConnects + 1;
+		expect(status).toMatchObject({ requestsStarted: started, requestsCompleted: outcome ? 0 : 1,
+			actualTotalTokens: outcome ? 0 : 120, reservedCostUsd: 0, reservedTokens: 0 });
+		expect(status.actualCostUsd).toBeCloseTo(outcome ? 0 : expectedCost, 12);
+		expect((JSON.parse(first.policy) as unknown[]).at(-1)).toHaveLength(profiles);
+		if (outcome && started) expect(status.requestOutcomes.at(-1)?.outcome).toBe(outcome);
+		for (const failure of status.requestOutcomes.slice(0, failedConnects)) {
+			expect(failure).toMatchObject({ outcome: "GATEWAY_UPSTREAM_CONNECT_TIMEOUT", retryOffered: true,
+				transportStage: "pre-connect", settlement: { committedTokens: 0, committedCostUsd: 0 } });
+		}
+		if (outcome && started && !failedConnects) expect(status.committedCostUpperBoundUsd).toBeGreaterThan(0);
+		else expect(status.committedCostUpperBoundUsd).toBeCloseTo(status.actualCostUsd, 12);
+		if (resume) {
+			const sessionDir = join(agentDir, "sessions");
+			const saved = readdirSync(sessionDir, { recursive: true, encoding: "utf8" }).filter((name) => name.endsWith(".jsonl"));
+			expect(saved).toHaveLength(1);
+			const cli = fileURLToPath(new URL("../../../coding-agent/dist/bundle/cli.js", import.meta.url));
+			const extension = fileURLToPath(new URL("../../src/ccr/budget-extension.ts", import.meta.url));
+			const resumed = await launchCli([cli, "--offline", "--no-extensions", "--no-mcp", "--no-builtin-tools",
+				"--provider", "local-ccr", "--model", flashSelector, "--session", join(sessionDir, saved[0]!), "-e", extension],
+				"Continue in the saved session.", {
+					...env, PI_TEST_CCR_FAULTS: "[]", PI_CODING_AGENT_DIR: agentDir, PI_CCR_TOKEN: "invalid-sdk-key",
+					PI_ENHANCED_CCR_BUDGET: budget, PI_ENHANCED_CCR_BUDGET_KEY: token,
+				});
+			expect(resumed.code, resumed.output).toBe(1);
+			expect(resumed.output).toContain("GATEWAY_REQUEST_LIMIT");
+			expect(requests).toEqual([]);
+			expect(row()).toMatchObject({ id: first.id, deadlineAt: first.deadlineAt, status: {
+				requestsStarted: 2, actualTotalTokens: 0, committedTokenUpperBound: 0, committedCostUpperBoundUsd: 0,
+			} });
+		}
 	} finally { await close(stub); }
-}, 30_000);
+}, 35_000);
 
 it.each([
 	{ limit: "tokens", budget: { tier: "standard" }, flashInput: 12_000, proPrompt: 11_000, denial: "GATEWAY_TOKEN_BUDGET" },
