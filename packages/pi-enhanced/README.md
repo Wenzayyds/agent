@@ -10,6 +10,8 @@ Task Manager 的 SWE-bench 对照使用 `off`、`v1`、`v2` 三种模式。模�
 
 在可信用户的 `pi-enhanced.json` 中，可用 `multiAgent.code` 和 `multiAgent.test` 为同一个 OpenAI 兼容服务分别选择模型。两个角色共享父任务预算，恢复沿用任务创建时的配置。[配置示例](docs/v4-architecture.md#在任务开始前选择-code-和-test-模型)
 
+V4 独立验收优先使用本地 Stub 和真实 Docker。候选清单、历史证据位置、无网依赖和回归命令见[最终冻结交接](../../HANDOFF.md#v4-最终源码冻结与独立验收)。
+
 ## V3 联合恢复 Demo
 
 Pi 已提供模型接入、工具循环和可持久化会话。Pi Enhanced 通过扩展复用这些能力，把请求上下文、项目记忆和任务进度连到同一条修复链路。受控 Runner 用本机预算网关访问模型，文件操作和测试在无网 Docker 中执行。
@@ -175,7 +177,9 @@ CCR V2 通过 `--strategy` 显式启用。`--strategy manual --model flash` 固�
 
 Flash 自动模式需要既有的可信 Docker Sandbox 和 pytest 配置。请让每次源码修改和 pytest 分别在独立工具回合执行。两次修改不同源码版本后，同一测试目标仍失败且还有测试余量，Pi 才会显示用量并询问是否切换到 Pro。`run_tests` 仍只有三次机会，初始基线测试也消耗一次。拒绝确认或缺少可交互界面时继续使用 Flash。
 
-首条模型请求创建持久化预算。Flash 和 Pro 共用同一项目会话或绑定任务的 SQLite 账本，切换沿用累计 Token、费用、请求数和原截止时间。默认 Standard（25K）、8 次请求、180 秒、单次最多 512 个输出 Token、费用上限 $0.03。两种模型按各自的峰值费率保守计价。CCR 3.1.3 的流式回包使用裸模型 ID。Gateway 将每个路由名与对应的裸 ID 精确匹配，用量缺失时按预留上界结算。继续已有会话时使用原启动策略、模型白名单和 CCR 地址。维持 CCR 的路由回退和重试关闭。
+首条模型请求创建持久化预算。Flash 和 Pro 共用同一项目会话或绑定任务的 SQLite 账本，切换沿用累计 Token、费用、请求数和原截止时间。默认 Standard（25K）、8 次请求、180 秒、单次最多 512 个输出 Token、费用上限 $0.03。两种模型按各自的峰值费率保守计价。CCR 3.1.3 的流式回包使用裸模型 ID。Gateway 将每个路由名与对应的裸 ID 精确匹配，用量缺失时按预留上界结算。继续已有会话时使用原启动策略、模型白名单和 CCR 地址。关闭 CCR 路由回退和 Provider 通用重试。普通 CCR 的专属 Gateway 传输只在原预留已结清、Gateway 确认未送达时允许重试一次，每次发送前重新核对权限、预算和截止时间。
+
+最终 `resume` 真实烟测从任务开始即使用 Premium 30K。Flash 完成修复，公开 pytest 和独立 Docker 判分通过，4 次请求共 9,341 Token，费用保守上界 $0.003030。有效 pytest 失败为 0，CCR 未发出升级确认，真实 Pro 切换尚未验证。30K 的 Flash→Pro 闭环只在 Stub 加真实 Docker 下通过。
 
 ## 模块入口
 
@@ -211,11 +215,11 @@ Memory 默认使用 SQLite FTS5。已有 semantic 或 hybrid 配置继续使用 
 
 启用向量检索后，Python Worker 负责可重建的向量计算，TypeScript 按当前项目、记忆状态和版本复核命中。
 
-- [Memory 检索消融与 Auto Dream](docs/memory-v3.md#检索消融与-auto-dream) 提供候选预览、人工审批和来源失效复核。
+- [Memory 检索消融与 Auto Dream](docs/memory-v3.md#检索消融与-auto-dream) 提供候选预览、人工审批和来源失效复核。Auto Dream 只整理当前会话内已完成任务的已验证文件证据，候选经单独审批后才能用于后续上下文。
 
 ### Knowledge/RAG
 
-可选本地重排的启用方法、固定模型及资源限制见[检索评测文档](docs/knowledge-retrieval-evaluation.md#可选本地重排)。默认保持原有混合检索。
+本地重排默认关闭。仅在可信配置中为 `modules.knowledge` 启用 `rerank: true` 且使用 `hybrid` 时启用。固定模型、资源限制、回退及留出集结果见[检索评测文档](docs/knowledge-retrieval-evaluation.md#可选本地重排)。
 
 Knowledge 默认关闭。在全局或受信任项目的 `pi-enhanced.json` 启用并重新加载。默认检索模式为 `lexical`，使用本地 SQLite FTS5。
 
@@ -471,7 +475,7 @@ npm run test:sandbox --workspace=@wz-agent/pi-enhanced
 
 账本按项目及绑定的 Task 保存，普通无绑定任务按 Session 保存。开始后的改档须在空闲时通过终端确认，使用同一账本和原截止时间。已用 Token、费用与请求次数都会带入跨进程恢复。续用已有账本时，配置文件里的档位只影响新任务。预算不足不会自动升档。
 
-E19 真实配对中，20K 完成 6/9，25K 完成 7/9。Premium 30K 已做离线限额和恢复验证，尚无单独的真实模型对照。
+E19 真实配对中，20K 完成 6/9，25K 完成 7/9。Premium 30K 通过离线限额和恢复验证，并有一次 CCR 下的真实 Flash 任务完成记录。两档之间的真实配对效果和 30K 下的真实 Pro 切换仍缺专项验证。
 
 ## 验证与当前状态
 

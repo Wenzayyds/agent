@@ -66,6 +66,8 @@ export interface BudgetGatewayOptions {
 	models?: readonly BudgetGatewayModel[];
 	fetch?: typeof globalThis.fetch;
 	dispatchCheck?: (permit: string | undefined) => ((modelId: string) => void) | undefined;
+	/** A local dispatch permit may retry only after the original reservation is durably settled as undelivered. */
+	onRetryableUndelivered?: (permit: string) => void;
 	runDeadlineAt?: number;
 	guardedClientRetry?: boolean;
 	telemetry?: EvaluationTelemetry;
@@ -775,7 +777,11 @@ async function handleRequest(
 		return sendJson(response, 429, { error: error.code });
 	}
 	body.max_tokens = reservation.outputTokenLimit;
-	await dispatchRequest(response, options, ledger, active, body, reservation, check);
+	const notifyUndelivered = options.onRetryableUndelivered;
+	await dispatchRequest(
+		response, options, ledger, active, body, reservation, check,
+		check && typeof permit === "string" && notifyUndelivered ? () => notifyUndelivered(permit) : undefined,
+	);
 }
 
 async function dispatchRequest(
@@ -786,6 +792,7 @@ async function dispatchRequest(
 	body: Record<string, unknown>,
 	reservation: Reservation,
 	check?: (modelId: string) => void,
+	onRetryableUndelivered?: () => void,
 ): Promise<void> {
 	const { requestSequence } = reservation;
 	const pricing = reservation.model?.pricing ?? options.pricing;
@@ -990,7 +997,8 @@ async function dispatchRequest(
 			settled = true;
 			recordOutcome(code);
 			if (retryOffered) {
-				// Retry via guardedFetch at the Agent, so dispatch checks run against live permissions again.
+				onRetryableUndelivered?.();
+				// The caller must reenter the Gateway so dispatch checks run against live permissions.
 				response.setHeader("x-should-retry", "true");
 				response.setHeader("retry-after-ms", "50");
 				sendJson(response, 503, { error: code });

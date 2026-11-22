@@ -166,3 +166,49 @@ E19 已完成 18 个真实单元，20K 端到端 6/9，25K 7/9。本轮预算档
 `feature/v4-integration` 基于远端 `main` 的 `ded9691b162644811db2deec648f0a57e5fd7e36`，按 PR #3 撤权夹具、MA-1、MA-2、MA-3 的顺序逐文件整合。启动及权限、预算、恢复说明见 `packages/pi-enhanced/docs/v4-architecture.md`。MA-3 的 11 个有效真实结果与 7 个鉴权失败记录已封存。最终集成回归仅使用本地 Stub、无网构建和 Docker，验收证据集中在 `.artifacts/v4-integration/`。
 
 V4 发布前补充同一服务的角色模型配置。`multiAgent.code`、`multiAgent.test` 从可信用户配置读取，任务快照保存模型 ID、能力和费率。Gateway 按实际模型分别计价，两个角色沿用同一个父任务账本。角色模型验证使用本地 Stub，证据位于 `.artifacts/v4-role-models/`。
+
+
+## V4 后续功能本地开发
+
+- 工作树 `F:/pv4-next`，分支 `feature/v4-local-evaluation`，基线 `6745f0f09126c3298995b36b8e300737a6f0e58f`。
+- 本轮在本地完成 Memory 消融、可选 Knowledge CPU 重排、Auto Dream 候选/审批/复核及 CCR 共享 Gateway 的 Stub 验收。RAG 两种留出集均退化，默认维持关闭。
+- 用户将当前范围限定为本地功能开发。有效 MA-3 单元、7 个鉴权失败和原账本保留。实际模型调用 0 次，CCR 普通启动器与共享费用硬限入口尚待接线核验。
+- 本轮证据见 `.artifacts/v4-next/report.md` 与 `.artifacts/v4-next/results.json`。保留的离线模型在同目录 `model/`，启用要求见模块文档。
+- Windows 包级回归 543/0/57，真实 Docker 联合定向 141/0/2，Linux 无网定向 114/0/2。计数依次为通过、失败、跳过。
+
+
+## CCR 普通启动入口的共享预算
+
+- `scripts/ccr.mjs` 为固定 Flash、固定 Pro 和自动模式加载同一预算入口。自动模式在可信用户目录的 SQLite 账本上允许 Flash 与 Pro，两者按各自费率计价，沿用原 Token、费用、请求次数与截止时间。
+- 普通 CLI 使用本地 HTTP Stub 验证启动；实际 AgentSession 与 Docker pytest 跑通两次 Flash 修复失败、确认升级、Pro 修复并复测通过。升级前 4 次请求、490 Token、$0.000219，收尾时同一账本 7 次请求、868 Token、$0.00087636，截止时间相同。额度用尽时剩余请求在上游发送前拒绝。
+- 单独验证切换后的 Token、费用、截止时间拒发，校验请求体的模型 ID，验证加载后从环境移除鉴权令牌。使用 Stub，无实际费用。本轮仅修改 `F:/pv4-next`。
+- CCR 启动器、预算恢复、Gateway、Memory/Knowledge 撤权和 Docker pytest 定向回归共 117 通过、0 失败、2 跳过。TypeScript、打包和 Git 差异检查通过。
+
+
+## CCR 3.1.3 实际联调
+
+- 在隔离目录安装真实 CCR 3.1.3，唯一上游指向本机 HTTP Stub。用终端启动 `scripts/ccr.mjs --strategy auto`，通过实际弹窗批准 Pro。运行 `ccr-313-e2e-a498c0d9`，Docker pytest 退出码 1、1、0，Pi 启动器正常退出。
+- 已核对真实 CCR 返回裸模型 ID。Gateway 只允许各模型配置中的对应 ID，保留错模型拒绝和保守结算。用量透传 728 输入、140 输出 Token，7 次请求中 4 次 Flash、3 次 Pro，累计 Stub 费用 $0.00087636。切换前后的账本 ID、25K Token、$0.03、8 请求额度与原 180 秒截止时间相同。
+- 本轮证据为 `.artifacts/v4-next/ccr-313-e2e.json`，包含启动、协议探针、账本、pytest 和容器事件。Gateway、启动器和预算恢复 70/70 定向通过。真实付费调用 0 次。
+- Memory 和 Knowledge 的 HTTP 撤权回归 32 通过、0 失败、2 个夹具跳过。TypeScript、打包和差异检查通过。
+
+
+## CCR 真实模型 9 单元对照
+
+- 按任务先后运行 `page-buckets`、`meter-adapter`、`record-revision`，每题固定 Flash、固定 Pro 和自动模式各一次。统一 25K、8 请求、180 秒、单次输出 512、单元 $0.03。九个不可重复使用的预留槽合计 $0.27，物理发送前核验槽、同一会话账本、截止时间及请求序号。
+- 共 29 次真实请求，26 次回传可核验用量共 62,455 Token，3 次连接超时用量未知。累计 Gateway 保守结算 $0.06219306，未知请求按所在单元全额预留时累计 $0.13941606。固定 Flash、固定 Pro、CCR 自动模式的端到端完成数分别为 2、0、0，独立 Docker 断言分别为 5/6、6/6、4/6。自动模式实际升级 0 次。
+- 三组使用同一工具集合。record-revision 通过项目内文件提供原现行合同。隐藏测试由 E15 原有独立 Docker 判分函数执行。额外费用拒发 3 次、Token 拒发 1 次。所有测试容器已退出。结果与逐请求账本见 `.artifacts/v4-next/ccr-live-comparison.json`，离线预检见同目录 `ccr-live-preflight.json`。付费阶段结束。
+
+## V4 最终源码冻结与独立验收
+
+候选标识为 `pi-enhanced-v4-freeze-2026-11-22-6745f0f0`。工作树 `F:/pv4-next` 位于 `feature/v4-local-evaluation`，基线 `6745f0f09126c3298995b36b8e300737a6f0e58f`。PR #4 已合入远端 `main`，远端在冻结时指向 `c13a281b24738a122eebab19917141a7e06858c6`。此候选保留本地基线与经过核验的工作树增量。
+
+冻结报告和带工作树增量的 SHA-256 清单位于此工作树的 `.artifacts/v4-freeze/`。独立验收从清单的基线 Git 对象重建候选，核验全树散列，在新目录使用本地 Stub、Docker 和单独的数据库、端口及缓存运行测试。启动方式见 [Pi Enhanced README](packages/pi-enhanced/README.md) 和 [V4 架构手册](packages/pi-enhanced/docs/v4-architecture.md)。
+
+默认运行 `single`。本地和 A2A 协作显式启用，角色模型共用父预算。RAG 重排默认关闭。Auto Dream 从已完成任务的已验证文件证据产生候选，保存与审批单独确认，来源失效后停止使用。CCR 的安全重试、人工确认、预算继承和 Docker 闭环已用 Stub 验证。最后一次真实 `resume` 烟测中 Flash 修复成功，有效 pytest 失败为 0，实际 Pro 调用为 0。
+
+历史 CCR 原始证据位于 `.artifacts/v4-next/`。MA-3 文档保留 11 个有效单元与 7 个 HTTP 401 的历史统计；旧 `F:/pma3-b169` 工作树在冻结检查时已不在磁盘登记目录。这批原始结果和网关账本的归档缺口见冻结报告。
+
+## 开发与 PR 目标分支
+
+后续 Pi Enhanced 开发以最新的 `origin/pi-agent` 为基线。在独立工作树创建功能分支，PR 的目标分支统一选择 `pi-agent`。`main` 的历史合并仅用于追溯。

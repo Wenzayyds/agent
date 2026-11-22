@@ -90,4 +90,4 @@ node --experimental-strip-types /absolute/path/to/packages/pi-enhanced/scripts/r
 
 冻结矩阵为六个任务、三种模式。11 个有效 DeepSeek Flash 单元全部成功，另外 7 个请求在上游被鉴权拒绝并与模型质量分开统计。有效样本为 S0 4/4、S1 4/4、S2 3/3。S0/S1 四个有效配对合计少 2 次请求、14,606 Token，S1 平均少 1.97 秒。S1/S2 三个有效配对请求数均为 16，S2 合计多 210 Token、平均多 1.74 秒。两道留出任务在三组均成功。全部有效请求按用量估算 $0.009636786，含历史未知费用的累计保守上界 $0.247299301。
 
-这些数据来自固定的小样本，默认仍为 `single`。历史冻结评测入口位于 `benchmarks/real-agent/agent-evaluation.ts`，MA-3 模式要求原候选和原授权证据，集成回归走上面的 Stub 与 Docker 命令。原始记录留在独立 MA-3 工作树，运行本手册的回归无需历史付费凭据或授权。
+这些数据来自固定的小样本，默认仍为 `single`。历史冻结评测入口位于 `benchmarks/real-agent/agent-evaluation.ts`，MA-3 模式要求原候选和原授权证据，集成回归走上面的 Stub 与 Docker 命令。评测时的原始记录位于独立 MA-3 工作树。最终交接记录其当前归档可用性及完整性状态。运行本手册的回归使用本地 Stub 与 Docker。
