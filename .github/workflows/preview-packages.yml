@@ -1,9 +1,5 @@
-# Publishes the preview packages that CI packed for main and for PRs from branches of this repo to pkg.earendil.com,
-# moving the `main` or `pr-<number>` ref, and deletes a PR's ref when the PR closes. It reads the CI artifact as data
-# and never checks out or runs PR code.
-#
-# Uploads are only accepted if pkg.earendil.com allows this repository, this workflow on main, and every package it
-# publishes.
+# Set the repository variable EXTERNAL_PREVIEW_PACKAGES to true after registry authorization.
+# CI always keeps its GitHub artifact. Registry refs are scoped to the GitHub repository ID.
 
 name: Preview packages
 
@@ -16,11 +12,15 @@ on:
 
 permissions: {}
 
+env:
+  EXTERNAL_PREVIEW_PACKAGES: ${{ vars.EXTERNAL_PREVIEW_PACKAGES }}
+
 jobs:
   publish:
     # Only CI runs for pushes to main and for PRs from branches of this repo. A branch can make its own copy of CI run
     # on push; such runs are not reviewed and must not be published as push builds.
     if: >-
+      vars.EXTERNAL_PREVIEW_PACKAGES == 'true' &&
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'cancelled' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       ((github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') ||
@@ -95,7 +95,8 @@ jobs:
   cleanup:
     # Only PRs into main: pull_request_target runs this file from the PR's base branch, and only main is allowed.
     if: >-
-      github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      vars.EXTERNAL_PREVIEW_PACKAGES == 'true' &&
+      github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == 'main' &&
       github.event.pull_request.head.repo.full_name == github.repository
     concurrency:
       group: preview-packages-${{ github.event.pull_request.head.ref }}
