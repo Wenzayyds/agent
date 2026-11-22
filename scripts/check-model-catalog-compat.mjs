@@ -23,7 +23,8 @@
 //                     written by `npm run generate:model-catalog`)
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +33,7 @@ import { MINIMUM_PI_VERSION } from "./model-catalog-minimum-version.mjs";
 import { compareModelCatalogPiVersions } from "./model-catalog-protocol.ts";
 
 const PI_AI_PACKAGE = "@earendil-works/pi-ai";
+const PI_SOURCE_TAGS = "https://codeload.github.com/earendil-works/pi/tar.gz/refs/tags";
 
 /** Read a release's built-in model data (`dist/providers/data`) as model lists by provider. */
 function readBuiltinModels(dataDir) {
@@ -71,12 +73,18 @@ function run(command, args, cwd) {
 	return result.stdout;
 }
 
-function main() {
+async function downloadArchive(url) {
+	const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(60_000) });
+	if (!response.ok) throw new Error(`Unable to download ${url}: HTTP ${response.status}`);
+	return Buffer.from(await response.arrayBuffer());
+}
+
+async function main() {
 	const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 	const { values } = parseArgs({ options: { catalog: { type: "string" } } });
 	const catalogPath = resolve(values.catalog ?? join(root, ".artifacts/model-catalog/models.all.json"));
 
-	const release = run("npm", ["view", PI_AI_PACKAGE, "version"], root).trim();
+	const { version: release, dist } = JSON.parse(run("npm", ["view", PI_AI_PACKAGE, "version", "dist", "--json"], root));
 	if (compareModelCatalogPiVersions(release, MINIMUM_PI_VERSION) < 0) {
 		console.log(
 			`Skipped: the latest release ${release} is older than MINIMUM_PI_VERSION ${MINIMUM_PI_VERSION}, so no released pi receives this catalog.`,
@@ -88,16 +96,27 @@ function main() {
 	const releaseDir = join(temporaryDir, "release");
 	try {
 		console.log(`Checking the model catalog against pi ${release}...`);
-		// The release's source code.
-		const archive = join(temporaryDir, "release.tar");
-		run("git", ["archive", "--prefix=release/", "--output", archive, `v${release}`], root);
-		run("tar", ["xf", archive, "-C", temporaryDir], root);
+		// The npm release belongs to upstream Pi. The current checkout may be a fork without upstream tags.
+		const archive = join(temporaryDir, "release.tar.gz");
+		writeFileSync(archive, await downloadArchive(`${PI_SOURCE_TAGS}/v${encodeURIComponent(release)}`));
+		mkdirSync(releaseDir);
+		run("tar", ["xzf", archive, "-C", releaseDir, "--strip-components=1"], root);
+		const { name, version, dependencies } = JSON.parse(readFileSync(join(releaseDir, "packages/ai/package.json"), "utf8"));
+		if (name !== PI_AI_PACKAGE || version !== release) {
+			throw new Error(`Upstream Pi v${release} contains ${name}@${version}, expected ${PI_AI_PACKAGE}@${release}.`);
+		}
 
-		// The built-in models users have: the data shipped in the published package.
-		const [{ filename }] = JSON.parse(
-			run("npm", ["pack", `${PI_AI_PACKAGE}@${release}`, "--pack-destination", temporaryDir, "--json"], root),
-		);
-		run("tar", ["xzf", join(temporaryDir, filename), "-C", temporaryDir, "package/dist/providers/data"], root);
+		// Read the released data directly so dependency install age policies do not change which release we check.
+		const registryTarball = new URL(dist.tarball);
+		if (registryTarball.origin !== "https://registry.npmjs.org" || registryTarball.username || registryTarball.password) {
+			throw new Error(`Unexpected npm tarball source for ${PI_AI_PACKAGE}@${release}.`);
+		}
+		const published = await downloadArchive(registryTarball);
+		const integrity = `sha512-${createHash("sha512").update(published).digest("base64")}`;
+		if (integrity !== dist.integrity) throw new Error(`Integrity mismatch for ${PI_AI_PACKAGE}@${release}.`);
+		const packageArchive = join(temporaryDir, "pi-ai.tgz");
+		writeFileSync(packageArchive, published);
+		run("tar", ["xzf", packageArchive, "-C", temporaryDir, "package/dist/providers/data"], root);
 		const builtin = readBuiltinModels(join(temporaryDir, "package/dist/providers/data"));
 		const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
 		const mergedPath = join(temporaryDir, "models.all.json");
@@ -106,7 +125,6 @@ function main() {
 		console.log("Installing the release's dependencies...");
 		run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], releaseDir);
 		// pi-ai's types depend on the declarations of its workspace dependencies.
-		const { dependencies } = JSON.parse(readFileSync(join(releaseDir, "packages/ai/package.json"), "utf8"));
 		for (const name of Object.keys(dependencies).filter((name) => name.startsWith("@earendil-works/"))) {
 			run("npm", ["run", "build", "--workspace", name], releaseDir);
 		}
@@ -135,7 +153,7 @@ function main() {
 }
 
 try {
-	main();
+	await main();
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
 	process.exitCode = 1;
