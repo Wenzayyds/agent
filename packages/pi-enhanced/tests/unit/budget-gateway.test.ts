@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { retryProviderRequest } from "../../../ai/src/utils/provider-retry.ts";
 import {
 	type BudgetGatewayLimits,
+	type BudgetGatewayModel,
 	type RunningBudgetGateway,
 	startBudgetGateway,
 } from "../../benchmarks/real-agent/budget-gateway.ts";
@@ -35,6 +36,71 @@ const baseLimits: BudgetGatewayLimits = {
 };
 
 describe("Batch H hard budget gateway", () => {
+	const pro: BudgetGatewayModel = { modelId: "stub-pro", supportsTools: true, contextWindow: 10_000,
+		maxOutputTokens: 192, pricing: { inputUsdPerMillion: 2, outputUsdPerMillion: 4 } };
+	const flash: BudgetGatewayModel = { ...pro, modelId: "stub-flash", maxOutputTokens: 512,
+		pricing: { inputUsdPerMillion: 0.5, outputUsdPerMillion: 1.5 } };
+
+	it("whitelists explicit role models and settles their trusted rates on one ledger", async () => {
+		const wire: Record<string, unknown>[] = [];
+		const upstream = await mockUpstream(async (_request, response, body) => {
+			wire.push(body);
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(`data: ${JSON.stringify({
+				model: body.model, choices: [], usage: { prompt_tokens: 200, completion_tokens: 20, total_tokens: 220 },
+			})}\n\ndata: [DONE]\n\n`);
+		});
+		const gateway = await startBudgetGateway({
+			runId: "role-pricing", upstreamBaseUrl: upstream.url, upstreamApiKey: "local", clientToken: "client-token",
+			adminToken: "admin-token", allowedModel: pro.modelId, pricing: pro.pricing, models: [pro, flash],
+			limits: { ...baseLimits, tier: "standard", maxTotalTokens: 25_000, maxTotalCostUsd: 0.03,
+				maxOutputTokensPerRequest: 512, minOutputTokensPerRequest: 128, maxRequests: 2 },
+		});
+		running.push(gateway);
+		const call = (model: string, content = "local test") => callGateway(gateway.url, "client-token", {
+			model, max_tokens: 900, pricing: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 }, messages: [{ role: "user", content }],
+		});
+		for (const model of [pro, flash]) {
+			const { denial, diagnostics } = gateway.preview!({ model: model.modelId, stream: true });
+			expect(denial).toBeNull();
+			expect(diagnostics.candidateReservedCostUsd).toBeCloseTo((
+				diagnostics.inputTokenUpperBound * model.pricing.inputUsdPerMillion +
+				diagnostics.outputTokenLimit * model.pricing.outputUsdPerMillion
+			) / 1_000_000, 12);
+		}
+		expect(await (await call("stub-not-approved")).json()).toEqual({ error: "GATEWAY_MODEL_DENIED" });
+		expect(await (await call(pro.modelId, "x".repeat(11_000))).json()).toEqual({ error: "GATEWAY_MODEL_CONTEXT_LIMIT" });
+		expect(wire).toHaveLength(0);
+		for (const model of [pro, flash]) expect(await (await call(model.modelId)).text()).toContain("[DONE]");
+		expect(await (await call(flash.modelId)).json()).toEqual({ error: "GATEWAY_REQUEST_LIMIT" });
+		expect(wire.map(({ model, max_tokens }) => [model, max_tokens])).toEqual([[pro.modelId, 192], [flash.modelId, 512]]);
+		expect(wire.every((body) => !("pricing" in body))).toBe(true);
+		const status = gateway.status();
+		expect(status).toMatchObject({ requestsStarted: 2, requestsCompleted: 2, actualTotalTokens: 440, reservedCostUsd: 0 });
+		expect(status.requestOutcomes.map(({ modelId, actualCostUsd }) => [modelId, actualCostUsd])).toEqual([
+			[pro.modelId, 0.00048], [flash.modelId, 0.00013],
+		]);
+		expect(status.actualCostUsd).toBeCloseTo(0.00061, 12);
+	});
+
+	it("retains the reservation when the provider reports a different model or omits its identity", async () => {
+		for (const [model, error] of [["stub-unapproved", "GATEWAY_UPSTREAM_MODEL_MISMATCH"],
+			[undefined, "GATEWAY_UPSTREAM_MODEL_UNVERIFIED"]] as const) {
+			const upstream = await mockUpstream(async (_req, response) => {
+				response.writeHead(200, { "Content-Type": "text/event-stream" }).end(`data: ${JSON.stringify({
+					model, choices: [], usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+				})}\n\ndata: [DONE]\n\n`);
+			});
+			const gateway = await startBudgetGateway({ runId: "role-wrong-identity", upstreamBaseUrl: upstream.url,
+				upstreamApiKey: "local", clientToken: "client-token", adminToken: "admin-token", allowedModel: pro.modelId,
+				pricing: pro.pricing, models: [pro], limits: baseLimits });
+			running.push(gateway);
+			const response = await callGateway(gateway.url, "client-token", { model: pro.modelId, messages: [{ role: "user", content: "check" }] });
+			expect(await response.json()).toEqual({ error });
+			const status = gateway.status();
+			expect(status).toMatchObject({ state: "failed_closed", lastError: error, actualTotalTokens: 0, reservedCostUsd: 0 });
+			expect(status.committedCostUpperBoundUsd).toBeGreaterThan(0);
+		}
+	});
 	it.each(Object.entries(TASK_TOKEN_TIERS))("enforces the %s Token tier before forwarding", async (tier, limit) => {
 		const gateway = await gatewayFor("http://127.0.0.1:1", {
 			...baseLimits, tier: tier as TaskBudgetTier, maxTotalTokens: limit,

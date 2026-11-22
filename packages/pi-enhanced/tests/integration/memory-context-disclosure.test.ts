@@ -1,8 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
@@ -35,6 +34,7 @@ import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { openMemoryService } from "../../src/memory/service.ts";
 import { ENHANCED_CONFIG_FILE } from "../../src/shared/config.ts";
 import { createTaskManagerExtension } from "../../src/task-manager/extension.ts";
+import { createKnowledgeTestRoot, expectIndexedDocument, setDocumentAccess } from "../fixtures/knowledge.ts";
 import { textSse, toolCallSse } from "../fixtures/runner-support.ts";
 
 const REVOKED = "qa_revoked_history_cf11399";
@@ -205,6 +205,7 @@ async function withFixture(
 ) {
 	const fixture = await createFixture(extra, maximumTextCharacters, deduplicateReads, managedBudget);
 	try {
+		await fixture.importDocuments();
 		await body(fixture);
 	} finally {
 		await fixture.closeSession();
@@ -219,7 +220,7 @@ async function createFixture(
 	deduplicateReads = false,
 	managedBudget = false,
 ) {
-	const root = mkdtempSync(join(tmpdir(), "pi-kh-"));
+	const root = createKnowledgeTestRoot("pi-kh-");
 	const agentDir = join(root, "a");
 	mkdirSync(agentDir);
 	const revokedPath = join(root, "revoked.md");
@@ -253,13 +254,6 @@ async function createFixture(
 	);
 	const { projectId } = createProjectScope({ cwd: root, agentDir });
 	const filename = join(agentDir, "pi-enhanced", "knowledge", "projects", projectId, "knowledge.sqlite3");
-	async function add(path: string, allow: boolean) {
-		await session.prompt(
-			`/enhanced-docs add --corpus=ops ${allow ? "--allow-external " : ""}${JSON.stringify([path])}`,
-		);
-	}
-	await add(revokedPath, true);
-	await add(retainedPath, true);
 	let closed = false;
 	return {
 		root,
@@ -273,7 +267,11 @@ async function createFixture(
 		filename,
 		revokedPath,
 		projectId,
-		revocation: () => add(revokedPath, false),
+		async importDocuments() {
+			await setDocumentAccess(session, filename, revokedPath, "ops", "allow-external");
+			await setDocumentAccess(session, filename, retainedPath, "ops", "allow-external");
+		},
+		revocation: () => setDocumentAccess(session, filename, revokedPath, "ops", "local-only"),
 		async revokeExternally() {
 			const writer = new KnowledgeService({ projectId, filename, mode: "lexical" });
 			try {
@@ -281,6 +279,7 @@ async function createFixture(
 			} finally {
 				await writer.close();
 			}
+			expectIndexedDocument(filename, revokedPath, "ops", "local-only");
 		},
 		async closeSession() {
 			if (closed) return;
@@ -951,8 +950,8 @@ it.each([false, true, "test-only", "read-only-verification", "runtime", "runtime
 						await f.lookup("read", { path: "retry-control.txt" }, "Authorized runtime read completed.");
 					}
 					const row = await seed(f, m);
-					await memoryLookup(f);
-					await f.lookup();
+					expect(markerBytes(await memoryLookup(f), SENSITIVE)).toBeGreaterThan(0);
+					expect(markerBytes(await f.lookup(), REVOKED)).toBeGreaterThan(0);
 					await f.closeSession();
 					const upstreamStart = f.provider.requests.length;
 					const testOnly = withBudget === "test-only";
@@ -1085,6 +1084,7 @@ it.each([false, true, "test-only", "read-only-verification", "runtime", "runtime
 							requestsStarted: setupRequests + 1,
 							committedTokenUpperBound: testOnly ? 13 : 0,
 							reservedTokens: 0,
+							reservedCostUsd: 0,
 							requestOutcomes: expect.arrayContaining([
 								expect.objectContaining({
 									outcome: "GATEWAY_UPSTREAM_CONNECT_TIMEOUT",

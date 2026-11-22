@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { linkSync, mkdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prepareKnowledgeDocument } from "../../src/knowledge/ingestion.ts";
 import { discoverDocumentSources, MAX_DOCUMENT_BYTES } from "../../src/knowledge/sources.ts";
+import { createKnowledgeTestRoot } from "../fixtures/knowledge.ts";
 
 let base: string;
 let root: string;
 
 beforeEach(() => {
-	base = mkdtempSync(join(tmpdir(), "pi-knowledge-ingest-"));
+	base = createKnowledgeTestRoot("pi-knowledge-ingest-");
 	root = join(base, "knowledge");
 	mkdirSync(root);
 });

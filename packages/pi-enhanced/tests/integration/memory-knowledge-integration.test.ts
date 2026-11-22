@@ -4,8 +4,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import type { EventBus } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, EventBus } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
+import { SessionManager } from "../../../coding-agent/src/core/session-manager.ts";
 import { createHarness, createTestUiContext, getToolResult } from "../../../coding-agent/test/suite/harness.ts";
 import { compose, dockerWorker, reserveLoopbackPort } from "../../fixtures/memory-v3/lab.ts";
 import { injectVerifiedMemory, type MemoryInjectionResult } from "../../src/context/memory-source.ts";
@@ -21,16 +22,19 @@ import { SemanticSearchAdapter } from "../../src/memory/semantic-search-adapter.
 import { type MemoryService, openMemoryService } from "../../src/memory/service.ts";
 import { ENHANCED_CONFIG_FILE } from "../../src/shared/config.ts";
 import { E5EmbeddingProvider } from "../../src/shared/embedding/e5.ts";
+import { createKnowledgeTestRoot, setDocumentAccess } from "../fixtures/knowledge.ts";
 
 const memoryTool = "enhanced_memory_search";
 const query = "production rollout";
 const memoryFact = "The production rollout owner is the release coordinator.";
 const documentFact = "The production rollout requires a signed review.";
 
-function trustFixtureProject(harness: Awaited<ReturnType<typeof createHarness>>): void {
-	// The shared harness creates its in-memory session with the process cwd.
-	(harness.sessionManager as unknown as { cwd: string }).cwd = harness.tempDir;
-	harness.settingsManager.setProjectTrusted(true);
+async function importRolloutDocument(session: AgentSession, root: string, agentDir: string) {
+	const path = join(root, "rollout.md");
+	writeFileSync(path, `# Rollout\n\n${documentFact}`);
+	const { projectId } = createProjectScope({ cwd: root, agentDir });
+	const filename = join(agentDir, "pi-enhanced", "knowledge", "projects", projectId, "knowledge.sqlite3");
+	await setDocumentAccess(session, filename, path, "default", "allow-external");
 }
 
 async function verifyFileMemory(service: MemoryService, root: string) {
@@ -51,7 +55,7 @@ it.each([
 	[false, true],
 	[true, true],
 ])("loads both production factories with Memory=%s and Knowledge=%s", async (memory, knowledge) => {
-	const root = mkdtempSync(join(tmpdir(), "pi-enhanced-integration-switches-"));
+	const root = createKnowledgeTestRoot("pi-enhanced-integration-switches-");
 	const agentDir = join(root, "agent");
 	mkdirSync(agentDir);
 	writeFileSync(
@@ -65,27 +69,27 @@ it.each([
 		}),
 	);
 	const harness = await createHarness({
+		cwd: root,
+		sessionManager: SessionManager.inMemory(root),
 		extensionFactories: [createMemoryExtension({ agentDir }), createKnowledgeExtension({ agentDir })],
 	});
 	try {
-		trustFixtureProject(harness);
+		harness.settingsManager.setProjectTrusted(true);
 		await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext({ confirm: async () => true }) });
 		const runner = harness.session.extensionRunner;
 		expect(runner.getActiveTools().includes(memoryTool)).toBe(memory);
 		expect(runner.getActiveTools().includes(KNOWLEDGE_SEARCH)).toBe(knowledge);
 		expect(runner.getActiveTools().includes(KNOWLEDGE_READ)).toBe(knowledge);
 		if (memory) {
-			const service = await openMemoryService(createProjectScope({ cwd: harness.tempDir, agentDir }));
+			const service = await openMemoryService(createProjectScope({ cwd: root, agentDir }));
 			try {
-				await verifyFileMemory(service, harness.tempDir);
+				await verifyFileMemory(service, root);
 			} finally {
 				await service.close();
 			}
 		}
 		if (knowledge) {
-			const path = join(harness.tempDir, "rollout.md");
-			writeFileSync(path, `# Rollout\n\n${documentFact}`);
-			await harness.session.prompt(`/enhanced-docs add --allow-external ${JSON.stringify([path])}`);
+			await importRolloutDocument(harness.session, root, agentDir);
 		}
 		const expected = [...(memory ? [memoryTool] : []), ...(knowledge ? [KNOWLEDGE_SEARCH] : [])];
 		harness.setResponses([
@@ -111,7 +115,7 @@ it.each([
 });
 
 it("returns Memory and Knowledge to one Pi turn and rechecks both channels after invalidation and trust withdrawal", async () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-enhanced-integration-tools-"));
+	const root = createKnowledgeTestRoot("pi-enhanced-integration-tools-");
 	mkdirSync(join(root, "agent"));
 	const agentDir = join(root, "agent");
 	writeFileSync(
@@ -121,6 +125,8 @@ it("returns Memory and Knowledge to one Pi turn and rechecks both channels after
 	const stores: MemoryService[] = [];
 	let events: EventBus | undefined;
 	const harness = await createHarness({
+		cwd: root,
+		sessionManager: SessionManager.inMemory(root),
 		extensionFactories: [
 			(pi) => {
 				events = pi.events;
@@ -137,16 +143,13 @@ it("returns Memory and Knowledge to one Pi turn and rechecks both channels after
 		],
 	});
 	try {
-		trustFixtureProject(harness);
+		harness.settingsManager.setProjectTrusted(true);
 		await harness.session.bindExtensions({
 			mode: "tui",
 			uiContext: createTestUiContext({ confirm: async () => true }),
 		});
-		const memory = await verifyFileMemory(stores.at(-1)!, harness.tempDir);
-		writeFileSync(join(harness.tempDir, "rollout.md"), `# Rollout\n\n${documentFact}`);
-		await harness.session.prompt(
-			`/enhanced-docs add --allow-external ${JSON.stringify([join(harness.tempDir, "rollout.md")])}`,
-		);
+		const memory = await verifyFileMemory(stores.at(-1)!, root);
+		await importRolloutDocument(harness.session, root, agentDir);
 		let modelContext = "";
 		harness.setResponses([
 			fauxAssistantMessage([fauxToolCall(memoryTool, { query }), fauxToolCall(KNOWLEDGE_SEARCH, { query })], {
@@ -172,13 +175,13 @@ it("returns Memory and Knowledge to one Pi turn and rechecks both channels after
 			injectVerifiedMemory({
 				messages: previous?.messages ?? [{ role: "user", content: query, timestamp: 1 }],
 				reader,
-				projectRoot: harness.tempDir,
+				projectRoot: root,
 				config: { enabled: true, maximumRecords: 3, maximumTextCharacters: 2_000, readerTimeoutMs: 200 },
 			});
 		const injected = await inject();
 		expect(injected.injectedMemoryIds).toEqual([memory.id]);
 
-		writeFileSync(join(harness.tempDir, "operations.txt"), "This file no longer verifies the previous owner.");
+		writeFileSync(join(root, "operations.txt"), "This file no longer verifies the previous owner.");
 		await expect(searchMemory.execute("invalidated", { query }, undefined, undefined, ctx)).resolves.toMatchObject({
 			details: { count: 0 },
 		});

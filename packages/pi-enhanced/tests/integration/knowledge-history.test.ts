@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { getModel } from "@earendil-works/pi-ai/compat";
@@ -125,6 +125,7 @@ async function withFixture(
 ) {
 	const fixture = await createFixture(extra);
 	try {
+		await fixture.importDocuments();
 		await body(fixture);
 	} finally {
 		await fixture.closeSession();
@@ -133,8 +134,28 @@ async function withFixture(
 	}
 }
 
+async function setDocumentAccess(
+	session: Awaited<ReturnType<typeof openSession>>,
+	filename: string,
+	path: string,
+	allow: boolean,
+) {
+	await session.prompt(`/enhanced-docs add --corpus=ops ${allow ? "--allow-external " : ""}${JSON.stringify([path])}`);
+	// Command failures are reported through the UI. Verify the committed policy before testing the wire.
+	const db = new DatabaseSync(filename, { readOnly: true });
+	try {
+		const document = db
+			.prepare("SELECT policy FROM documents WHERE corpus='ops' AND source=? AND deleted=0 AND active IS NOT NULL")
+			.get(basename(path));
+		expect(document).toEqual({ policy: allow ? "allow-external" : "local-only" });
+	} finally {
+		db.close();
+	}
+}
+
 async function createFixture(extra?: (pi: ExtensionAPI) => void) {
-	const root = mkdtempSync(join(tmpdir(), "pi-kh-"));
+	// Windows runners can expose TEMP through a short path. Select the canonical host directory for import.
+	const root = mkdtempSync(join(realpathSync.native(tmpdir()), "pi-kh-"));
 	const agentDir = join(root, "a");
 	mkdirSync(agentDir);
 	const revokedPath = join(root, "revoked.md");
@@ -148,15 +169,14 @@ async function createFixture(extra?: (pi: ExtensionAPI) => void) {
 	const session = await openSession(root, baseUrl, manager, extra);
 	const { projectId } = createProjectScope({ cwd: root, agentDir });
 	const filename = join(agentDir, "pi-enhanced", "knowledge", "projects", projectId, "knowledge.sqlite3");
-	async function add(path: string, allow: boolean) {
-		await session.prompt(`/enhanced-docs add --corpus=ops ${allow ? "--allow-external " : ""}${JSON.stringify([path])}`);
-	}
-	await add(revokedPath, true);
-	await add(retainedPath, true);
 	let closed = false;
 	return {
 		root, manager, session, provider, baseUrl, filename, revokedPath, projectId,
-		revocation: () => add(revokedPath, false),
+		async importDocuments() {
+			await setDocumentAccess(session, filename, revokedPath, true);
+			await setDocumentAccess(session, filename, retainedPath, true);
+		},
+		revocation: () => setDocumentAccess(session, filename, revokedPath, false),
 		async revokeExternally() {
 			const writer = new KnowledgeService({ projectId, filename, mode: "lexical" });
 			try {
@@ -246,7 +266,7 @@ it("sends zero revoked bytes while retaining legal history, tool pairs and local
 
 it("excludes legacy derivatives during and after native Context compaction", async () => {
 	await withFixture(async (f) => {
-		await f.lookup();
+		expect(markerBytes(await f.lookup())).toBeGreaterThan(0);
 		await f.session.prompt("/enhanced-docs status");
 		await f.next("Previous operations acknowledged.");
 		await f.next("Second operations acknowledged. ".repeat(60));
@@ -343,7 +363,7 @@ it("records an admitted request already received by the provider and blocks subs
 
 it.each(["before", "after"] as const)("sends zero bytes when revocation commits %s cross-process restore", async (revocation) => {
 	await withFixture(async (f) => {
-		await f.lookup();
+		expect(markerBytes(await f.lookup())).toBeGreaterThan(0);
 		if (revocation === "before") await f.revocation();
 		const sessionPath = f.manager.getSessionFile()!;
 		const original = readFileSync(sessionPath, "utf8");
@@ -357,7 +377,7 @@ it.each(["before", "after"] as const)("sends zero bytes when revocation commits 
 			process.execPath,
 			[join(workspace, "node_modules/vitest/vitest.mjs"), "--run",
 				"tests/integration/knowledge-history.test.ts", "-t", "fixture child resumes"],
-			{ cwd: join(workspace, "packages/pi-enhanced"), env: { ...process.env, [CHILD_ENV]: JSON.stringify({ root: f.root, baseUrl: f.baseUrl, sessionPath, parentPid: process.pid, revocation }) } },
+			{ cwd: join(workspace, "packages/pi-enhanced"), env: { ...process.env, [CHILD_ENV]: JSON.stringify({ root: f.root, filename: f.filename, baseUrl: f.baseUrl, sessionPath, parentPid: process.pid, revocation }) } },
 		);
 		expect(stdout).toContain("1 passed");
 		const requests = f.provider.requests.slice(start);
@@ -369,14 +389,14 @@ it.each(["before", "after"] as const)("sends zero bytes when revocation commits 
 }, 45_000);
 
 it.runIf(Boolean(process.env[CHILD_ENV]))("fixture child resumes a saved session", async () => {
-	const { root, baseUrl, sessionPath, parentPid, revocation } = JSON.parse(process.env[CHILD_ENV]!) as {
-		root: string; baseUrl: string; sessionPath: string; parentPid: number; revocation: "before" | "after";
+	const { root, filename, baseUrl, sessionPath, parentPid, revocation } = JSON.parse(process.env[CHILD_ENV]!) as {
+		root: string; filename: string; baseUrl: string; sessionPath: string; parentPid: number; revocation: "before" | "after";
 	};
 	expect(process.pid).not.toBe(parentPid);
 	const session = await openSession(root, baseUrl, SessionManager.open(sessionPath));
 	try {
 		if (revocation === "after") {
-			await session.prompt(`/enhanced-docs add --corpus=ops ${JSON.stringify([join(root, "revoked.md")])}`);
+			await setDocumentAccess(session, filename, join(root, "revoked.md"), false);
 		}
 		await session.prompt("Resume the project from disk.");
 		expect(session.getLastAssistantText()).toBe("Restored successfully.");

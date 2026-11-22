@@ -99,7 +99,15 @@ jobs:
           PI_ENHANCED_BATCH_N_EVIDENCE: packages/pi-enhanced/batch-j-stub
           PI_ENHANCED_TASK_PAIR_STUB_EVIDENCE: packages/pi-enhanced/batch-j-stub
           PI_ENHANCED_SWE_STUB_EVIDENCE: packages/pi-enhanced/swe-stub
-      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/require-docker-evidence.ts packages/pi-enhanced/.ci-sandbox-vitest.json
+      - name: Verify V4 local and A2A collaboration with real Docker
+        shell: bash
+        working-directory: packages/pi-enhanced
+        run: |
+          set -euo pipefail
+          export PI_TEST_PYTEST_IMAGE="$(docker image inspect pi-enhanced-pytest:ci --format '{{.Id}}')"
+          [[ "$PI_TEST_PYTEST_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
+          npm exec vitest -- --run tests/e2e/multi-local.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile=.ci-v4-vitest.json
+      - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/require-docker-evidence.ts packages/pi-enhanced/.ci-sandbox-vitest.json packages/pi-enhanced/.ci-v4-vitest.json
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -108,6 +116,7 @@ jobs:
           path: |
             packages/pi-enhanced/ci-docker-metadata.json
             packages/pi-enhanced/.ci-sandbox-vitest.json
+            packages/pi-enhanced/.ci-v4-vitest.json
             packages/pi-enhanced/docs/batch-f-sandbox-smoke.json
             packages/pi-enhanced/controlled-six-stub.json
             packages/pi-enhanced/batch-j-stub
