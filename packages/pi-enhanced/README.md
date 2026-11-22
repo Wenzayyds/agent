@@ -160,7 +160,7 @@ CCR 3.1.3 独立运行，Pi 使用原生的 OpenAI Chat Completions Provider。�
 }
 ```
 
-5. 构建 Pi CLI 后，从仓库根目录运行以下命令。启动时显示通过检查的 CCR 地址和选定模型。用 Pi 的 `/session` 查看会话用量。本配置关闭 CCR 的原始追踪，用量以 Pi 收到的 SSE 数据为准。独立目录不采用工作区设置，防止项目覆盖模型和重试设置。Docker Sandbox 和 `run_tests` 仍通过既有宿主配置开启。
+5. 构建 Pi CLI 后，从仓库根目录运行以下命令。启动时检查 CCR 地址、模型登记和客户端鉴权，并为普通与自动模式加载同一个预算扩展。客户端令牌只提供给 Gateway，Pi 模型目录使用隔离令牌。用 `/enhanced-budget` 查看或选择预算档位。预算配置读取可信 `PI_CCR_AGENT_DIR` 下的 `pi-enhanced.json`。Docker Sandbox 和 `run_tests` 仍通过既有宿主配置开启。
 
 ```powershell
 node packages/pi-enhanced/scripts/ccr.mjs --check
@@ -173,7 +173,9 @@ CCR 的模型标识（例如 `DeepSeek/deepseek-v4-pro`）用于普通会话。S
 
 CCR V2 通过 `--strategy` 显式启用。`--strategy manual --model flash` 固定 Flash，`--strategy strong` 直接选 Pro。`--strategy auto` 默认选 Flash，配合 `--profile complex` 可直接选 Pro。显式 `--model` 始终优先。省略 `--strategy` 时沿用 V1。
 
-Flash 自动模式需要既有的可信 Docker Sandbox 和 pytest 配置。请让每次源码修改和 pytest 分别在独立工具回合执行。两次修改不同源码版本后，同一测试目标仍失败且还有测试余量，Pi 才会显示用量并询问是否切换到 Pro。`run_tests` 仍只有三次机会，初始基线测试也消耗一次。会话费用没有硬上限，拒绝确认或缺少可交互界面时继续使用 Flash。
+Flash 自动模式需要既有的可信 Docker Sandbox 和 pytest 配置。请让每次源码修改和 pytest 分别在独立工具回合执行。两次修改不同源码版本后，同一测试目标仍失败且还有测试余量，Pi 才会显示用量并询问是否切换到 Pro。`run_tests` 仍只有三次机会，初始基线测试也消耗一次。拒绝确认或缺少可交互界面时继续使用 Flash。
+
+首条模型请求创建持久化预算。Flash 和 Pro 共用同一项目会话或绑定任务的 SQLite 账本，切换沿用累计 Token、费用、请求数和原截止时间。默认 Standard（25K）、8 次请求、180 秒、单次最多 512 个输出 Token、费用上限 $0.03。两种模型按各自的峰值费率保守计价。CCR 3.1.3 的流式回包使用裸模型 ID。Gateway 将每个路由名与对应的裸 ID 精确匹配，用量缺失时按预留上界结算。继续已有会话时使用原启动策略、模型白名单和 CCR 地址。维持 CCR 的路由回退和重试关闭。
 
 ## 模块入口
 
@@ -209,7 +211,11 @@ Memory 默认使用 SQLite FTS5。已有 semantic 或 hybrid 配置继续使用 
 
 启用向量检索后，Python Worker 负责可重建的向量计算，TypeScript 按当前项目、记忆状态和版本复核命中。
 
+- [Memory 检索消融与 Auto Dream](docs/memory-v3.md#检索消融与-auto-dream) 提供候选预览、人工审批和来源失效复核。
+
 ### Knowledge/RAG
+
+可选本地重排的启用方法、固定模型及资源限制见[检索评测文档](docs/knowledge-retrieval-evaluation.md#可选本地重排)。默认保持原有混合检索。
 
 Knowledge 默认关闭。在全局或受信任项目的 `pi-enhanced.json` 启用并重新加载。默认检索模式为 `lexical`，使用本地 SQLite FTS5。
 

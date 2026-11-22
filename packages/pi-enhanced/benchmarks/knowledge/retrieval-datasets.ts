@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { corpus as legacyCorpus, queries as legacyQueries } from "./dataset.ts";
 
 export type QueryType =
@@ -519,4 +520,40 @@ export function documentText(document: DocumentFixture): string {
 	return [`# ${document.title}`, ...document.sections.map(([heading, body]) => `## ${heading}\n\n${body}`)].join(
 		"\n\n",
 	);
+}
+
+function realSection(path: string, heading: string): string {
+	const lines = readFileSync(new URL("../../" + path, import.meta.url), "utf8").split(/\r?\n/u);
+	const start = lines.findIndex((line) => line.replace(/^#+ /u, "") === heading);
+	if (start < 0) throw new Error("Missing evaluation section: " + path + "#" + heading);
+	const section = lines.slice(start + 1);
+	const next = section.findIndex((line) => /^#{1,6} /u.test(line));
+	return (next === -1 ? section : section.slice(0, next)).filter((line) => !/^\s*\x60{3}/u.test(line)).join(" ").trim().slice(0, 360);
+}
+
+export function projectDocumentation(): RetrievalDataset {
+	const architecture = ["启动步骤", "权限、预算与恢复", "在任务开始前选择 Code 和 Test 模型", "MA-3 真实评测记录"] as const;
+	const memory = ["运行与接口", "隔离验证结果", "M6–M10 运维与兼容", "向量记录损坏后的检索与对账"] as const;
+	const readme = ["V4 运行模式", "V4 MA-2 A2A Test Agent", "任务预算档位", "模块入口"] as const;
+	return {
+		id: "project-docs-rerank-holdout-v1",
+		documents: [
+			docs("v4-architecture", "V4 架构与运行手册", architecture.map((heading) =>
+				[heading, realSection("docs/v4-architecture.md", heading)])),
+			docs("memory-v3", "Memory V3 实现与验证", memory.map((heading) =>
+				[heading, realSection("docs/memory-v3.md", heading)])),
+			docs("readme", "Pi Enhanced", readme.map((heading) => [heading, realSection("README.md", heading)])),
+		],
+		queries: cases([
+			["docs-01", "mixed", "Which process should I boot to run tests over A2A?", ["readme.md#V4 MA-2 A2A Test Agent"]],
+			["docs-02", "cross-section", "父预算档位和子代理是否独立结算，进程恢复后是否保留额度？",
+				["readme.md#任务预算档位", "v4-architecture.md#权限、预算与恢复"]],
+			["docs-03", "identifier", "如何启用 multi-a2a 模式？",
+				["readme.md#V4 运行模式", "v4-architecture.md#启动步骤"]],
+			["docs-04", "mixed", "How do I set separate model IDs for Code and Test agents before a task?",
+				["v4-architecture.md#在任务开始前选择 Code 和 Test 模型"]],
+			["docs-05", "semantic", "向量索引数据不一致后，如何确认被遗漏的记忆还能找到？", ["memory-v3.md#向量记录损坏后的检索与对账"]],
+			["docs-06", "scope", "项目和会话的记忆边界有测试依据吗？", ["memory-v3.md#隔离验证结果"]],
+		]),
+	};
 }

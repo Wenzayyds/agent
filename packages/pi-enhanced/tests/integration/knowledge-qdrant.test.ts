@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -61,5 +61,65 @@ it.runIf(process.env.PI_ENHANCED_KNOWLEDGE_QDRANT === "1")("indexes, filters and
 			await lab.close();
 			rmSync(root, { recursive: true, force: true });
 		}
+	}
+}, 90_000);
+
+it.runIf(process.env.PI_ENHANCED_KNOWLEDGE_QDRANT === "1")("reranks only authorized candidates and refilters after concurrent revocation", async () => {
+	const root = mkdtempSync(join(realpathSync.native(tmpdir()), "pi-knowledge-rerank-"));
+	const lab = await startVectorLab();
+	const filename = join(root, "docs.sqlite3");
+	const options = {
+		projectId: "rerank", filename, mode: "hybrid" as const,
+		vectors: { collection: lab.collection, embedding: lab.embedding, index: openDocumentIndex(lab.endpoint, lab.embedding.model, lab.collection) },
+	};
+	const scope = { audience: "agent", corpusId: "release" } as const;
+	const unranked = new KnowledgeService(options);
+	let callback: (query: string, passages: readonly string[]) => Promise<readonly number[]> =
+		async (_query, passages) => passages.map((text) => Number(text.includes("BETA_APPROVER")));
+	const ranked = new KnowledgeService({ ...options, reranker: { rank: (...args) => callback(...args) } });
+	try {
+		const fixtures = [
+			["alpha.md", "release", "ALPHA_APPROVER", "allow-external"],
+			["beta.md", "release", "BETA_APPROVER", "allow-external"],
+			["hidden.md", "release", "PRIVATE_APPROVER", "local-only"],
+			["outside.md", "outside", "OTHER_CORPUS", "allow-external"],
+		] as const;
+		for (const [file, corpus, marker, policy] of fixtures) {
+			writeFileSync(join(root, file), "The deployment approval process is defined by " + marker + ".");
+			await unranked.add(root, file, corpus, policy);
+		}
+		const query = "deployment approval process";
+		const base = await unranked.search(query, scope);
+		expect(base.hits.map(({ source }) => source).sort()).toEqual(["alpha.md", "beta.md"]);
+		const preferred = await ranked.search(query, scope);
+		expect(preferred.rerank).toBe("applied");
+		expect(preferred.hits[0]?.source).toBe("beta.md");
+		callback = async () => { throw new Error("simulated timeout"); };
+		expect(await ranked.search(query, scope)).toEqual({ ...base, rerank: "fallback" });
+		callback = async () => [Number.NaN];
+		expect(await ranked.search(query, scope)).toEqual({ ...base, rerank: "fallback" });
+		let ready!: () => void;
+		let resume!: () => void;
+		const started = new Promise<void>((resolve) => { ready = resolve; });
+		const continued = new Promise<void>((resolve) => { resume = resolve; });
+		callback = async (_query, passages) => {
+			ready();
+			await continued;
+			expect(passages.join("\n")).not.toMatch(/PRIVATE_APPROVER|OTHER_CORPUS/u);
+			return passages.map((text) => Number(text.includes("BETA_APPROVER")));
+		};
+		const inFlight = ranked.search(query, scope);
+		try {
+			await started;
+			expect((await ranked.search(query, scope)).rerank).toBe("fallback");
+			await unranked.add(root, "beta.md", "release", "local-only");
+		} finally { resume(); }
+		const revised = await inFlight;
+		expect(revised.rerank).toBe("applied");
+		expect(revised.hits.map(({ source }) => source)).toEqual(["alpha.md"]);
+		expect(() => ranked.read(preferred.hits[0]!.chunk.chunkId, scope)).toThrow("document-not-found");
+	} finally {
+		try { await Promise.all([ranked.close(), unranked.close()]); }
+		finally { await lab.close(); rmSync(root, { recursive: true, force: true }); }
 	}
 }, 90_000);

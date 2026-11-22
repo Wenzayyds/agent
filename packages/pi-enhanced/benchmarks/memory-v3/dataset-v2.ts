@@ -10,7 +10,7 @@ export interface Case {
 export interface Fixture {
 	key: string;
 	input: Omit<NewMemoryInput, "source">;
-	proof?: "explicit" | "withdrawn";
+	proof?: "explicit" | "withdrawn" | "archived" | "revised";
 }
 
 export const baseFixtures: readonly Fixture[] = corpus.map(([key, content]) => ({ key, input: { kind: "fact", content } }));
@@ -46,6 +46,10 @@ export const fixtures: readonly Fixture[] = [
 		metadata: { subjectKey: "summary.view" }, data: { value: "compact" } } },
 	{ key: "pref-new", proof: "explicit", input: { kind: "decision", type: "preference", content: "Use detailed output for the summary.",
 		metadata: { subjectKey: "summary.view" }, data: { value: "detailed" } } },
+	{ key: "archived", proof: "archived", input: { kind: "fact", type: "semantic",
+		content: "Manifest rollout lookup uses the ARCHIVED_MANIFEST_V1 selector." } },
+	{ key: "revised", proof: "revised", input: { kind: "fact", type: "semantic",
+		content: "Manifest rollout lookup uses the OBSOLETE_MANIFEST_V1 selector." } },
 ];
 
 export const cases: readonly Case[] = [
@@ -67,4 +71,7 @@ export const cases: readonly Case[] = [
 		forbidden: ["linux", "windows"] },
 	{ stratum: "preference-key", query: { text: "", preferenceKey: "summary.view" }, expected: "pref-new", forbidden: ["pref-old"] },
 	{ stratum: "preference-key", query: { text: "", preferenceKey: "summary" }, forbidden: ["pref-new", "pref-old"] },
+	{ stratum: "archive-exclusion", query: { text: "ARCHIVED_MANIFEST_V1", types: ["semantic"] },
+		forbidden: ["archived"] },
+	{ stratum: "revision", query: { text: "CURRENT_MANIFEST_V2", types: ["semantic"] }, expected: "revised" },
 ];

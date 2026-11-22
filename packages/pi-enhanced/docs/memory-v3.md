@@ -114,3 +114,15 @@ v2 增加任务前缀隔离、会话和 TTL、证据撤销、平台与工具适�
 同一页里部分 Point 的元数据损坏时，检索仍返回通过校验的健康候选；整页均损坏或索引不可用时沿用词法回退。项目、模型、记忆 ID、修订和确定性 Point ID 共同确定记录归属。身份冲突会中止此次索引读取，越出查询作用域的结果也会被拒绝。
 
 诊断按 SQLite 当前状态列出过期、缺失和孤立记录。对账通过原有 Outbox 重建可见且证据有效的当前修订，清理可确定归属的废弃修订和孤立 Point。高于本地观察修订的 Point 留待后续核查。重启后可重复对账，检索仍按 SQLite 的修订和可见性核验。分页诊断受单页上限约束，混合页中返回的候选可能少于请求数。
+
+## 检索消融与 Auto Dream
+
+在 `packages/pi-enhanced` 下运行 `node --experimental-strip-types benchmarks/memory-v3/evaluate.ts --stratified`。入口复用 SQLite FTS5、离线 E5 与 Qdrant，比较 lexical、semantic 和 RRF hybrid，另保留 TF-IDF+SVD 作为诊断对照。JSON 包含开发集与留出集、数据散列、逐查询排名、Recall@5/10、MRR@10、nDCG@10、延迟和资源记录。旧版基础集仍可省略 `--stratified` 运行。
+
+Auto Dream 默认只在用户发出命令时执行，从当前会话已完成任务的文件证据提取短摘要。可以在任务绑定期间用 `/enhanced-memory-save` 录入 episodic 记忆，再用 `/enhanced-memory-reflect <id> <relative-file>` 核对其原文和文件散列。可按以下顺序使用。
+
+- `/enhanced-memory-dream <task-id>` 预览，每次最多五个来源。具有同一主题键的冲突证据需要先处理。
+- `/enhanced-memory-dream <task-id> save` 经宿主确认写入候选，记录来源任务及修订、来源记忆及修订。随后由 `/enhanced-memory-confirm <id> <revision>` 单独审批。
+- `/enhanced-memory-dream <task-id> review` 复核当前任务已审批记录。系统在检索和请求披露前也会检查来源。文件变化、源记忆删除、归档或修订、候选到期均会停止使用派生条目。默认复核期限 30 天，取源记忆到期时间与该期限的较早者。
+
+候选保留在来源任务范围内。摘要采用原文片段，流程无需模型服务和后台写入。

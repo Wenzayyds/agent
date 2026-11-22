@@ -3,6 +3,7 @@ import {
 	exactAnchors,
 	groupDocuments,
 	quality,
+	qualityAt10,
 	reciprocalRanks,
 	runRanking,
 } from "../../benchmarks/knowledge/ranking-experiments.ts";
@@ -164,4 +165,13 @@ describe("Knowledge retrieval experiment", () => {
 			expect(data.queries.filter(({ relevant }) => relevant.length > 1)).toHaveLength(3);
 		}
 	});
+});
+
+it("calculates separate top-10 metrics without counting duplicate or outside ranks", () => {
+	const actualIds = ["x", "a", "a", "c", "d", "e", "f", "g", "h", "i", "b"];
+	const scores = qualityAt10([{ relevantIds: ["a", "b"], actualIds }, { relevantIds: [], actualIds: ["a"] }]);
+	expect(scores.mrrAt10).toBe(0.5);
+	const gain = 1 / Math.log2(3);
+	expect(scores.ndcgAt10).toBeCloseTo(gain / (1 + gain), 12);
+	expect(qualityAt10([])).toEqual({ mrrAt10: null, ndcgAt10: null });
 });

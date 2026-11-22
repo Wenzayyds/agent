@@ -30,6 +30,7 @@ export interface KnowledgeVectors {
 }
 
 interface SearchResult {
+	rerank?: "applied" | "fallback";
 	hits: StoredChunk[];
 	mode: RetrievalMode;
 	fallback?: string;
@@ -40,12 +41,20 @@ const POLICY_LABELS = ["local-only", "allow-external"];
 const ID = /^[a-f0-9]{64}$/u;
 export const CORPUS_ID = /^[\p{L}\d_-]{1,64}$/u;
 
+export interface KnowledgeReranker {
+	rank(query: string, passages: readonly string[]): Promise<readonly number[]>;
+	close?(): Promise<void>;
+}
+
+export const KNOWLEDGE_RERANK_DEPTH = 12;
 export class KnowledgeService {
 	readonly projectId: string;
 	private readonly store: DocumentStore;
 	private readonly vectors?: KnowledgeVectors;
 	private readonly model: string | null;
 	private readonly mode: RetrievalMode;
+	private readonly reranker?: KnowledgeReranker;
+	private reranking = false;
 	private readonly operations = new Set<Promise<unknown>>();
 	private timer?: NodeJS.Timeout;
 	private closing?: Promise<void>;
@@ -59,6 +68,7 @@ export class KnowledgeService {
 		projectId: string;
 		filename: string;
 		mode: RetrievalMode;
+		reranker?: KnowledgeReranker;
 		vectors?: KnowledgeVectors;
 		background?: boolean;
 	}) {
@@ -66,6 +76,7 @@ export class KnowledgeService {
 			throw new TypeError("Vector retrieval requires a local embedding and index");
 		this.projectId = options.projectId;
 		this.mode = options.mode;
+		this.reranker = options.reranker;
 		this.vectors = options.vectors;
 		this.model = options.vectors ? embeddingModelKey(options.vectors.embedding.model) : null;
 		this.store = new DocumentStore(options.filename, options.projectId);
@@ -199,12 +210,51 @@ export class KnowledgeService {
 					const live = this.store.chunk(chunk.chunkId, scope);
 					return live ? [{ ...live, score }] : [];
 				});
+				if (mode === "hybrid" && this.reranker && hits.length > 1) {
+					return this.rerank(query, scope, hits, limit, this.reranker);
+				}
 				return { hits: hits.slice(0, limit), mode };
 			} catch (error) {
 				this.ensure = undefined;
 				return { hits: this.store.lexical(query, scope, limit), mode: "lexical", fallback: errorCode(error) };
 			}
 		});
+	}
+
+	private async rerank(
+		query: string,
+		scope: SearchScope,
+		hits: StoredChunk[],
+		limit: number,
+		reranker: KnowledgeReranker,
+	): Promise<SearchResult> {
+		const head = hits.slice(0, KNOWLEDGE_RERANK_DEPTH);
+		const fallback = (): SearchResult => ({ mode: "hybrid", rerank: "fallback", hits: refresh(hits) });
+		const refresh = (ranking: StoredChunk[]) =>
+			ranking
+				.flatMap(({ chunk, score }) => {
+					const live = this.store.chunk(chunk.chunkId, scope);
+					return live ? [{ ...live, score }] : [];
+				})
+				.slice(0, limit);
+		if (this.reranking) return fallback();
+		this.reranking = true;
+		try {
+			const scores = await reranker.rank(
+				query,
+				head.map(({ chunk }) => chunk.content.slice(0, 1_400)),
+			);
+			if (scores.length !== head.length || !scores.every(Number.isFinite)) return fallback();
+			const ranked = head
+				.map((hit, index) => ({ hit, score: scores[index]! }))
+				.sort((a, b) => b.score - a.score)
+				.map(({ hit }) => hit);
+			return { mode: "hybrid", rerank: "applied", hits: refresh([...ranked, ...hits.slice(head.length)]) };
+		} catch {
+			return fallback();
+		} finally {
+			this.reranking = false;
+		}
 	}
 
 	read(chunkId: string, scope: SearchScope, neighbors = 0): { match: StoredChunk; adjacent: StoredChunk[] } {
@@ -275,7 +325,11 @@ export class KnowledgeService {
 				await this.vectors?.close?.();
 			} finally {
 				await Promise.allSettled(this.operations);
-				this.store.close();
+				try {
+					await this.reranker?.close?.();
+				} finally {
+					this.store.close();
+				}
 			}
 		})();
 		return this.closing;
