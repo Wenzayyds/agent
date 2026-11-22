@@ -16,6 +16,7 @@ import type {
 import { combineAbortSignals } from "../utils/abort-signals.ts";
 import { truncateErrorText } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { guardedFetch } from "../utils/guarded-fetch.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
@@ -304,7 +305,7 @@ async function requestMistralStream(
 	const combinedSignal = combineAbortSignals([options?.signal, headerTimeoutSignal]);
 	let response: Response;
 	try {
-		response = await (options?.fetch ?? globalThis.fetch)(url, {
+		response = await (guardedFetch(options?.fetch, options?.beforeSend) ?? globalThis.fetch)(url, {
 			method: "POST",
 			headers,
 			body: JSON.stringify(toMistralWirePayload(payload)),

@@ -20,6 +20,7 @@ import type {
 import type {
 	AnyModel,
 	Api,
+	AssistantMessage,
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
 	ClassifierApi,
@@ -903,10 +904,37 @@ export interface ContextWithSystemEvent {
 	messages: AgentMessage[];
 }
 
+/**
+ * Session disclosure policy. Projection runs on the raw transcript before serialization and
+ * on the assembled chat transcript. The dispatch check must be synchronous and may reject.
+ * Unlike ordinary transforms, policy failures abort the model request.
+ */
+export interface ModelRequestPolicyEvent {
+	type: "model_request_policy";
+	phase: "transcript" | "derived" | "dispatch";
+	messages: AgentMessage[];
+}
+
+export interface ModelRequestPolicyResult {
+	messages: AgentMessage[];
+	beforeSend?: () => void;
+	/** Source kinds covered by this policy, even when it has no request dependencies. */
+	handlesSources?: readonly string[];
+	isolateTransport?: boolean;
+	provenance?: AssistantMessage["requestProvenance"];
+}
+
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
 	payload: unknown;
+}
+
+/** Selects a request transport before payload hooks. A failure cancels the model request. */
+export interface ModelRequestFetchEvent {
+	type: "model_request_fetch";
+	model: Model<Api>;
+	beforeSend?: () => void;
 }
 
 /**
@@ -1415,8 +1443,10 @@ export type ExtensionEvent =
 	| SessionEvent
 	| ContextEvent
 	| ContextWithSystemEvent
+	| ModelRequestPolicyEvent
 	| CacheWarmingDecisionEvent
 	| BeforeProviderRequestEvent
+	| ModelRequestFetchEvent
 	| BeforeProviderHeadersEvent
 	| AfterProviderResponseEvent
 	| ProviderStreamEvent
@@ -1635,12 +1665,20 @@ export interface ExtensionAPI {
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): () => void;
 	on(event: "context_with_system", handler: ExtensionHandler<ContextWithSystemEvent, ContextEventResult>): () => void;
 	on(
+		event: "model_request_policy",
+		handler: (event: ModelRequestPolicyEvent, ctx: ExtensionContext) => ModelRequestPolicyResult | undefined,
+	): () => void;
+	on(
 		event: "cache_warming_decision",
 		handler: ExtensionHandler<CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult>,
 	): () => void;
 	on(
 		event: "before_provider_request",
 		handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
+	): () => void;
+	on(
+		event: "model_request_fetch",
+		handler: ExtensionHandler<ModelRequestFetchEvent, typeof globalThis.fetch>,
 	): () => void;
 	on(event: "before_provider_headers", handler: ExtensionHandler<BeforeProviderHeadersEvent>): () => void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): () => void;
@@ -2108,7 +2146,7 @@ export interface ExtensionShortcut {
 	extensionPath: string;
 }
 
-type HandlerFn = (...args: unknown[]) => Promise<unknown>;
+type HandlerFn = (...args: unknown[]) => unknown;
 
 export type SendMessageHandler = <T = unknown>(
 	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,

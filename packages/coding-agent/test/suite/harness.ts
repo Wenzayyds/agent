@@ -120,6 +120,8 @@ export interface HarnessOptions {
 	extensionFactories?: Array<InlineExtension | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
 	modelsJson?: Record<string, unknown>;
+	/** Project directory. Default: the harness-owned temporary directory. */
+	cwd?: string;
 	/** Session to continue, for example to test a resume. Default: a new in-memory session. */
 	sessionManager?: SessionManager;
 }
@@ -150,6 +152,7 @@ function createTempDir(): string {
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
+	const cwd = options.cwd ?? tempDir;
 	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
 		provider: options.provider,
 		models: options.models,
@@ -226,7 +229,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		},
 	});
 	const extensionsResult = options.extensionFactories
-		? await createTestExtensionsResult(options.extensionFactories, tempDir)
+		? await createTestExtensionsResult(options.extensionFactories, cwd)
 		: undefined;
 	const resourceLoader =
 		options.resourceLoader ?? createTestResourceLoader(extensionsResult ? { extensionsResult } : undefined);
@@ -235,7 +238,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		agent,
 		sessionManager,
 		settingsManager,
-		cwd: tempDir,
+		cwd,
 		modelRuntime: getModelRuntime(modelRegistry),
 		resourceLoader,
 		baseToolsOverride: toolMap,

@@ -107,7 +107,7 @@ function readPatch(path: string, errors: string[]): ContextConfigPatch | undefin
 		path,
 		"toolOutput",
 		module.toolOutput,
-		{ enabled: "boolean", maximumTextCharacters: [500, 100_000], offload: "boolean" },
+		{ enabled: "boolean", maximumTextCharacters: [500, 100_000], offload: "boolean", deduplicateReads: "boolean" },
 		errors,
 	) as Partial<ContextModuleConfig["toolOutput"]> | undefined;
 	const compaction = parseObject(path, "compaction", module.compaction, { enabled: "boolean" }, errors);

@@ -109,10 +109,11 @@ describe("Anthropic empty thinking signature compat", () => {
 		"accounts/fireworks/models/deepseek-v4p1-flash",
 		"accounts/fireworks/models/qwen3p8-max",
 		"accounts/fireworks/models/qwen3p8-2p4t-a95b",
-		"accounts/fireworks/models/nemotron-3-ultra-nvfp4",
+		"accounts/fireworks/models/ember-1",
 	] as const)("preserves unsigned thinking for Fireworks %s", async (modelId) => {
 		const model = getModels("fireworks").find((candidate) => candidate.id === modelId);
-		if (!model || !hasApi(model, "anthropic-messages")) throw new Error(`Missing Fireworks Messages model: ${modelId}`);
+		if (!model || !hasApi(model, "anthropic-messages"))
+			throw new Error(`Missing Fireworks Messages model: ${modelId}`);
 		expect(model.compat?.allowEmptySignature).toBe(true);
 		const context = makeContext("", "internal reasoning", "fireworks", modelId);
 		const assistant = context.messages[1] as AssistantMessage;

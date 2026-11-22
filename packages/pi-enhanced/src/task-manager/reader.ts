@@ -33,6 +33,29 @@ export function registerScopedTaskReaderBroker(
 	});
 }
 
+export function currentScopedTaskReader(
+	events: EventBus,
+	ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+): ScopedTaskReader | undefined {
+	const request = { requestId: randomUUID(), sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd };
+	let reader: ScopedTaskReader | undefined;
+	const off = events.on(TASK_READER_RESPONSE_CHANNEL, (data) => {
+		if (
+			record(data) &&
+			data.requestId === request.requestId &&
+			data.sessionId === request.sessionId &&
+			isReader(data.reader)
+		)
+			reader = data.reader;
+	});
+	try {
+		events.emit(TASK_READER_REQUEST_CHANNEL, request);
+		return reader;
+	} finally {
+		off();
+	}
+}
+
 export function requestScopedTaskReader(
 	events: EventBus,
 	ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,

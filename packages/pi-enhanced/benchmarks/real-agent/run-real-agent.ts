@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
+import { loadTaskBudget } from "../../src/shared/config.ts";
 import { claimBatchLCell, loadBatchLAuthorization } from "./batch-l-authorization.ts";
 import { BATCH_L_LIMITS, BATCH_L_PROFILE, TASK_PAIR_LIMITS, TASK_PAIR_PROFILE } from "./batch-l-profile.ts";
 import {
@@ -16,13 +18,14 @@ import {
 } from "./controlled-cases.ts";
 import { CONTRACT_PROMPT, contractTools } from "./config-contract.ts";
 import { digest } from "./evaluation-identity.ts";
-import { buildEvaluationPlan, preflightView } from "./evaluation-policy.ts";
+import { buildEvaluationPlan, fillEvaluationBudget, preflightView } from "./evaluation-policy.ts";
 import { NEXT_EVALUATION_PROFILE } from "./evaluation-telemetry.ts";
 import { loadOfflineDenialPolicy } from "./offline-denial-policy.ts";
 import { executeAgent } from "./runner-execution.ts";
 import { type ExperimentTask, prepareAgent, prepareWorkspace, type RunnerContext } from "./runner-preparation.ts";
 import { collectTaskResult, saveRunReport } from "./runner-results.ts";
-import { loadSuspendedRun, saveSuspendedRun } from "./runner-resume.ts";
+import { ExpiredBudgetResume } from "./budget-persistence.ts";
+import { finishExpiredResume, loadSuspendedRun, saveSuspendedRun } from "./runner-resume.ts";
 import { assertFrozenDispatch } from "./swe-frozen-batch.ts";
 import { assertFrozenPytest, frozenCaseForProfile, frozenCases } from "./swe-frozen-catalog.ts";
 import { resolveSweProfile, SWE_FLASH_OFF_PYTEST_SINGLE_PROFILE, SWE_TASK_LIMITS } from "./swe-profile.ts";
@@ -207,21 +210,30 @@ export async function main(): Promise<void> {
 	}
 	const requiredLimits = swe?.configuration.limits ?? TASK_PAIR_LIMITS;
 	const sweLimits = swe?.configuration.limits ?? SWE_TASK_LIMITS;
-	const input = {
+	const explicitTokens = argument("--max-tokens-per-task");
+	const tier = argument("--budget-tier");
+	const budgetEnforcement = argument("--budget-enforcement");
+	const budget = budgetEnforcement === "local_hard_gateway" && (tier || explicitTokens === undefined) ? loadTaskBudget({
+		agentDir: getAgentDir(), cwd: process.cwd(), projectTrusted: false,
+	}) : undefined;
+	const budgetInput = {
 		runId: argument("--run-id"),
 		provider: argument("--provider"),
 		model: argument("--model"),
 		apiKeyEnv: argument("--api-key-env"),
-		maxTotalCostUsd: argument("--max-total-cost-usd"),
+		maxTotalCostUsd: argument("--max-total-cost-usd") ?? (budget ? String(budget.maxTotalCostUsd) : undefined),
 		maxTasks: argument("--max-tasks"),
-		maxTokensPerTask: argument("--max-tokens-per-task"),
-		maxCallsPerTask: argument("--max-calls-per-task"),
-		timeoutMs: argument("--timeout-ms"),
+		maxTokensPerTask: explicitTokens,
+		budgetTier: tier ?? budget?.tier,
+		maxCallsPerTask: argument("--max-calls-per-task") ?? (budget ? String(budget.maxRequests) : undefined),
+		maxOutputTokensPerRequest: argument("--max-output-tokens-per-request") ?? (budget ? String(budget.maxOutputTokensPerRequest) : undefined),
+		timeoutMs: argument("--timeout-ms") ?? (budget ? String(budget.timeoutMs) : undefined),
 		concurrency: argument("--concurrency"),
-		budgetEnforcement: argument("--budget-enforcement"),
+		budgetEnforcement,
 		outputDir: argument("--output-dir"),
 		sandboxImage: argument("--sandbox-image"),
 	};
+	const input = budgetEnforcement === "local_hard_gateway" ? fillEvaluationBudget(budgetInput) : budgetInput;
 	if (
 		(taskPair || swe) &&
 		execute &&
@@ -433,7 +445,15 @@ export async function main(): Promise<void> {
 				taskMode: swebench ? ((taskMode as "off" | "v1" | "v2" | undefined) ?? "off") : undefined,
 			};
 			const prepared = workspace ? await prepareAgent(context, workspace) : loadSuspendedRun(context);
-			const execution = await executeAgent(context, prepared);
+			let execution;
+			try {
+				execution = await executeAgent(context, prepared);
+			} catch (error) {
+				if (recoveryPhase !== "resume" || !(error instanceof ExpiredBudgetResume)) throw error;
+				results.push(finishExpiredResume(context, prepared, error));
+				observedCost += error.status.actualCostUsd;
+				break;
+			}
 			if (recoveryPhase === "pause" && execution.child.status === 0 && execution.child.closed &&
 				execution.hostLifecycle.childAbsent && execution.hostLifecycle.containersRemoved &&
 				execution.gatewayStatus.state === "ready" && execution.gatewayStatus.requestsRejected === 0) {
@@ -470,6 +490,7 @@ export async function main(): Promise<void> {
 				runOutput,
 				batchL,
 				swebench: Boolean(swebench),
+				recovery: Boolean(recoveryPhase),
 				contractSource: contractSource === "file" || contractSource === "mcp" ? contractSource : undefined,
 				testFeedback,
 			},

@@ -6,7 +6,7 @@ import type { ProjectScope } from "../memory/contracts.ts";
 import type { TaskAttempt, TaskCheckpoint, TaskEvidence, TaskRecord, TaskSnapshot, TaskStep } from "./contracts.ts";
 import { TaskError } from "./errors.ts";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_DATABASE_BYTES = 256 * 1024 * 1024;
 
 export interface TaskStorageScope {
@@ -235,7 +235,7 @@ export class TaskProvider {
 			this.require(value.taskId);
 			this.database
 				.prepare(
-					"INSERT OR IGNORE INTO task_evidence (evidence_id, task_id, step_id, kind, source_ref, tool_call_id, outcome, confidence_class, observed_at, digest, attempt_id, input_digest, result_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT OR IGNORE INTO task_evidence (evidence_id, task_id, step_id, kind, source_ref, tool_call_id, outcome, confidence_class, observed_at, digest, attempt_id, input_digest, result_digest, pytest_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					value.evidenceId,
@@ -251,6 +251,7 @@ export class TaskProvider {
 					value.attemptId ?? null,
 					value.inputDigest ?? null,
 					value.resultDigest ?? null,
+					value.pytest ? JSON.stringify(value.pytest) : null,
 				);
 			this.database
 				.prepare("UPDATE tasks SET revision=revision+1, updated_at=? WHERE task_id=? AND project_id=?")
@@ -338,8 +339,13 @@ export class TaskProvider {
 	markOpenAttemptsForReconciliation(now: number, taskId?: string): number {
 		return this.transaction(() => {
 			const rows = this.database
-				.prepare("SELECT * FROM task_attempts WHERE state='started' AND (? IS NULL OR task_id=?)")
-				.all(taskId ?? null, taskId ?? null) as unknown as AttemptRow[];
+				.prepare(
+					taskId
+						? "SELECT * FROM task_attempts WHERE state='started' AND task_id=?"
+						: `SELECT * FROM task_attempts AS attempts WHERE state='started' AND NOT EXISTS
+						(SELECT 1 FROM task_events WHERE type='ma1_delegation' AND task_id=attempts.task_id)`,
+				)
+				.all(...(taskId ? [taskId] : [])) as unknown as AttemptRow[];
 			for (const row of rows) {
 				this.database
 					.prepare("UPDATE task_attempts SET state='needs_reconciliation', ended_at=? WHERE attempt_id=?")
@@ -462,6 +468,16 @@ export class TaskProvider {
 		});
 	}
 
+	getCheckpoint(taskId: string, checkpointId: string): TaskCheckpoint | null {
+		this.assertOpen();
+		const row = this.database
+			.prepare(
+				"SELECT c.* FROM task_checkpoints c JOIN tasks t ON t.task_id=c.task_id WHERE c.task_id=? AND c.checkpoint_id=? AND t.project_id=?",
+			)
+			.get(taskId, checkpointId, this.scope.projectId) as CheckpointRow | undefined;
+		return row ? this.readCheckpoint(row) : null;
+	}
+
 	checkpointIntegrity(checkpoint: TaskCheckpoint): "verified" | "legacy" | "invalid" {
 		const event = this.checkpointEvent(checkpoint);
 		if (!event || event.checkpointId !== checkpoint.checkpointId || event.taskRevision !== checkpoint.taskRevision)
@@ -514,6 +530,35 @@ export class TaskProvider {
 				seq: number;
 			}
 		).seq;
+	}
+
+	delegationEvents(taskId: string): Array<{ seq: number; source: string; data: unknown }> {
+		this.require(taskId);
+		const rows = this.database
+			.prepare(
+				"SELECT seq, source_ref, payload_json, payload_hash FROM task_events WHERE task_id=? AND type='ma1_delegation' ORDER BY seq",
+			)
+			.all(taskId) as Array<{ seq: number; source_ref: string; payload_json: string; payload_hash: string }>;
+		return rows.map((row) => {
+			if (createHash("sha256").update(row.payload_json).digest("hex") !== row.payload_hash)
+				throw new TaskError("TASK_INVALID_TRANSITION", "Delegation event integrity check failed");
+			return { seq: row.seq, source: row.source_ref, data: JSON.parse(row.payload_json) as unknown };
+		});
+	}
+
+	appendDelegation(taskId: string, expectedSeq: number, source: string, data: object): number {
+		return this.transaction(() => {
+			this.require(taskId);
+			const last = this.database
+				.prepare("SELECT COALESCE(max(seq),0) AS seq FROM task_events WHERE task_id=? AND type='ma1_delegation'")
+				.get(taskId) as { seq: number };
+			if (last.seq !== expectedSeq)
+				throw new TaskError("TASK_REVISION_CONFLICT", "Delegation state already changed");
+			if (JSON.stringify(data).length > 8_000)
+				throw new TaskError("TASK_STORAGE_ERROR", "Delegation event is too large");
+			this.appendEvent(taskId, "ma1_delegation", source, data, Date.now());
+			return this.getLastEventSeq(taskId);
+		});
 	}
 
 	modelPlanEvents(taskId: string): Array<{ type: string; source: string; at: number; data: Record<string, unknown> }> {
@@ -686,7 +731,8 @@ export class TaskProvider {
 	private snapshotJson(snapshot: TaskSnapshot): string {
 		return JSON.stringify({ task: snapshot.task, steps: snapshot.steps, evidence: snapshot.evidence });
 	}
-	private transaction<T>(operation: () => T): T {
+	/** Compound host transitions and their checkpoint share the same SQLite write transaction. */
+	transaction<T>(operation: () => T): T {
 		this.assertOpen();
 		if (this.database.isTransaction) return operation();
 		this.database.exec("BEGIN IMMEDIATE");
@@ -747,6 +793,10 @@ export function runTaskMigrations(database: DatabaseSync): void {
 			`);
 			database.prepare("INSERT INTO schema_migrations VALUES (2, ?)").run(Date.now());
 		}
+		if (!versions.some(({ version }) => version === 3)) {
+			database.exec("ALTER TABLE task_evidence ADD COLUMN pytest_json TEXT");
+			database.prepare("INSERT INTO schema_migrations VALUES (3, ?)").run(Date.now());
+		}
 		database.exec("COMMIT");
 	} catch (error) {
 		if (database.isTransaction) database.exec("ROLLBACK");
@@ -806,6 +856,7 @@ interface StepRow {
 	validation_json: string | null;
 }
 interface EvidenceRow {
+	pytest_json: string | null;
 	evidence_id: string;
 	task_id: string;
 	step_id: string;
@@ -879,6 +930,7 @@ function stepFromRow(row: StepRow): TaskStep {
 function evidenceFromRow(row: EvidenceRow): TaskEvidence {
 	return {
 		evidenceId: row.evidence_id,
+		...(row.pytest_json ? { pytest: JSON.parse(row.pytest_json) } : {}),
 		taskId: row.task_id,
 		stepId: row.step_id,
 		kind: row.kind,

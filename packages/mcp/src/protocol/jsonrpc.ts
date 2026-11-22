@@ -64,8 +64,14 @@ export class McpConnectionClosedError extends Error {
 export class McpTimeoutError extends Error {
 	readonly timeoutMs: number;
 
-	constructor(timeoutMs: number) {
-		super(`MCP request timed out after ${timeoutMs}ms`);
+	readonly invalidFrameObserved: boolean;
+
+	constructor(timeoutMs: number, invalidFrameObserved = false) {
+		super(
+			`MCP request timed out after ${timeoutMs}ms` +
+				(invalidFrameObserved ? "; invalid JSON-RPC frame observed on connection" : ""),
+		);
+		this.invalidFrameObserved = invalidFrameObserved;
 		this.name = "McpTimeoutError";
 		this.timeoutMs = timeoutMs;
 	}
@@ -92,16 +98,28 @@ export function isJsonRpcId(value: unknown): value is JsonRpcId {
 
 export function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
 	return (
-		isObject(message) && message.jsonrpc === "2.0" && isJsonRpcId(message.id) && typeof message.method === "string"
+		isObject(message) &&
+		message.jsonrpc === "2.0" &&
+		isJsonRpcId(message.id) &&
+		typeof message.method === "string" &&
+		!("error" in message) &&
+		!("result" in message)
 	);
 }
 
 export function isJsonRpcNotification(message: unknown): message is JsonRpcNotification {
-	return isObject(message) && message.jsonrpc === "2.0" && !("id" in message) && typeof message.method === "string";
+	return (
+		isObject(message) &&
+		message.jsonrpc === "2.0" &&
+		!("id" in message) &&
+		typeof message.method === "string" &&
+		!("error" in message) &&
+		!("result" in message)
+	);
 }
 
 export function isJsonRpcResponse(message: unknown): message is JsonRpcResponse {
-	if (!isObject(message) || message.jsonrpc !== "2.0" || !isJsonRpcId(message.id)) return false;
+	if (!isObject(message) || "method" in message || message.jsonrpc !== "2.0" || !isJsonRpcId(message.id)) return false;
 	if ("result" in message) return !("error" in message);
 	if (!("error" in message) || !isObject(message.error)) return false;
 	return typeof message.error.code === "number" && typeof message.error.message === "string";

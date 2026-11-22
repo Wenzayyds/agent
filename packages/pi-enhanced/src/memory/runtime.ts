@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { MemoryIntelligenceConfig } from "./config.ts";
-import type { MemoryRuntimeInfo, ProjectScope, ScopedMemoryReader } from "./contracts.ts";
+import type { MemoryRuntimeInfo, MemoryVisibility, ProjectScope, ScopedMemoryReader } from "./contracts.ts";
 import type { MemoryGovernanceConfig } from "./governance.ts";
 import { createProjectScope, type ProjectScopeOptions } from "./project-scope.ts";
 import { ScopedMemoryReaderAdapter } from "./reader.ts";
@@ -21,12 +21,14 @@ export interface MemoryRuntime extends MemoryRuntimeInfo {
 	readonly reader?: ScopedMemoryReader;
 	readonly intelligence?: SemanticSearchAdapter;
 	readonly governanceConfig?: MemoryGovernanceConfig;
+	readonly visibility?: () => Promise<MemoryVisibility>;
 	close(): Promise<void>;
 }
 
 export interface StartMemoryRuntimeOptions extends Omit<ProjectScopeOptions, "platform" | "realpath"> {
 	enabled: boolean;
 	configurationErrors?: readonly string[];
+	resolveVisibility?: () => Promise<MemoryVisibility>;
 	intelligenceConfig?: MemoryIntelligenceConfig;
 	governanceConfig?: MemoryGovernanceConfig;
 	projectTrusted: boolean;
@@ -52,10 +54,15 @@ export async function startMemoryRuntime(options: StartMemoryRuntimeOptions): Pr
 		const scope = (options.createScope ?? createProjectScope)({ cwd: options.cwd, agentDir: options.agentDir });
 		backend = options.openBackend ? await options.openBackend(scope) : undefined;
 		if (backend instanceof MemoryService) {
-			reader = new ScopedMemoryReaderAdapter(backend);
 			if (options.intelligenceConfig) {
 				intelligence = new SemanticSearchAdapter({ service: backend, config: options.intelligenceConfig });
 			}
+			reader = new ScopedMemoryReaderAdapter(
+				backend,
+				intelligence,
+				options.sessionManager?.getSessionId(),
+				options.resolveVisibility,
+			);
 		}
 		if (options.sessionManager) {
 			sessionRecall = (
@@ -70,14 +77,15 @@ export async function startMemoryRuntime(options: StartMemoryRuntimeOptions): Pr
 			...(backend ? { backend } : {}),
 			...(sessionRecall ? { sessionRecall } : {}),
 			...(reader ? { reader } : {}),
+			...(options.resolveVisibility ? { visibility: options.resolveVisibility } : {}),
 			...(intelligence ? { intelligence } : {}),
 			...(options.governanceConfig ? { governanceConfig: options.governanceConfig } : {}),
 			async close() {
 				if (closed) return;
 				closed = true;
-				await intelligence?.close().catch(() => undefined);
 				reader?.close();
 				sessionRecall?.close();
+				await intelligence?.close().catch(() => undefined);
 				await backend?.close();
 			},
 		};

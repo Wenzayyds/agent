@@ -1,125 +1,104 @@
-# Development Rules
+# Pi Enhanced 项目开发约定
 
-## Conversational Style
+> 本文件用于约束后续 Codex / AI 编程助手的工作范围与交付方式。**项目目标优先于技术完备性；已有安全边界不能为通过测试而被放宽。**
 
-- Keep answers short and concise
-- No emojis in commits, issues, PR comments, or code
-- No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
-- Technical prose only, be direct
-- Use concise, clear, simple language. Define unavoidable jargon before using it.
-- Explain non-trivial designs and problems as: problem, concrete example or short trace, then solution. State why the solution is necessary and distinguish it from optional complexity.
-- Prefer concrete behavior and small illustrations over abstract summaries, dense terminology, or unexplained lists of changes.
-- When the user asks a question, answer it first before making edits or running implementation commands.
-- When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
+## 1. 项目定位与完成标准
 
-## Code Quality
+Pi Enhanced 是基于 **Pi** 扩展的、用于**求职面试展示**的模块化 Coding Agent，而不是企业级 Agent 平台、通用评测平台或学术研究框架。
 
-- Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
-- No `any` unless absolutely necessary.
-- Inline single-line helpers that have only one call site.
-- Check node_modules for external API types; don't guess.
-- **No inline imports** (`await import()`, `import("pkg").Type`, dynamic type imports). Top-level imports only.
-- In `packages/coding-agent`, resolve package assets through helpers in `src/config.ts`. Do not use `__dirname` directly; the helpers account for source checkouts, npm installations, and standalone binaries.
-- Never remove or downgrade code to fix type errors from outdated deps; upgrade the dep instead.
-- Use only erasable TypeScript syntax (Node strip-only mode) in code checked by the root config (`packages/*/src`, `packages/*/test`, `packages/coding-agent/examples`): no parameter properties, `enum`, `namespace`/`module`, `import =`, `export =`, or other constructs needing JS emit. Use explicit fields with constructor assignments.
-- Always ask before removing functionality or code that appears intentional.
-- Do not preserve backward compatibility unless the user asks for it.
-- Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
-- Never modify `packages/ai/src/models.generated.ts` directly; update `packages/ai/scripts/generate-models.ts` instead, then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes. The generated model data in `packages/ai/src/providers/data/` is gitignored: never stage it, and don't look for it in git history.
+项目的价值是让 Agent 能够**理解代码 → 修改代码 → 得到验证反馈 → 根据反馈继续修复**，并能清楚展示 Task、Memory、Context、MCP 的设计取舍。
 
-## Commands
+第一版达到以下条件即视为**完成**，停止主动扩功能：
 
-- After code changes (not docs): `npm run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
-- Never run `npm run build` or `npm test` unless requested by the user.
-- Never run the full vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. Otherwise run specific tests from the package root:
-  - Vitest: `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/specific.test.ts`
-  - `packages/tui` (`node:test`): `node --test test/specific.test.ts`
-- If you create or modify a test file, run it and iterate on test or implementation until it passes.
-- For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
-- When regressions tests for fixing a github issue, add a comment with the github issue number next to the test.
-- For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
-- Never commit unless the user asks.
+- 能独立完成 **1～2 个可复现的真实代码修复案例**，至少一个覆盖“第一次修改失败 → 测试反馈 → 再次修改”的闭环；失败案例也应如实保留。
+- 测试执行受控、可回收、可限制资源；关键安全措施和费用上限有效。
+- Task Manager、Memory、Context、MCP 等已有模块能按配置启停，核心路径可靠。
+- 在主要目标环境 **Linux + Docker** 中可以稳定演示。
+- 有简洁的 README、架构说明、使用步骤与少量可解释的实验数据，足以支撑面试问答。
 
-## Dependency and Install Security
+完成后将主要精力转向演示、简历、面试准备与求职，而不是无期限增加功能。
 
-- Treat npm dep and lockfile changes as reviewed code. Direct registry deps, including internal workspace deps, stay pinned to exact versions.
-- When updating `undici`, you MUST read its changelog/release notes for the target version and evaluate whether any changes may affect functionality before applying the update.
-- Hydrate/update locally with `npm install --ignore-scripts`; clean/CI-style with `npm ci --ignore-scripts`. Don't run lifecycle scripts unless the user asks.
-- If dep metadata changes, refresh `package-lock.json` with `npm install --package-lock-only --ignore-scripts`.
-- If `packages/coding-agent/install-lock/` needs regen, run `node scripts/generate-coding-agent-install-lock.mjs` (verify with `--check` or `npm run check`). New deps with lifecycle scripts require review and an explicit allowlist entry in that script; never add one silently.
-- Pre-commit blocks lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1`. Don't bypass unless the user wants the lockfile change committed.
+## 2. 开发优先级与模块范围
 
-## Git
+| 优先级 | 模块 / 工作 | 约定 |
+| --- | --- | --- |
+| **P0：重点推进** | Coding Agent 实际修复能力 | 优先补充**受控测试执行和反馈驱动的迭代修复**，解决真实使用障碍。 |
+| **P0：必须保留** | 工具安全、资源限制、密钥保护 | 保留 Docker 隔离、权限控制、预算硬上限和基本审计；不得为提高通过率而绕过。 |
+| **P1：维护为主** | Task Manager V2、Memory、Context、MCP | 保持已有实现可用、可解释；仅修确定缺陷，不主动引入更多算法或子系统。 |
+| **P1：冻结架构** | Runner、Gateway、授权与评测适配 | 复用现有链路，只修确证的阻断或安全问题，不新增另一套 Runner / Gateway / 授权框架。 |
+| **P2：精简验证** | SWE-bench、消融、指标分析 | 用于辅助展示能力和局限，不再以扩展评测平台为开发主线。 |
+| **暂不开展** | Multi-Agent、Subagent 编排、Agentic RL、MoE、复杂模型路由、大规模 Benchmark、企业级治理 | 无明确的求职展示收益和单独批准，不纳入当前版本。 |
 
-Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
+**新需求准入标准**：开始开发前，应能明确说明（1）解决了哪个真实 Coding Agent 问题；（2）为何不能复用现有 Pi / 项目模块；（3）如何通过一个具体案例验证效果。无法回答则暂缓。
 
-Committing:
+## 3. Agent Loop 的技术边界
 
-- Only commit files YOU changed in THIS session.
-- Stage explicit paths (`git add <path1> <path2>`); never `git add -A` / `git add .`.
-- Before committing, run `git status` and verify you are only staging your files.
-- `packages/ai/src/models.generated.ts` may always be included alongside your files.
-- Message format: `{feat,fix,docs}[(ai,tui,agent,coding-agent)]: <commit message> (optionally multiple lines)`. Message is informative and concise.
+- **Pi 原生 Loop 已有工具执行结果回传（Observation）**。不得误判为缺失 Observation，也不要重写 Pi Core、模型循环或工具调度。
+- 当前核心缺口是**代码修改后的行为验证反馈**：`read/edit` 成功不等于测试通过。
+- 优先通过现有 Pi 工具机制增补最小的受控 `run_tests` 能力：在隔离执行环境运行允许的测试，返回有界的通过/失败、断言和异常摘要，再由原 Loop 决定是否继续修复。
+- 第一版优先覆盖一个技术栈（如 Python / pytest），明确允许的命令、参数、工作目录、时间、输出大小与资源限制；**不开放任意宿主 Shell、网络或凭据**。测试生成的临时文件仅可留在隔离环境。
+- 不强制每个任务都运行测试；暂不做智能测试选择、自动生成测试、Judge 模型、复杂验证工作流或重规划算法。
+- 产品级工具能力必须能**脱离 SWE-bench Runner 独立使用**；不能把产品逻辑写死在 Benchmark 入口。
 
-Never run (destroys other agents' work or bypasses checks):
+## 4. 架构、代码与依赖边界
 
-- `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, `git add .`, `git commit --no-verify`.
+- **优先修改现有实现**，避免重复封装、过多抽象层和为单个需求创建通用框架。
+- 单一职责可以合理拆分，但**文件变多不是重构收益**；要求拆分后调用关系更清楚、重复逻辑更少。
+- 不主动重构已稳定的 Pi Core、Task Manager、Gateway 或 Runner；如确需跨模块修改，必须先解释必要性及影响范围。
+- 新依赖、新服务、新持久化格式、新数据库迁移必须有明确收益与成本说明；能用现有依赖解决时，不增加依赖。
+- 保持已有公开行为与安全边界兼容；不要为通过测试而使用 `any`、忽略类型检查、跳过断言或改变真实结果归类。
 
-If rebase conflicts occur:
+## 5. 测试与平台边界
 
-- Resolve conflicts only in files you modified.
-- If a conflict is in a file you did not modify, abort and ask the user.
-- Never force push.
+- **Linux + Docker 为主运行、集成测试与演示环境**；Windows 用于日常开发和基础检查，不追求所有测试在 Windows 原生通过；macOS 暂不专门支持。
+- 新功能优先跑相关单元测试和**一条真实端到端路径**，确认后再按影响范围执行必要回归；不因小改动反复跑全仓所有历史实验。
+- 测试报告必须区分 `passed`、`failed`、`skipped`、`not_run`；不得把环境受限当成通过，也不得把 Stub 通过写成真实模型或官方 Benchmark 成绩。
+- 测试失败先分类：**生产缺陷 / 测试夹具缺陷 / 环境限制 / 证据不足**。只有证实生产缺陷才修改生产模块。
+- CI 以核心类型检查、关键单测和 Linux Docker 端到端为重点；保留已有可用 CI，但不再主动扩大跨平台矩阵与异常场景数量。
+- 不得通过放宽沙箱、测试断言或费用安全策略来换取绿色 CI。
 
-## Issues and PRs
+## 6. 实验与费用边界
 
-See `CONTRIBUTING.md` for the contributor gate (auto-close workflows, `lgtm`/`lgtmi`, quality bar).
+- 评测**服务于产品能力展示**，不反过来驱动核心架构无限扩展。优先少量固定、可复现的真实任务，记录结果、Token、费用、耗时、工具行为及失败原因。
+- 明确区分：**工程测试 / Stub / 真实模型执行 / 官方 Harness 评分**；不得混用成绩或宣称无法支持的因果结论。
+- 模型、工具权限或 Prompt 改变后，应标记为新的实验条件；历史结果只在公平性可证明时进行严格比较。
+- 已完成的真实实验、补丁、授权消费记录和报告**保持原样**；不得为了提高结果而修补模型输出、重复计分或覆盖失败记录。
+- **真实 Provider 调用、付费实验、提高预算、创建真实一次性授权，均须用户当次明确批准**，即使历史对话曾批准过其他批次也不得复用。
+- 默认不为了实验结果自动重试、增加 Token/费用上限、切换模型或扩大任务集合。
 
-When reviewing PRs:
+## 7. Git、文件与交付边界
 
-- Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
-- Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
-- If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
+- 默认可进行明确范围内的本地阅读、修改和离线测试；**commit、push、force push、删除历史数据、改变权限边界等高影响操作，须当次明确授权**。
+- 未经授权，不执行 `git add -A`、`git reset --hard`、`git clean`、强推；只暂存获准的精确文件清单。
+- 特别保护仓库现有的**42 项历史文档删除**、`.artifacts`、实验记录、已消费授权、密钥、`.env`、SQLite 和用户其他未提交工作；不要自动恢复、清理、覆盖或混入新提交。历史删除是否最终提交由用户单独决定。
+- **默认不生成额外 Markdown、JSON、TXT、LOG 验收报告**。工具运行必需的原始日志可以保留在既有 `.artifacts` 路径；不要复制成多份交付文件。
+- 文档优先维护一份 README、必要架构说明和本 `AGENTS.md`；避免新的 Batch 编号、计划书和重复交接文档。
+- 每轮结束**直接在对话中简要汇报**：改动文件、解决的问题、关键测试结果、未验证风险、是否达到验收标准、是否需要用户授权。需要源码时只给相关路径和局部 Diff。
 
-When creating issues:
+## 8. 执行流程与止损规则
 
-- Add `pkg:*` labels for affected packages (`pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:tui`); use all that apply.
+每轮工作按以下顺序进行：
 
-When posting issue/PR comments:
+1. **定义目标**：明确一个可观察的用户能力、最小修改范围、验收方法与完成条件。
+2. **复用优先**：检查 Pi 和现有模块是否已经具备相关能力，避免重复造轮子。
+3. **最小实现**：先解决核心正常路径，再补必要的典型失败与安全测试。
+4. **定向验收**：相关测试通过、没有已知安全回归，即进入交付，不追加无关优化。
+5. **一次汇报**：描述可验证结果与局限，不自动提出下一批大规模工程工作。
 
-- Write the comment to a temp file and post with `gh issue/pr comment --body-file` (never multi-line markdown via `--body`).
-- Keep comments concise, technical, in the user's tone.
-- End every AI-posted comment with the AI-generated disclaimer line specified by the originating prompt (e.g. `This comment is AI-generated by `/wr``).
+遇到下列情况应**暂停扩大范围，先汇报原因和最小备选方案**：
 
-When closing issues via commit:
+- 原计划的局部改动需要牵连多个无关核心模块或新建框架。
+- **同一问题连续两次尝试仍无实质进展**，不再猜测性修复和反复提交 CI。
+- 新增机制说不清具体产品收益或无法通过真实案例验证。
+- 需要增加宿主权限、扩大沙箱能力、提高费用上限或修改生产安全策略。
+- 只能在不受支持环境复现失败，缺少足够证据判定生产代码有缺陷。
 
-- Include `fixes #<number>` or `closes #<number>` in the message so merging auto-closes the issue. For multiple issues, repeat the keyword per issue (`closes #1, closes #2`); a shared keyword (`closes #1, #2`) only closes the first.
+**停止并不意味着放弃修复**：应把阻断、可用证据和建议的最小动作说清楚，等待用户决定范围，而不是继续堆机制。
 
-## Testing pi Interactive Mode with tmux
+## 9. 决策优先级
 
-For testing pi's interactive mode, load and follow [.pi/skills/interactive-testing.md](.pi/skills/interactive-testing.md).
+发生取舍时，遵循以下顺序：
 
-## Changelog
+**安全与数据保护 > 真实 Coding Agent 能力 > 易维护、易演示 > 必要验证 > 评测规模与指标包装。**
 
-Location: `packages/*/CHANGELOG.md` (one per package).
-
-Sections under `## [Unreleased]`: `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, `### Removed`.
-
-Rules:
-
-- All new entries go under `## [Unreleased]`. Read the full section first and append to existing subsections; never duplicate them.
-- Released version sections (e.g. `## [0.12.2]`) are immutable; never modify them.
-- Do not create changelog entries when the work targets a branch other than `main`
-
-Attribution:
-
-- Internal (from issues): `Fixed foo bar ([#123](https://github.com/earendil-works/pi/issues/123))`
-- External contributions: `Added feature X ([#456](https://github.com/earendil-works/pi/pull/456) by [@username](https://github.com/username))`
-
-## Releasing
-
-For release preparation, publishing, verification, or recovery, load and follow [.pi/skills/release.md](.pi/skills/release.md).
-
-## User Override
-
-If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.
+最终判据：**这项改动是否让 Agent 更可靠地完成真实代码开发任务，或者让项目在面试中更容易演示和解释？** 若没有明确收益，默认不做。

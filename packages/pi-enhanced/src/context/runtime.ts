@@ -1,11 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ScopedMemoryReader } from "../memory/contracts.ts";
+import type { MemoryAccess } from "../memory/disclosure.ts";
 import type { ScopedTaskReader } from "../task-manager/contracts.ts";
 import { estimateContextMessages } from "./budget.ts";
 import type { ContextDiagnostics, ContextMessage, ContextModuleConfig, ContextRuntimeState } from "./contracts.ts";
 import { injectVerifiedMemory } from "./memory-source.ts";
-import { offloadProjection, restoreContextPage } from "./offload.ts";
+import { contextPageText, offloadProjection, restoreContextPage } from "./offload.ts";
 import { selectContextMessages } from "./selector.ts";
+import { POLICY, RESTORED_CUSTOM_TYPE } from "./source-history.ts";
 import { injectActiveTask } from "./task-source.ts";
 
 export type ContextReaderProvider = (ctx: ExtensionContext, timeoutMs: number) => Promise<ScopedMemoryReader>;
@@ -57,6 +59,7 @@ export class ContextRuntime {
 		ctx: ExtensionContext,
 		restoreToolActive: boolean,
 		hostRestore?: ContextHostRestore,
+		access?: (ctx: ExtensionContext) => MemoryAccess,
 	): Promise<ContextMessage[] | undefined> {
 		const canRestore = restoreToolActive || hostRestore !== undefined;
 		const before = estimateContextMessages(messages);
@@ -92,6 +95,7 @@ export class ContextRuntime {
 							activeTaskId,
 							this.config.toolOutput.maximumTextCharacters,
 							hostRestore !== undefined,
+							access?.(ctx),
 						);
 						view = projected.messages;
 						offloaded = projected.offloaded;
@@ -107,9 +111,10 @@ export class ContextRuntime {
 				budget: this.config.budget,
 				...(contextWindow === undefined ? {} : { contextWindow }),
 				// Keep redaction active when the original cannot be paged back in.
-				toolOutput: this.offloadEnabled && !canRestore
-					? { ...this.config.toolOutput, maximumTextCharacters: Infinity }
-					: this.config.toolOutput,
+				toolOutput:
+					this.offloadEnabled && !canRestore
+						? { ...this.config.toolOutput, maximumTextCharacters: Infinity }
+						: this.config.toolOutput,
 			});
 			let output = selection.messages;
 			let injectedMemoryIds: readonly string[] = [];
@@ -183,13 +188,19 @@ export class ContextRuntime {
 				let characters = 0;
 				if (activeTaskId && userIndex >= 0) {
 					try {
-						const page = restoreContextPage(ctx, activeTaskId, reference, offset, limit);
+						const page = restoreContextPage(ctx, activeTaskId, reference, offset, limit, access?.(ctx), "host");
 						const withPage = output.toSpliced(userIndex, 0, {
-							role: "custom", customType: "pi-enhanced-restored-context", display: false,
-							content: `[Untrusted output restored for ${reference}]\n${page.text}`, timestamp: output[userIndex].timestamp,
+							role: "custom",
+							customType: RESTORED_CUSTOM_TYPE,
+							display: false,
+							details: { modelRequestPolicy: POLICY, contextPage: { ...page.proof } },
+							content: contextPageText(page, `[Untrusted output restored for ${reference}]`),
+							timestamp: output[userIndex].timestamp,
 						});
-						if (selection.targetEstimatedTokens === null ||
-							estimateContextMessages(withPage) <= selection.targetEstimatedTokens) {
+						if (
+							selection.targetEstimatedTokens === null ||
+							estimateContextMessages(withPage) <= selection.targetEstimatedTokens
+						) {
 							output = withPage;
 							characters = page.text.length;
 						}

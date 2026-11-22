@@ -261,6 +261,16 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 		try {
 			const supportsStrictMode = model.compat?.supportsStrictMode ?? false;
 			const client = new BedrockRuntimeClient(config);
+			if (options.beforeSend) {
+				// Deserialize middleware runs inside the SDK retry middleware, once per HTTP attempt.
+				client.middlewareStack.add(
+					(next) => (args) => {
+						options.beforeSend?.();
+						return next(args);
+					},
+					{ step: "deserialize", priority: "low", name: "piDisclosureCheck" },
+				);
+			}
 			let observedRawResponse = false;
 			if (options.onResponse) {
 				addResponseHeadersMiddleware(client, options.onResponse, model, () => {

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import type { TaskPytestSource } from "../sandbox/task-evidence.ts";
 import type {
 	TaskEvidence,
 	TaskRecord,
@@ -42,9 +43,11 @@ export class TaskService {
 	readonly maximumSteps: number;
 	private closed = false;
 	private binding?: TaskRuntimeBinding;
-	constructor(provider: TaskProvider, maximumSteps: number) {
+	readonly pytestSource?: () => TaskPytestSource | undefined;
+	constructor(provider: TaskProvider, maximumSteps: number, pytestSource?: () => TaskPytestSource | undefined) {
 		this.provider = provider;
 		this.maximumSteps = maximumSteps;
+		this.pytestSource = pytestSource;
 	}
 
 	create(goal: string, steps: readonly TaskStepInput[], sessionId: string, branchLeafId: string | null): TaskSnapshot {
@@ -115,6 +118,56 @@ export class TaskService {
 			!dependenciesComplete(step, snapshot.steps)
 		)
 			throw new TaskError("TASK_INVALID_TRANSITION", "Step dependencies are not completed");
+		if (next === "completed" && step.validation?.kind === "pytest") {
+			const rule = step.validation;
+			return this.provider.transaction(() => {
+				const current = this.require(taskId);
+				if (!["running", "verifying"].includes(current.task.status) || !dependenciesComplete(step, current.steps))
+					throw new TaskError("TASK_INVALID_TRANSITION", "Task is not ready for pytest acceptance");
+				const attempts = this.provider.getAttempts(taskId);
+				const last = attempts.findLast((a) => a.stepId === stepId && a.toolName === "run_tests");
+				const evidence = current.evidence.find(
+					(e) =>
+						e.stepId === stepId &&
+						e.kind === "sandbox_pytest" &&
+						e.attemptId === last?.attemptId &&
+						e.toolCallId === last?.toolCallId,
+				);
+				const receipt = evidence?.pytest;
+				const live = this.pytestSource?.()?.current(rule.target);
+				if (
+					!live ||
+					!receipt ||
+					!evidence ||
+					last?.state !== "succeeded" ||
+					evidence.confidenceClass !== "validated" ||
+					receipt.status !== "passed" ||
+					receipt.exitCode !== 0 ||
+					!(receipt.completedPasses && receipt.completedPasses > 0) ||
+					receipt.target !== rule.target ||
+					receipt.testHash !== rule.expectedSha256 ||
+					live.testHash !== receipt.testHash ||
+					live.patchHash !== receipt.patchHash ||
+					live.policyHash !== receipt.policyHash ||
+					live.workspaceId !== receipt.workspaceId ||
+					attempts.some(
+						(a) => (a.state === "started" || a.state === "needs_reconciliation") && a.riskClass !== "read_only",
+					)
+				)
+					throw new TaskError(
+						"TASK_INVALID_TRANSITION",
+						"No current, verified Sandbox pytest result for this step",
+					);
+				return this.provider.setStepStatus(
+					taskId,
+					stepId,
+					expectedRevision,
+					next,
+					`evidence:${evidence.evidenceId}`,
+					Date.now(),
+				);
+			});
+		}
 		if (next === "completed" && !hasTrustedEvidence(snapshot.evidence.filter((item) => item.stepId === stepId)))
 			throw new TaskError(
 				"TASK_INVALID_TRANSITION",
@@ -132,6 +185,7 @@ export class TaskService {
 			taskId: input.taskId,
 			stepId: input.stepId,
 			kind: input.kind.slice(0, 100),
+			...(input.pytest ? { pytest: input.pytest } : {}),
 			sourceRef: input.sourceRef.slice(0, 300),
 			...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
 			...(input.attemptId ? { attemptId: input.attemptId } : {}),

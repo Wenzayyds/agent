@@ -1,0 +1,12 @@
+{
+	"extends": "../../../../tsconfig.json",
+	"include": [
+		"dataset.ts",
+		"ranking-experiments.ts",
+		"retrieval-datasets.ts",
+		"retrieval-eval.ts",
+		"select-retrieval.ts",
+		"../../tests/unit/knowledge-ranking-experiments.test.ts",
+		"../../../coding-agent/src/utils/highlight-js.d.ts"
+	]
+}

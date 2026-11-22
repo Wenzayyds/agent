@@ -1,10 +1,19 @@
-import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it, vi } from "vitest";
 import { createHarness, createTestUiContext, getMessageText } from "../../../coding-agent/test/suite/harness.ts";
+import { createProjectScope } from "../../src/memory/project-scope.ts";
+import { ENHANCED_CONFIG_FILE } from "../../src/shared/config.ts";
+import { createTaskManagerExtension } from "../../src/task-manager/extension.ts";
+import { createTaskStorageScope, TaskProvider } from "../../src/task-manager/provider.ts";
+import { TaskService } from "../../src/task-manager/service.ts";
+import { taskPytestSource, type TaskPytestSource } from "../../src/sandbox/task-evidence.ts";
 import { assessPytest } from "../../src/ccr/adaptive.ts";
 import type { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
@@ -72,6 +81,107 @@ it("blocks native edit when CCR auto has no trusted Sandbox", async () => {
 });
 
 describe.skipIf(!image)("isolated pytest", () => {
+	it("does not certify all-skipped or timed-out pytest, including misleading terminal text", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-pytest-test-"));
+		const file = join(root, "test_calc.py");
+		const cfg = sandboxConfigForTesting({ workspace: root });
+		const run = createPytestExecutor(cfg, { ...policy(["test_calc.py"]), timeoutMs: 2200 });
+		try {
+			writeFileSync(file, "import pytest\ndef test_skip():\n    pytest.skip('1 passed')\n");
+			let count: number | undefined;
+			const skipped = await run(["test_calc.py"], undefined, (e) => { count = e.completedPasses; }, { recordCompletedTests: true });
+			expect(skipped.status).toBe("passed");
+			expect(count).toBe(0);
+			writeFileSync(file, "import time\ndef test_wait():\n    time.sleep(40)\n");
+			const timedOut = await run(["test_calc.py"], undefined, (e) => { count = e.completedPasses; }, { recordCompletedTests: true });
+			expect(timedOut.status).toBe("timeout");
+			expect(count).toBeUndefined();
+		} finally { clean(root); }
+	}, 30_000);
+
+	it("accepts only a current Docker result for the bound step across task connections", async () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "pi-pytest-test-"));
+		writeFileSync(join(agentDir, ENHANCED_CONFIG_FILE), JSON.stringify({ modules: { "task-manager": { enabled: true } } }));
+		const binding = { taskId: "", stepId: "repair" };
+		let source: () => TaskPytestSource | undefined = () => undefined;
+		const harness = await createHarness({ extensionFactories: [
+			createSandboxExtension((workspace) => sandboxConfigForTesting({ workspace }), undefined, policy()),
+			createTaskManagerExtension({ agentDir, initialBinding: binding }),
+			(pi) => { source = () => taskPytestSource(pi.events, scope.rootPath); },
+		] });
+		const scope = createProjectScope({ cwd: harness.tempDir, agentDir });
+		const storage = createTaskStorageScope(scope, agentDir);
+		const connections: TaskService[] = [];
+		const connect = (withSandbox: boolean) => {
+			const service = new TaskService(new TaskProvider(storage), 20, withSandbox ? source : undefined);
+			connections.push(service);
+			return service;
+		};
+		try {
+			const service = connect(true);
+			const testFile = "from calc import value\n\ndef test_value():\n    assert value == 1\n";
+			const validation = { kind: "pytest" as const, target: "test_calc.py",
+				expectedSha256: createHash("sha256").update(testFile).digest("hex") };
+			writeFileSync(join(scope.rootPath, validation.target), testFile);
+			const edit = (value: number) => writeFileSync(join(scope.rootPath, "calc.py"), `value = ${value}\n`);
+			edit(0);
+			const plan = service.create("repair value", [{ stepId: binding.stepId, title: "test", expectedOutcome: "pass", validation }], "host", null);
+			const id = binding.taskId = plan.task.taskId;
+			service.transitionTask(id, 1, "queued");
+			service.transitionTask(id, 2, "running");
+			harness.settingsManager.setProjectTrusted(true);
+			await harness.session.bindExtensions({});
+			service.transitionStep(id, binding.stepId, 1, "running");
+			service.transitionStep(id, binding.stepId, 2, "verifying");
+			const complete = (s: TaskService) => s.transitionStep(id, binding.stepId, 3, "completed");
+			await harness.session.extensionRunner.emit({ type: "tool_execution_start", toolName: "run_tests", toolCallId: "fabricated", args: { targets: [validation.target] } });
+			await harness.session.extensionRunner.emit({ type: "tool_execution_end", toolName: "run_tests", toolCallId: "fabricated",
+				isError: false, durationMs: 1, result: { details: { status: "passed", exitCode: 0, completedPasses: 1 } } });
+			expect(() => complete(service)).toThrow(/pytest/i);
+			const run = async (target: string) => {
+				harness.setResponses([
+					fauxAssistantMessage([fauxToolCall("run_tests", { targets: [target] })], { stopReason: "toolUse" }),
+					fauxAssistantMessage("Test result received."),
+				]);
+				await harness.session.prompt("Check the selected public test.");
+				return service.get(id)!.evidence.filter((e) => e.kind === "sandbox_pytest").at(-1);
+			};
+			expect(await run(validation.target)).toMatchObject({ pytest: { status: "failed", exitCode: 1, failed: 1 } });
+			expect(() => complete(service)).toThrow(/pytest/i);
+			edit(1);
+			expect(await run("test_calc.py::test_value")).toMatchObject({ pytest: { status: "passed" }, confidenceClass: "observed" });
+			expect(() => complete(service)).toThrow(/pytest/i);
+			const passed = await run(validation.target);
+			expect(passed).toMatchObject({ taskId: id, stepId: binding.stepId, toolCallId: expect.any(String),
+				attemptId: expect.any(String), confidenceClass: "validated", pytest: { exitCode: 0, passed: 1, target: validation.target } });
+			writeFileSync(join(scope.rootPath, validation.target), testFile + "# changed\n");
+			expect(() => complete(service)).toThrow(/pytest/i);
+			writeFileSync(join(scope.rootPath, validation.target), testFile);
+			edit(2);
+			expect(() => complete(service)).toThrow(/pytest/i);
+			edit(1);
+			expect(() => complete(connect(false))).toThrow(/pytest/i);
+			const beforePause = service.get(id)!;
+			const paused = service.transitionTask(id, beforePause.task.revision, "paused");
+			expect(() => complete(service)).toThrow(/pytest/i);
+			const queued = service.transitionTask(id, paused.task.revision, "queued");
+			service.transitionTask(id, queued.task.revision, "running");
+			const child = fileURLToPath(new URL("../fixtures/task-pytest-complete-child.ts", import.meta.url));
+			const accept = () => promisify(execFile)(process.execPath, ["--experimental-strip-types", child,
+				scope.rootPath, agentDir, id, image], { timeout: 15_000, windowsHide: true });
+			const outcomes = await Promise.all([accept(), accept()]);
+			expect(outcomes.map((result) => result.stdout).sort()).toEqual(["completed", "revision_conflict"]);
+			expect(service.get(id)!.steps[0]?.status).toBe("completed");
+			expect(() => complete(service)).toThrow(/changed/i);
+			expect(service.get(id)!.task.status).toBe("running");
+		} finally {
+			await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			for (const s of connections) s.close();
+			harness.cleanup();
+			clean(agentDir);
+		}
+	}, 90_000);
+
 	it("feeds a failed SWE patch back to Pi and binds a later pass to the exported revision", async () => {
 		const sandbox = (cwd: string) => sandboxConfigForTesting({ workspace: cwd, runId: "swe-pytest-loop" });
 		const harness = await createHarness({ extensionFactories: [createSweTestFeedback({
@@ -111,7 +221,13 @@ describe.skipIf(!image)("isolated pytest", () => {
 			expect(verification()).toMatchObject({ status: "failed", targets: ["test_calc.py::test_negative"] });
 			writeFileSync(join(cwd, "calc.py"), "def clamp(x):\n    return -1\n");
 			expect(verification()).toMatchObject({ status: "unavailable", reason: "patch_changed_or_unavailable" });
-		} finally { harness.cleanup(); }
+		} finally {
+			try {
+				await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			} finally {
+				harness.cleanup();
+			}
+		}
 	}, 60_000);
 
 	it("does not register run_tests without trusted opt-in", async () => {
@@ -164,7 +280,7 @@ describe.skipIf(!image)("isolated pytest", () => {
 				call("edit", { path: "calc.py", edits: [{ oldText: "return 0", newText: "return x" }] }),
 				call("run_tests", { targets: ["test_calc.py"] }),
 				call("edit", { path: "calc.py", edits: [{ oldText: "return x", newText: "return max(0, x)" }] }),
-				call("run_tests", { targets: ["test_calc.py"] }), fauxAssistantMessage("The second test run passed."),
+				call("run_tests", {}), fauxAssistantMessage("The second test run passed."),
 			]);
 			await harness.session.prompt("Fix clamp so negative values become zero and positive values are unchanged. Run the approved tests.");
 			const results = harness.session.messages.filter((m) => m.role === "toolResult" && m.toolName === "run_tests").map((m) => JSON.parse(getMessageText(m)));
@@ -172,7 +288,7 @@ describe.skipIf(!image)("isolated pytest", () => {
 			expect(results[0]).toMatchObject({ status: "failed", passed: 1, failed: 1, exitCode: 1 });
 			expect(results[0].output).toContain("test_negative");
 			expect(results[0].output).toContain("assert -2 == 0");
-			expect(results[1]).toMatchObject({ status: "passed", passed: 2, failed: 0, exitCode: 0 });
+			expect(results[1]).toMatchObject({ status: "passed", targets: ["test_calc.py"], passed: 2, failed: 0, exitCode: 0 });
 			expect(readFileSync(join(harness.tempDir, "calc.py"), "utf8")).toContain("max(0, x)");
 		} finally { broker?.stop(); harness.cleanup(); }
 	}, 60_000);

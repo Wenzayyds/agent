@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import type { BudgetGatewayOptions, BudgetGatewayStatus } from "../../benchmarks/real-agent/budget-gateway.ts";
+import { type BudgetGatewayOptions, type BudgetGatewayStatus, startBudgetGateway } from "../../benchmarks/real-agent/budget-gateway.ts";
 import { createProjectScope } from "../../src/memory/project-scope.ts";
 import { TaskProvider, createTaskStorageScope } from "../../src/task-manager/provider.ts";
 import { TaskService } from "../../src/task-manager/service.ts";
@@ -96,6 +96,36 @@ it("carries settled requests, tokens, cost and the original deadline into a dist
 	}
 }, 25_000);
 
+it("preserves the admitted usage and deadline across an authorized tier change and process restart", async () => {
+	const stub = await startStubProvider((_body, response) => {
+		response.writeHead(200, { "Content-Type": "text/event-stream" }).end(textSse("done", 100, 20));
+	});
+	try {
+		const options = fixture(stub.url);
+		options.limits = { ...options.limits, tier: "economy", maxTotalTokens: 20_000 };
+		const first = await startBudgetGateway(options);
+		try {
+			expect(await (await request(first.url)).text()).toContain("[DONE]");
+			const before = first.status();
+			first.changeTier!("premium");
+			expect(first.status()).toMatchObject({
+				actualTotalTokens: before.actualTotalTokens, actualCostUsd: before.actualCostUsd,
+				requestsStarted: before.requestsStarted,
+				limits: { tier: "premium", maxTotalTokens: 30_000, maxRequests: 2, maxTotalCostUsd: 0.03 },
+			});
+			expect(first.deadlineAt).toBe(options.persistence!.deadlineAt);
+		} finally { await first.close(); }
+		expect((await launch(options, true)).error).toBe("GATEWAY_BUDGET_POLICY_MISMATCH");
+		const next = await launch({ ...options, limits: { ...options.limits, tier: "premium", maxTotalTokens: 30_000 } }, true);
+		expect(next.deadlineAt).toBe(options.persistence!.deadlineAt);
+		expect(next.status).toMatchObject({
+			actualTotalTokens: 120, requestsStarted: 1, actualCostUsd: 0.000054, limits: { tier: "premium" },
+		});
+		expect(await (await request(next.url!)).text()).toContain("[DONE]");
+		expect(await (await request(next.url!)).json()).toEqual({ error: "GATEWAY_REQUEST_LIMIT" });
+	} finally { await close(stub.server); }
+}, 25_000);
+
 it("refunds only a durable reservation that never crossed the dispatch boundary", async () => {
 	const options = fixture("http://127.0.0.1:32111");
 	const first = await launch(options);
@@ -144,10 +174,20 @@ it("refuses a missing, altered, expired or corrupted run on restart", async () =
 	const first = await launch(options);
 	expect(first.url).toBeDefined();
 	await terminate(first.child);
+	const reserved = await launch(options, true, true);
+	expect(reserved.stage).toBe("prepared");
+	await terminate(reserved.child);
 	expect((await launch({ ...options, limits: { ...options.limits, maxRequests: 3 } }, true)).error).toBe("GATEWAY_BUDGET_POLICY_MISMATCH");
 	await new Promise((resolve) => setTimeout(resolve, Math.max(0, options.persistence!.deadlineAt! - Date.now()) + 20));
 	expect((await launch(options, true)).error).toBe("GATEWAY_RUN_TIMEOUT");
 	const db = new DatabaseSync(options.persistence!.databasePath);
+	const row = db.prepare("SELECT body FROM gateway_budget_runs").get() as { body: string };
+	const stored = JSON.parse(row.body);
+	expect(stored.resumeDeniedAt).toBeGreaterThanOrEqual(stored.deadlineAt);
+	expect(stored.status).toMatchObject({ state: "failed_closed", lastError: "GATEWAY_RUN_TIMEOUT",
+		requestsStarted: 0, requestAttempts: 1, reservedTokens: 0, reservedCostUsd: 0 });
+	expect((await launch(options, true)).error).toBe("GATEWAY_RUN_TIMEOUT");
+	expect(db.prepare("SELECT body FROM gateway_budget_runs").get()?.body).toBe(row.body);
 	db.exec("UPDATE gateway_budget_runs SET body='modified'");
 	db.close();
 	expect((await launch(options, true)).error).toBe("GATEWAY_BUDGET_CORRUPT");

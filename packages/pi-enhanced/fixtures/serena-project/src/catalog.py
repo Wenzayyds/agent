@@ -7,4 +7,3 @@ class SymbolTarget:
 
 def build_target() -> SymbolTarget:
     return SymbolTarget()
-

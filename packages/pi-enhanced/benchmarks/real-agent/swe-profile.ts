@@ -144,6 +144,7 @@ export const SWE_FLASH_OFF_FOUR_CONFIGURATION = Object.freeze({
 	limits: { ...SWE_FLASH_OFF_CONFIGURATION.limits, maxRuns: flashOffFourInstances.length, maxBatchCostUsd: 0.32 },
 	instances: flashOffFourInstances,
 	compactGrep: true,
+	readResultMaxBytes: 4 * 1024,
 });
 
 const frozenProfiles = frozenCases.map((row) => {

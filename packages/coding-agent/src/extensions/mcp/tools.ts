@@ -16,7 +16,10 @@ import type { ImageContent, JsonValue, TextContent } from "@earendil-works/pi-ai
 import {
 	type CallToolResult,
 	type ContentBlock,
+	JSON_RPC_ERROR_CODES,
+	McpAbortError,
 	McpConnectionClosedError,
+	McpError,
 	type McpRequestOptions,
 	McpTimeoutError,
 	type Tool as McpTool,
@@ -59,7 +62,8 @@ export { READ_MCP_RESOURCE_TOOL };
 export interface McpToolDetails {
 	server: string;
 	tool: string;
-	code?: "timeout" | "connection_closed";
+	connectionDiagnostic?: "invalid_protocol_frame";
+	code?: "cancelled" | "invalid_params" | "timeout" | "connection_closed" | "server_error" | "protocol_error";
 	/** Temp file with the full text output, when the model-facing text was truncated. */
 	fullOutputPath?: string;
 }
@@ -282,7 +286,12 @@ export async function convertMcpResult(
 	const { _meta: _ignored, ...scriptResult } = result;
 	return {
 		content,
-		details: { server, tool, ...(fullOutputPath ? { fullOutputPath } : {}) },
+		details: {
+			server,
+			tool,
+			...(result.isError ? { code: "server_error" as const } : {}),
+			...(fullOutputPath ? { fullOutputPath } : {}),
+		},
 		structuredContent: scriptResult as unknown as JsonValue,
 		...(result.isError ? { isError: true } : {}),
 	};
@@ -351,11 +360,29 @@ export function createMcpToolDefinition(options: {
 					},
 				});
 			} catch (error) {
-				if (!(error instanceof McpTimeoutError || error instanceof McpConnectionClosedError)) throw error;
+				let code: McpToolDetails["code"];
+				if (error instanceof McpTimeoutError) code = "timeout";
+				else if (error instanceof McpConnectionClosedError) code = "connection_closed";
+				else if (
+					error instanceof McpError &&
+					(error.code === JSON_RPC_ERROR_CODES.invalidRequest || error.code === JSON_RPC_ERROR_CODES.parseError)
+				)
+					code = "protocol_error";
+				else if (error instanceof McpAbortError) code = "cancelled";
+				else if (error instanceof McpError)
+					code = error.code === JSON_RPC_ERROR_CODES.invalidParams ? "invalid_params" : "server_error";
+				else throw error;
 				return {
 					isError: true,
 					content: [{ type: "text", text: error.message }],
-					details: { server, tool: tool.name, code: error instanceof McpTimeoutError ? "timeout" : "connection_closed" },
+					details: {
+						server,
+						tool: tool.name,
+						code,
+						...(error instanceof McpTimeoutError && error.invalidFrameObserved
+							? { connectionDiagnostic: "invalid_protocol_frame" as const }
+							: {}),
+					},
 				};
 			}
 			return convertMcpResult(server, tool.name, result, { readableResources: options.readableResources?.() });

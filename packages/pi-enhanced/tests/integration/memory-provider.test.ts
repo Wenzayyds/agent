@@ -75,7 +75,7 @@ describe("P2-2 LocalMemoryProvider", () => {
 		expect(readSearchState(database)).toBe("fts-ready");
 		expect(
 			(database.prepare("SELECT group_concat(version) AS versions FROM schema_migrations ORDER BY version").get() as { versions: string }).versions,
-		).toBe("1,2");
+		).toBe("1,2,3");
 		database.close();
 	});
 

@@ -1,8 +1,19 @@
 import { createHash } from "node:crypto";
 import type { MemoryIntelligenceConfig } from "./config.ts";
-import type { MemoryIntelligenceStatus, MemoryRecord, MemorySearchResult, ScopedSearchQuery } from "./contracts.ts";
+import {
+	type MemoryIntelligenceStatus,
+	type MemoryRecord,
+	type MemorySearchResult,
+	matchesMemoryQuery,
+	memoryTypeOf,
+	type ScopedSearchQuery,
+	sameMemoryRevision,
+} from "./contracts.ts";
+import { E5EmbeddingProvider, type EmbeddingProvider } from "./embedding-provider.ts";
 import { type MemoryWorkerClientLike, MemoryWorkerError, PythonMemoryWorkerClient } from "./python-worker-client.ts";
+import { type MemoryVectorIndex, QdrantVectorIndex, VECTOR_MEMORY_TYPES } from "./qdrant-vector-index.ts";
 import type { MemoryService } from "./service.ts";
+import { MemoryVectorSync, matchesIndexedRevision, vectorErrorCode } from "./vector-sync.ts";
 
 const RRF_CONSTANT = 60;
 
@@ -17,6 +28,8 @@ export interface SemanticSearchAdapterOptions {
 	service: MemoryService;
 	config: MemoryIntelligenceConfig;
 	workerFactory?: () => MemoryWorkerClientLike;
+	embedding?: EmbeddingProvider;
+	vectorIndex?: MemoryVectorIndex;
 }
 
 export class SemanticSearchAdapter {
@@ -25,6 +38,8 @@ export class SemanticSearchAdapter {
 	private readonly workerFactory: () => MemoryWorkerClientLike;
 	private worker?: MemoryWorkerClientLike;
 	private snapshotFingerprint?: string;
+	private readonly vectorSync?: MemoryVectorSync;
+	private legacySearch: Promise<unknown> = Promise.resolve();
 	private closed = false;
 	private statusValue: MemoryIntelligenceStatus;
 
@@ -39,11 +54,30 @@ export class SemanticSearchAdapter {
 					requestTimeoutMs: this.config.requestTimeoutMs,
 				}));
 		const disabled = !this.config.enabled || this.config.mode === "lexical";
+		if (!disabled && (this.config.backend === "e5-qdrant" || options.vectorIndex)) {
+			const embedding = options.embedding ?? new E5EmbeddingProvider(() => this.worker ?? this.createWorker());
+			const index =
+				options.vectorIndex ??
+				new QdrantVectorIndex({
+					model: embedding.model,
+					endpoint: this.config.qdrantEndpoint,
+					timeoutMs: this.config.requestTimeoutMs,
+				});
+			this.vectorSync = new MemoryVectorSync(this.service, index, embedding);
+			this.vectorSync.start();
+		}
 		this.statusValue = {
 			state: disabled ? "disabled" : "unavailable",
 			configuredMode: this.config.mode,
 			activeMode: "lexical",
-			indexSize: 0,
+			indexSize: this.vectorSync ? undefined : 0,
+			...(this.vectorSync
+				? {
+						modelId: this.vectorSync.model.id,
+						modelRevision: this.vectorSync.model.revision,
+						vectorDimensions: this.vectorSync.model.dimensions,
+					}
+				: {}),
 			reranker: this.config.rerankerEnabled ? "unavailable" : "disabled",
 		};
 	}
@@ -56,43 +90,103 @@ export class SemanticSearchAdapter {
 		const requestedLimit = Math.min(query.limit ?? 20, 50);
 		const lexicalLimit =
 			this.config.mode === "hybrid" ? Math.max(requestedLimit, this.config.semanticCandidates) : requestedLimit;
-		const lexical = await this.service.search({ ...query, limit: lexicalLimit, statuses: ["verified"] });
-		if (!this.config.enabled || this.config.mode === "lexical") {
-			return { records: lexical.slice(0, requestedLimit), mode: "lexical" };
+		const lexical = await this.service.search({
+			...query,
+			limit: lexicalLimit,
+			statuses: ["verified"],
+			lifecycles: ["active"],
+		});
+		const types = VECTOR_MEMORY_TYPES.filter((type) => !query.types || query.types.includes(type));
+		if (
+			!this.config.enabled ||
+			this.config.mode === "lexical" ||
+			!types.length ||
+			query.preferenceKey ||
+			!query.text.trim()
+		) {
+			return { records: await this.recheck(lexical, query, requestedLimit), mode: "lexical" };
 		}
 		try {
-			const semantic = await this.semanticSearch(query, Math.max(requestedLimit, this.config.semanticCandidates));
+			const topK = Math.max(requestedLimit, this.config.semanticCandidates);
+			let semantic: MemoryRecord[];
+			if (this.vectorSync) {
+				const candidates = await this.vectorSync.search(query, types, topK);
+				const records = await Promise.all(
+					candidates.map(async (candidate) => {
+						const row = await this.service.getVisible(candidate.memoryId, query.visibility);
+						return row && matchesIndexedRevision(row, candidate) && matchesMemoryQuery(row, query) ? row : null;
+					}),
+				);
+				semantic = records.filter((row) => row !== null);
+				if (!semantic.length && lexical.length && this.service.vectorOutbox.stats().failed)
+					throw new MemoryWorkerError("vector-sync-pending", "Vector sync is awaiting retry");
+			} else {
+				const run = this.legacySearch.then(() => this.semanticSearch(query, topK));
+				this.legacySearch = run.catch(() => undefined);
+				semantic = await run;
+			}
+			const routed = lexical.filter((row) => !VECTOR_MEMORY_TYPES.some((type) => type === memoryTypeOf(row)));
 			if (this.config.mode === "semantic") {
 				this.markReady("semantic");
-				return { records: semantic.slice(0, requestedLimit), mode: "semantic" };
+				return { records: await this.recheck([...routed, ...semantic], query, requestedLimit), mode: "semantic" };
 			}
 			this.markReady("hybrid");
 			return {
-				records: reciprocalRankFusion(lexical, semantic).slice(0, requestedLimit),
+				records: await this.recheck(reciprocalRankFusion(lexical, semantic), query, requestedLimit),
 				mode: "hybrid",
 			};
 		} catch (error) {
-			const code = classifyError(error);
-			await this.discardWorker();
+			const code = this.vectorSync ? vectorErrorCode(error) : classifyError(error);
+			if (!this.vectorSync || (error instanceof MemoryWorkerError && error.code !== "model-not-installed"))
+				await this.discardWorker();
 			this.statusValue = {
 				...this.statusValue,
 				state: "degraded",
 				activeMode: "lexical",
 				lastErrorCode: code,
 			};
-			return { records: lexical.slice(0, requestedLimit), mode: "lexical", fallbackReason: code };
+			return { records: await this.recheck(lexical, query, requestedLimit), mode: "lexical", fallbackReason: code };
 		}
 	}
 
 	async close(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
+		await this.vectorSync?.close();
+		await this.legacySearch;
 		await this.discardWorker();
+	}
+
+	async reconcileIndex() {
+		return this.vectorSync?.reconcileNow();
+	}
+
+	async diagnoseIndex(): Promise<Awaited<ReturnType<MemoryVectorSync["diagnose"]>> | undefined> {
+		return this.vectorSync?.diagnose();
+	}
+
+	private async recheck(
+		records: readonly MemoryRecord[],
+		query: ScopedSearchQuery,
+		limit: number,
+	): Promise<MemoryRecord[]> {
+		const seen = new Set<string>();
+		const result: MemoryRecord[] = [];
+		for (const observed of orderMemoryResults(records, query.order)) {
+			if (seen.has(observed.id)) continue;
+			const row = await this.service.getVisible(observed.id, query.visibility);
+			if (row && sameMemoryRevision(observed, row) && matchesMemoryQuery(row, query)) {
+				result.push(row);
+				seen.add(row.id);
+			}
+			if (result.length === limit) break;
+		}
+		return result;
 	}
 
 	private async semanticSearch(query: ScopedSearchQuery, topK: number): Promise<MemoryRecord[]> {
 		if (this.closed) throw new Error("Memory intelligence adapter is closed");
-		const snapshot = await this.service.listVerifiedSnapshot(this.config.maximumSnapshotRecords);
+		const snapshot = await this.service.listVerifiedSnapshot(this.config.maximumSnapshotRecords, query);
 		if (snapshot.truncated)
 			throw new MemoryWorkerError("snapshot-too-large", "Verified memory snapshot is too large");
 		const fingerprint = createSnapshotFingerprint(snapshot.records);
@@ -121,7 +215,7 @@ export class SemanticSearchAdapter {
 		const records: MemoryRecord[] = [];
 		const now = Date.now();
 		for (const candidate of candidates) {
-			const record = await this.service.getVerified(candidate.memoryId);
+			const record = await this.service.getVisible(candidate.memoryId, query.visibility);
 			if (
 				!record ||
 				record.projectId !== this.service.scope.projectId ||
@@ -132,8 +226,7 @@ export class SemanticSearchAdapter {
 				continue;
 			if (record.contentRevision !== candidate.contentRevision || record.contentHash !== candidate.contentHash)
 				continue;
-			if (query.kinds && !query.kinds.includes(record.kind)) continue;
-			if (query.sourceTypes && !record.sources.some((source) => query.sourceTypes?.includes(source.type))) continue;
+			if (!matchesMemoryQuery(record, query)) continue;
 			records.push(record);
 		}
 		return records;
@@ -199,7 +292,10 @@ function parseCandidates(value: unknown): VectorCandidate[] {
 	});
 }
 
-function reciprocalRankFusion(lexical: readonly MemoryRecord[], semantic: readonly MemoryRecord[]): MemoryRecord[] {
+export function reciprocalRankFusion(
+	lexical: readonly MemoryRecord[],
+	semantic: readonly MemoryRecord[],
+): MemoryRecord[] {
 	const records = new Map<string, MemoryRecord>();
 	const scores = new Map<string, number>();
 	for (const ranking of [lexical, semantic]) {
@@ -211,6 +307,31 @@ function reciprocalRankFusion(lexical: readonly MemoryRecord[], semantic: readon
 	return [...records.values()].sort((left, right) => {
 		const scoreDifference = (scores.get(right.id) ?? 0) - (scores.get(left.id) ?? 0);
 		return scoreDifference !== 0 ? scoreDifference : left.id.localeCompare(right.id);
+	});
+}
+
+function orderMemoryResults(
+	records: readonly MemoryRecord[],
+	order: ScopedSearchQuery["order"],
+): readonly MemoryRecord[] {
+	if (order === "priority")
+		return [...records].sort(
+			(left, right) =>
+				right.importance - left.importance ||
+				(right.lastUsedAt ?? right.updatedAt) - (left.lastUsedAt ?? left.updatedAt) ||
+				left.id.localeCompare(right.id),
+		);
+	if (order !== "recent" && order !== "successful") return records;
+	return [...records].sort((left, right) => {
+		const outcome =
+			order === "successful"
+				? Number(right.data?.outcome === "success") - Number(left.data?.outcome === "success")
+				: 0;
+		return (
+			outcome ||
+			(right.data?.occurredAt ?? right.createdAt) - (left.data?.occurredAt ?? left.createdAt) ||
+			left.id.localeCompare(right.id)
+		);
 	});
 }
 

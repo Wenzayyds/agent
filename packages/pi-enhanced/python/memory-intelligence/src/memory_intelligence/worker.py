@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
+from .e5_embedder import E5Embedder
 from .embedder import EmbeddingUnavailable, MODEL_ID
 from .protocol import ProtocolError, Request, error_frame, parse_request, success_frame
 from .vector_index import VectorIndex
 
 
-def handle_request(index: VectorIndex, request: Request) -> tuple[dict[str, Any], bool]:
+def handle_request(index: VectorIndex, request: Request, e5: E5Embedder | None = None) -> tuple[dict[str, Any], bool]:
     payload = request.payload
     operation = request.operation
     if operation == "health":
         index.embedder.ensure_available()
         return {"status": "ready", "modelId": MODEL_ID, **index.status()}, False
+    if operation == "encode_e5":
+        if e5 is None:
+            raise EmbeddingUnavailable("E5 is unavailable")
+        return {"model": e5.identity(), "vectors": e5.encode(payload.get("texts"), payload.get("purpose"))}, False
     if operation == "sync_snapshot":
         return index.sync_snapshot(required_string(payload, "projectId"), payload.get("records")), False
     if operation == "upsert_vectors":
@@ -41,12 +47,13 @@ def required_string(payload: dict[str, Any], key: str) -> str:
 
 def main() -> int:
     index = VectorIndex()
+    e5 = E5Embedder(os.environ.get("PI_ENHANCED_MEMORY_MODEL_CACHE"))
     for raw in sys.stdin.buffer:
         request_id = "invalid"
         try:
             request = parse_request(raw)
             request_id = request.request_id
-            result, should_stop = handle_request(index, request)
+            result, should_stop = handle_request(index, request, e5)
             frame = success_frame(request_id, result)
         except ProtocolError as error:
             frame = error_frame(request_id, error.code, str(error))

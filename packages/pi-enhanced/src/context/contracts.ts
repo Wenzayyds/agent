@@ -14,6 +14,7 @@ export interface ContextToolOutputConfig {
 	enabled: boolean;
 	maximumTextCharacters: number;
 	offload?: boolean;
+	deduplicateReads?: boolean;
 }
 
 export interface ContextMemoryInjectionConfig {

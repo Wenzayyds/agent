@@ -145,6 +145,14 @@ export function createCustomMessage(
  * - Compaction's generateSummary (for summarization)
  * - Custom extensions and tools
  */
+const requestSourceMessages = new WeakMap<Message, AgentMessage>();
+
+export function withRequestSourceMessages(messages: Message[]): AgentMessage[] {
+	return messages.some((message) => requestSourceMessages.has(message))
+		? messages.map((message) => requestSourceMessages.get(message) ?? message)
+		: messages;
+}
+
 export function convertToLlm(messages: AgentMessage[]): Message[] {
 	return messages
 		.map((m): Message | undefined => {
@@ -161,11 +169,9 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					};
 				case "custom": {
 					const content = typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
-					return {
-						role: "user",
-						content,
-						timestamp: m.timestamp,
-					};
+					const converted: Message = { role: "user", content, timestamp: m.timestamp };
+					requestSourceMessages.set(converted, m);
+					return converted;
 				}
 				case "branchSummary":
 					return {

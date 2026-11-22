@@ -116,7 +116,7 @@ describe("P2-8 TypeScript memory intelligence authority", () => {
 		const adapter = new SemanticSearchAdapter({ service, config: config("semantic"), workerFactory: () => worker });
 		const result = await adapter.search({ text: "operator authorization", kinds: ["decision"] });
 		expect(result.records.map((record) => record.id)).toEqual([valid.id]);
-		expect(worker.snapshots[0]).toHaveLength(2);
+		expect(worker.snapshots[0]).toHaveLength(1);
 		expect(adapter.status).toMatchObject({ state: "ready", activeMode: "semantic", modelId: "test-vector-v1" });
 		await adapter.close();
 	});

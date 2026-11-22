@@ -1,3 +1,29 @@
+export const MEMORY_TYPES = ["working", "semantic", "episodic", "procedural", "preference"] as const;
+export type MemoryType = (typeof MEMORY_TYPES)[number];
+
+export type MemoryScope = { kind: "project" } | { kind: "session" | "task"; id: string };
+export interface MemoryVisibility {
+	sessionId?: string;
+	taskId?: string;
+	conditions?: readonly string[];
+	/** Branch entry recorded by the host when binding the active task. */
+	taskBranchId?: string | null;
+}
+
+export const MEMORY_OUTCOMES = ["success", "failure", "partial"] as const;
+export type MemoryOutcome = (typeof MEMORY_OUTCOMES)[number];
+
+export interface MemoryData {
+	value?: string | number | boolean;
+	taskId?: string;
+	conditions?: readonly string[];
+	steps?: readonly string[];
+	prerequisites?: readonly string[];
+	outcome?: MemoryOutcome;
+	occurredAt?: number;
+	causes?: readonly string[];
+}
+
 export const MEMORY_KINDS = ["fact", "decision", "experience"] as const;
 export const MEMORY_STATUSES = ["candidate", "verified", "stale", "rejected"] as const;
 export const MEMORY_SOURCE_TYPES = ["user", "file", "session", "test", "git"] as const;
@@ -45,6 +71,11 @@ export interface MemorySource {
 	observedAt: number;
 }
 
+export interface MemoryChange {
+	source: NewMemoryInput["source"];
+	reason: string;
+}
+
 export interface MemoryVerification {
 	id: string;
 	type: MemoryVerificationType;
@@ -56,6 +87,9 @@ export interface MemoryVerification {
 
 export interface MemoryRecord {
 	id: string;
+	type?: MemoryType;
+	scope?: MemoryScope | null;
+	data?: MemoryData;
 	projectId: string;
 	kind: MemoryKind;
 	content: string;
@@ -90,16 +124,106 @@ export function memoryTaskId(sources: readonly Pick<MemorySource, "ref">[]): str
 	return taskIds.size === 1 ? taskIds.values().next().value : undefined;
 }
 
+export function inferMemoryType(kind: MemoryKind, category: MemoryCategory, taskScoped = false): MemoryType {
+	if (category === "temporary") return "working";
+	if (category === "preference") return "preference";
+	if (taskScoped) return "episodic";
+	if (category === "procedure") return "procedural";
+	return kind === "experience" ? "episodic" : "semantic";
+}
+
+export function inferMemoryScope(
+	sources: readonly Pick<MemorySource, "ref">[],
+	category: MemoryCategory,
+): MemoryScope | undefined {
+	const taskId = memoryTaskId(sources);
+	if (taskId) return { kind: "task", id: taskId };
+	if (category === "temporary" || sources.some(({ ref }) => TASK_EXPERIENCE_SOURCE.test(ref))) return undefined;
+	return { kind: "project" };
+}
+
+export function recordScope(record: MemoryRecord): MemoryScope | undefined {
+	return record.scope === undefined ? inferMemoryScope(record.sources, record.category) : (record.scope ?? undefined);
+}
+
+export function restrictMemoryVisibility(actual: MemoryVisibility, requested?: MemoryVisibility): MemoryVisibility {
+	if (!requested) return actual;
+	return {
+		sessionId: requested.sessionId === actual.sessionId ? actual.sessionId : undefined,
+		taskId: requested.taskId === actual.taskId ? actual.taskId : undefined,
+		conditions: (actual.conditions ?? []).filter(
+			(condition) => !requested.conditions || requested.conditions.includes(condition),
+		),
+	};
+}
+
+export function matchesMemoryScope(record: MemoryRecord, context: MemoryVisibility = {}): boolean {
+	const scope = recordScope(record);
+	if (!scope) return false;
+	if (scope.kind === "project") return true;
+	if (record.type === "working" && record.data?.taskId && record.data.taskId !== context.taskId) return false;
+	return scope.id === (scope.kind === "task" ? context.taskId : context.sessionId);
+}
+
+export function memoryTypeOf(record: MemoryRecord): MemoryType {
+	return record.type ?? inferMemoryType(record.kind, record.category, recordScope(record)?.kind === "task");
+}
+
+export function matchesMemoryQuery(record: MemoryRecord, query: ScopedSearchQuery): boolean {
+	const type = memoryTypeOf(record);
+	if (query.types && !query.types.includes(type)) return false;
+	if (query.kinds?.length && !query.kinds.includes(record.kind)) return false;
+	if (query.categories?.length && !query.categories.includes(record.category)) return false;
+	if (query.lifecycles?.length && !query.lifecycles.includes(record.lifecycle)) return false;
+	if (query.sourceTypes?.length && !record.sources.some((source) => query.sourceTypes?.includes(source.type)))
+		return false;
+	if (query.preferenceKey !== undefined) return type === "preference" && record.subjectKey === query.preferenceKey;
+	if (query.episodeOutcome !== undefined && (type !== "episodic" || record.data?.outcome !== query.episodeOutcome))
+		return false;
+	const occurredAt = record.data?.occurredAt ?? record.createdAt;
+	if (
+		(query.occurredAfter !== undefined && (type !== "episodic" || occurredAt < query.occurredAfter)) ||
+		(query.occurredBefore !== undefined && (type !== "episodic" || occurredAt >= query.occurredBefore))
+	)
+		return false;
+	if (type === "preference" && record.data?.value !== undefined && record.subjectKey !== query.text) return false;
+	return (
+		type !== "procedural" || !record.data?.conditions?.some((condition) => !query.conditions?.includes(condition))
+	);
+}
+
+export function isVisibleVerifiedMemory(record: MemoryRecord, context?: MemoryVisibility, now = Date.now()): boolean {
+	return (
+		matchesMemoryScope(record, context) &&
+		record.status === "verified" &&
+		record.lifecycle === "active" &&
+		(record.validFrom === undefined || record.validFrom <= now) &&
+		(record.validUntil === undefined || record.validUntil > now)
+	);
+}
+
+export function sameMemoryRevision(before: MemoryRecord, current: MemoryRecord): boolean {
+	return (
+		before.id === current.id &&
+		before.projectId === current.projectId &&
+		before.revision === current.revision &&
+		before.contentRevision === current.contentRevision &&
+		before.contentHash === current.contentHash
+	);
+}
+
 export function classifyMemory(record: MemoryRecord): "profile" | "preference" | "long-term" | "task" {
-	if (record.sources.some(({ ref }) => TASK_EXPERIENCE_SOURCE.test(ref)) || record.category === "temporary")
-		return "task";
-	if (record.category === "preference") return "preference";
+	if (recordScope(record)?.kind !== "project" || record.type === "working") return "task";
+	if (record.type === "preference" || record.category === "preference") return "preference";
 	if (record.subjectKey?.startsWith("profile:") && record.sources.some(({ type }) => type === "user"))
 		return "profile";
 	return "long-term";
 }
 
 export interface NewMemoryInput {
+	type?: MemoryType;
+	scope?: MemoryScope;
+	data?: MemoryData;
 	kind: MemoryKind;
 	content: string;
 	source: {
@@ -119,6 +243,14 @@ export interface NewMemoryInput {
 
 export interface ScopedSearchQuery {
 	text: string;
+	types?: MemoryType[];
+	visibility?: MemoryVisibility;
+	preferenceKey?: string;
+	conditions?: readonly string[];
+	order?: "relevance" | "recent" | "successful" | "priority";
+	episodeOutcome?: MemoryOutcome;
+	occurredAfter?: number;
+	occurredBefore?: number;
 	limit?: number;
 	kinds?: MemoryKind[];
 	statuses?: MemoryStatus[];
@@ -152,9 +284,18 @@ export interface MaintenanceProposal {
 
 export interface MemoryDoctorReport {
 	recordCount: number;
+	totalRecords?: number;
 	activeCount: number;
 	archivedCount: number;
 	expiredActiveIds: readonly string[];
+	invalidEvidenceIds?: readonly string[];
+	vectorSync?: { pending: number; failed: number };
+	vectorIndex?: {
+		orphanIds: readonly string[];
+		staleIds: readonly string[];
+		missingIds: readonly string[];
+		truncated: boolean;
+	};
 	exactDuplicateGroups: readonly (readonly string[])[];
 	nearDuplicateGroups: readonly (readonly string[])[];
 	conflictGroups: readonly (readonly string[])[];
@@ -187,15 +328,12 @@ export interface CoreMemoryWriteResult {
 	visibilityWarning?: string;
 }
 
-export interface ReadonlyMemoryQuery {
-	text: string;
-	limit?: number;
-	kinds?: MemoryKind[];
-}
+export type ReadonlyMemoryQuery = Omit<ScopedSearchQuery, "statuses" | "lifecycles">;
 
 export interface ScopedMemoryReader {
+	visibility?(): Promise<MemoryVisibility>;
 	search(query: ReadonlyMemoryQuery): Promise<readonly MemoryRecord[]>;
-	get(id: string): Promise<MemoryRecord | null>;
+	get(id: string, visibility?: MemoryVisibility): Promise<MemoryRecord | null>;
 	getCore(name: CoreMemoryName): Promise<CoreMemoryDocument | null>;
 }
 
@@ -211,7 +349,9 @@ export interface MemoryIntelligenceStatus {
 	configuredMode: "lexical" | "semantic" | "hybrid";
 	activeMode: "lexical" | "semantic" | "hybrid";
 	modelId?: string;
-	indexSize: number;
+	modelRevision?: string;
+	vectorDimensions?: number;
+	indexSize?: number;
 	reranker: "disabled" | "unavailable";
 	lastErrorCode?: string;
 }

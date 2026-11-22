@@ -45,6 +45,7 @@ export type RiskClass = (typeof RISK_CLASSES)[number];
 export type EvidenceClass = (typeof EVIDENCE_CLASSES)[number];
 
 export type StepValidation =
+	| { kind: "pytest"; target: string; expectedSha256: string }
 	| {
 			kind: "command_exit";
 			toolName: "bash" | "powershell";
@@ -88,6 +89,7 @@ export interface TaskStep {
 }
 
 export interface TaskEvidence {
+	pytest?: import("../sandbox/task-evidence.ts").PytestReceipt;
 	evidenceId: string;
 	taskId: string;
 	stepId: string;
@@ -224,4 +226,6 @@ export interface ScopedTaskSummary {
 export interface ScopedTaskReader {
 	get(taskId: string): Promise<ScopedTaskSummary | null>;
 	getActive(): Promise<ScopedTaskSummary | null>;
+	/** Current host binding and authoritative task state for the synchronous transport check. */
+	getActiveNow?(): ScopedTaskSummary | null;
 }

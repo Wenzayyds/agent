@@ -5,7 +5,7 @@
  * a summary of the branch being left so context isn't lost.
  */
 
-import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { RetryCallbacks, RetryPolicy } from "@earendil-works/pi-ai";
 import { contentText, normalizeContext } from "@earendil-works/pi-ai";
 import type { Model, SimpleStreamOptions, Usage } from "@earendil-works/pi-ai/compat";
@@ -75,6 +75,8 @@ export interface GenerateBranchSummaryOptions {
 	env?: Record<string, string>;
 	/** Abort signal for cancellation */
 	signal: AbortSignal;
+	/** Thinking level for reasoning-capable models */
+	thinkingLevel?: ThinkingLevel;
 	/** Optional custom instructions for summarization */
 	customInstructions?: string;
 	/** If true, customInstructions replaces the default prompt instead of being appended */
@@ -83,6 +85,8 @@ export interface GenerateBranchSummaryOptions {
 	reserveTokens?: number;
 	/** Optional session stream function. Used to preserve SDK request behavior without mutating agent state. */
 	streamFn?: StreamFn;
+	/** Project the raw transcript before serializing or deriving file references. */
+	projectMessages?: (messages: AgentMessage[]) => AgentMessage[];
 	/** Retry policy for transient summarization errors. Reuses coding-agent's `settings.retry`. */
 	retry?: RetryPolicy;
 	/** Optional callbacks for retry reporting (e.g. TUI retry indicators). */
@@ -300,10 +304,12 @@ export async function generateBranchSummary(
 		headers,
 		env,
 		signal,
+		thinkingLevel,
 		customInstructions,
 		replaceInstructions,
 		reserveTokens = 16384,
 		streamFn,
+		projectMessages,
 		retry,
 		callbacks,
 	} = options;
@@ -312,7 +318,12 @@ export async function generateBranchSummary(
 	const contextWindow = model.contextWindow || 128000;
 	const tokenBudget = contextWindow - reserveTokens;
 
-	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
+	const prepared = prepareBranchEntries(entries, tokenBudget);
+	const messages = projectMessages?.(prepared.messages) ?? prepared.messages;
+	const fileOps = messages === prepared.messages ? prepared.fileOps : createFileOps();
+	if (messages !== prepared.messages) {
+		for (const message of messages) extractFileOpsFromMessage(message, fileOps);
+	}
 
 	if (messages.length === 0) {
 		return { summary: "No content to summarize" };
@@ -348,6 +359,9 @@ export async function generateBranchSummary(
 	// so transient stream drops reuse the configured retry policy.
 	const context = normalizeContext({ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages });
 	const requestOptions: SimpleStreamOptions = { apiKey, headers, env, signal };
+	if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
+		requestOptions.reasoning = thinkingLevel;
+	}
 	const response = await completeSummarization(model, context, requestOptions, streamFn, retry, callbacks);
 
 	// Check if aborted or errored

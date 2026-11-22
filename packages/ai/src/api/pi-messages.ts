@@ -26,6 +26,7 @@ import type {
 } from "../types.ts";
 import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { guardedFetch } from "../utils/guarded-fetch.ts";
 import { headersToRecord, providerHeadersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
@@ -407,7 +408,7 @@ export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
 				payload = nextPayload;
 			}
 
-			const response = await (options?.fetch ?? globalThis.fetch)(url, {
+			const response = await (guardedFetch(options?.fetch, options?.beforeSend) ?? globalThis.fetch)(url, {
 				method: "POST",
 				headers: providerHeadersToRecord(
 					getIdentityHeaders(model, options?.identity),

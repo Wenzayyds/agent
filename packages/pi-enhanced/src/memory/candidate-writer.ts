@@ -25,7 +25,12 @@ interface CandidateWriteResponse {
 
 export function registerMemoryCandidateWriterBroker(
 	events: EventBus,
-	binding: { service: MemoryService; scope: ProjectScope; sessionId: string },
+	binding: {
+		service: MemoryService;
+		scope: ProjectScope;
+		sessionId: string;
+		isCompletedTask: (taskId: string) => Promise<boolean>;
+	},
 ): () => void {
 	return events.on(MEMORY_CANDIDATE_WRITE_REQUEST, async (data) => {
 		const request = parseRequest(data);
@@ -40,8 +45,14 @@ export function registerMemoryCandidateWriterBroker(
 		}
 		const contentDigest = createHash("sha256").update(request.content).digest("hex");
 		try {
+			if (!(await binding.isCompletedTask(request.taskId))) {
+				respond(events, request, { error: "MEMORY_WRITE_REJECTED" });
+				return;
+			}
 			const record = await binding.service.saveCandidate({
 				kind: "experience",
+				type: "episodic",
+				scope: { kind: "task", id: request.taskId },
 				content: request.content,
 				source: { type: "user", ref: `task:${request.taskId}:experience:${contentDigest}` },
 				metadata: { category: "procedure", tags: ["task-experience"] },
@@ -83,7 +94,14 @@ export function requestMemoryCandidateWrite(
 			const response = parseResponse(data);
 			if (!response || response.requestId !== request.requestId || response.sessionId !== request.sessionId) return;
 			if (response.result) finish(() => resolve(response.result!));
-			else finish(() => reject(unavailable()));
+			else
+				finish(() =>
+					reject(
+						response.error === "MEMORY_WRITE_REJECTED"
+							? new MemoryError("MEMORY_VALIDATION_ERROR", "The host rejected the task memory candidate")
+							: unavailable(),
+					),
+				);
 		});
 		const timer = setTimeout(() => finish(() => reject(unavailable())), timeoutMs);
 		events.emit(MEMORY_CANDIDATE_WRITE_REQUEST, request);

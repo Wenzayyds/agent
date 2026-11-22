@@ -4,9 +4,9 @@
 
 - `run-controlled.ts`：组织 OFF/V1/V2，按模式消费宿主授权，检查前一组清理和结算后再继续。
 - `run-real-agent.ts`：单组入口，负责参数、授权、准备、执行、收集及最终清理。
-- `swebench.ts`：公开实例加载、工作区准备、受限补丁导出和独立官方 Harness 调用。
+- `swebench.ts`：独立官方 Harness 的命令行入口，并保留已有评测接口的导出。
 
-三个入口保持原路径，命令行参数和结果格式保持不变。`npm run evaluate:swe --workspace=@wz-agent/pi-enhanced -- ...` 选择 SWE profile；仍须提供原实例、镜像、批次和输出参数。真实执行还须有当前 Commit 的 CI 证据和新的一次性宿主授权。
+三个入口保持原路径，沿用现有命令行参数和结果字段。`npm run evaluate:swe --workspace=@wz-agent/pi-enhanced -- ...` 选择 SWE profile；仍须提供原实例、镜像、批次和输出参数。真实执行还须有当前 Commit 的 CI 证据和新的一次性宿主授权。
 
 ## 五题 Flash OFF
 
@@ -33,6 +33,19 @@ node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/run-c
 
 本地验证可把 `PI_ENHANCED_SWE_LOCAL_MIRROR` 指向包含五个基线提交的 Astropy 镜像，然后运行 `swebench-stub.test.ts`。若设置 `PI_ENHANCED_SWE_FLASH_OFF_EVIDENCE` 为现有的证据目录，测试会保留批次与预测。每题结果位于 `<batchId>/<batchId>_off_<issue>/swebench/`，其中的 `predictions.jsonl` 和 `result.json` 可交给现有 `swebench.ts` 在独立目录判分。
 
+## 当前分层
+
+| 层 | 入口与职责 |
+| --- | --- |
+| 批次与单组入口 | `run-controlled.ts` 按组编排、预留批次预算并判断能否续跑。单组入口 `run-real-agent.ts` 负责准入和阶段协调。 |
+| SWE 配置与授权 | `swe-profile.ts` 统一选择模型、模式、预算和授权输入形式。`task-pair-authorization.ts` 校验配置指纹、CI 证据和一次性消费顺序。 |
+| Pi 扩展与输入准入 | `swe-tools.ts` 注册受限写入策略。`input-audit.ts` 记录提示词和工具摘要，`input-admission.ts` 在网关转发前校验首请求并记录准入结果。 |
+| 执行与回收 | `runner-preparation.ts` 准备输入和工作区。`runner-execution.ts` 启动 Pi 与网关，`runner-cleanup.ts` 分别尝试写入网关证据、关闭网关和回收容器。 |
+| SWE 工作区与补丁 | `swe-workspace.ts` 从固定公开提交准备工作区。`swe-patch.ts` 校验写入目标并导出预测补丁。两者共用 `swe-git.ts` 的受控 Git 调用。 |
+| 结果与独立评分 | `swe-results.ts` 收集运行结果、持久化的安全事件和预测补丁。`swe-evaluator.ts` 在独立目录调用官方 Harness 并记录评分状态。 |
+
+`safetyEvents` 来自停止扩展落盘的安全事件，用于解释拒绝和停止。`toolFailures` 记录实际收到的 Pi CLI 工具错误。即使 CLI 在停止时来不及输出事件，也能用安全事件和 Docker 审计分别核对拒绝原因和执行情况。
+
 ## 调用关系
 
 ```text
@@ -46,7 +59,7 @@ run-controlled（批次、每组预算、继续条件）
   → 下一组或停止
 
 合格 predictions.jsonl + result.json
-  → swebench 独立官方判分
+  → swebench 命令行入口 → swe-evaluator 独立官方判分
 ```
 
 `swe-profile.ts` 独立声明当前三模式、预算和配置指纹，不继承旧 Task Pair/Batch L 的预算。`evaluation-identity.ts` 只负责已有 SHA-256 编码规则。配置序列化顺序保持不变，迁移前后指纹一致。
@@ -54,6 +67,41 @@ run-controlled（批次、每组预算、继续条件）
 `task-pair-authorization.ts` 保留宿主授权的 Commit、CI、配置、输入、输出身份和有效期绑定；`controlled-policy.ts` 保留严格停止规则和 SWE 的独立继续判定。`budget-gateway.ts` 负责转发前硬预留和 Usage 结算，不因归档实验而更改。
 
 ## 旧实验与仍在使用的代码
+
+### E1–E5 本地开发任务
+
+`agent-evaluation.ts` 在 I1–I4 候选源码上用同一个入口运行 8 道任务与 A/B/C/D 四组。需要离线构建产物、固定的本机 pytest 镜像。入口只连接本机 Stub，评测结果写入同一个 JSON。
+
+```powershell
+node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/agent-evaluation.ts .artifacts/agent-evaluation/results.json
+```
+
+可附加 `resume:D` 重放指定任务与组合。`fault:qdrant` 和 `fault:e5` 使用现有离线向量夹具执行在途故障测试，`fault:post-edit` 重放编辑后的 pytest 失败与任务恢复。故障样本与四组消融分开记录。任务工作区、独立判分目录、会话、SQLite 与 Gateway 账本逐次创建。评分测试及预置参考材料不会出现在 Agent 可读的源文件清单中。
+
+四组使用相同 Context、Task、系统提示模板与预算。Stub 依据实际收到的已授权线索选择预写编辑，结果用于验证链路和材料的可获得性。真实模型的开发质量与成本须另立实验并获得授权。
+
+获单轮付费授权后，入口可用 `deepseek` 模式执行同一 32 单元。它从已配置的 `DEEPSEEK_API_KEY` 读取凭据，也可用 `PI_EVALUATION_ENV_FILE` 指向本机 env 文件。只读取该凭据字段，真实输出存放在 `deepseek-flash.json`，保留原 Stub 的 `results.json`。真实模式独占创建结果文件，已有批次时直接拒绝运行。每个新单元占用 0.03 美元预算配额，整批上限 0.96 美元。
+
+```powershell
+node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/agent-evaluation.ts .artifacts/agent-evaluation/deepseek-flash.json deepseek
+```
+
+E6 离线验证共用同一个入口。完整矩阵使用 `e6`，项目边界与历史读取轨迹重放使用 `e6-scope`。两个模式均连接本机 Stub，写入同一个结果文件。
+
+```powershell
+node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/agent-evaluation.ts .artifacts/agent-evaluation/e6-results.json e6-scope
+node --experimental-strip-types packages/pi-enhanced/benchmarks/real-agent/agent-evaluation.ts .artifacts/agent-evaluation/e6-results.json e6
+```
+
+E9 模式 `e9` 复用同一套 32 单元，由子进程重新打开原 Task、Session 和持久预算账本。`e9-budget` 对照重放烟测的 B/D 工具轨迹，`e9-retry` 注入一次连接建立超时。三者使用本机 Stub 和同一个结果文件 `.artifacts/agent-evaluation/e6-2-e9/results.json`。请求观测记录工具声明及各消息角色的字节数。
+
+E12 沿用同一入口。`e12-baseline` 和 `e12` 使用相同的 32 个离线单元，分别关闭和启用预算感知投影。`e12-budget` 重放 E9 真实轨迹，`e12-context-probe` 验证重复检索，`e12-retry-edited` 验证编辑后遇到连接超时的重试。各模式写入 `.artifacts/agent-evaluation/e10-e12/results.json`。
+
+E12 在送入 Gateway 前，以同一预留规则做只读估算。投影保留工具调用关系，并将完全相同的旧只读结果缩短为引用。仅当完整请求超出 Token 或费用余量、最新的单独公开 pytest 通过且缩短后的请求可获准时，才发送无工具的文字总结请求。编辑和恢复前检查是否还有下一次模型请求的最低余量。编辑时若只剩一个槽会记录预警，并保留同批测试的机会。本地 pytest 仍可留下失败诊断。请求日志只记录各分项序列化字节数，输出预算沿用 Gateway 记录。最终由 Gateway 独立决定是否放行，独立判分仍在 Agent 工作区之外执行。
+
+单独获得授权后，先用 `deepseek-e12-pilot` 跑 `invoice:D` 和 `export-api:C`，批次上限 0.06 美元，独占创建 `.artifacts/agent-evaluation/e10-e12/deepseek-pilot.json`。完整模式 `deepseek-e12` 执行同一 32 单元并独占创建同目录下的 `deepseek-full.json`，批次上限 0.96 美元。两种模式的单元上限均为 8 请求、20,000 Token、180 秒和 0.03 美元。
+
+单独获得授权后，`deepseek-smoke` 可对 `clamp` 的 A/B/C/D 四个单元执行一轮，独占创建 `.artifacts/agent-evaluation/e6-2-e9/deepseek-smoke.json`，批次上限 0.12 美元。它沿用 8 请求、20,000 Token、180 秒及每单元 0.03 美元的硬上限。明确未连到上游的 DNS 错误和连接建立超时可由 Agent 重试一次。在发出重试前，原授权检查会再次执行。首次失败占用请求计数。
 
 独立 P5/消融/合成基准已移到 `../archive/`。`batch-l-*`、`controlled-cases.ts`、`offline-*` 等仍被旧协议复现和生产安全回归引用，因此保留在此处；它们不是可直接删除的死代码。SWE 的预算、模式和结果收集已独立，不再继续向 Batch L 配置堆叠逻辑。
 

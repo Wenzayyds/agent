@@ -75,21 +75,28 @@ afterEach(async () => {
 
 describe("Memory Governance schema and lifecycle", () => {
 	it("upgrades v1 data, supports an explicit v2 rollback, and upgrades again without losing records", async () => {
-		const { scope, provider, service } = createStore();
-		const original = await service.saveCandidate({ kind: "fact", content: "legacy record", source: { type: "test", ref: "legacy" } });
-		await service.close();
-		services.splice(services.indexOf(service), 1);
+		const root = mkdtempSync(join(tmpdir(), "pi-memory-v1-"));
+		roots.push(root);
+		const scope = createProjectScope({ cwd: root, agentDir: join(root, "agent") });
+		ensureProjectStorage(scope);
 		const database = new DatabaseSync(scope.databasePath, { enableForeignKeyConstraints: true });
+		runCoreMigrations(database, 2);
+		const original = { id: "legacy-id" };
+		database.prepare(`INSERT INTO memories (id, project_id, kind, content, normalized_content, status,
+			content_hash, created_at, updated_at) VALUES (?, ?, 'experience', 'legacy', 'legacy', 'candidate', 'old-hash', 1, 1)`)
+			.run(original.id, scope.projectId);
+		database.prepare("INSERT INTO memory_sources (memory_id, source_type, source_ref, observed_at) VALUES (?, 'user', 'task:old-task:experience:1', 1)")
+			.run(original.id);
 		rollbackMemoryGovernanceMigration(database);
 		expect((database.prepare("SELECT group_concat(version) AS versions FROM schema_migrations").get() as { versions: string }).versions).toBe("1");
 		expect((database.prepare("SELECT count(*) AS count FROM memories").get() as { count: number }).count).toBe(1);
 		runCoreMigrations(database);
-		expect((database.prepare("SELECT group_concat(version) AS versions FROM schema_migrations").get() as { versions: string }).versions).toBe("1,2");
+		expect((database.prepare("SELECT group_concat(version) AS versions FROM schema_migrations").get() as { versions: string }).versions).toBe("1,2,3");
 		database.close();
 		const reopenedProvider = new LocalMemoryProvider(scope);
 		const reopened = new MemoryService(scope, reopenedProvider);
 		services.push(reopened);
-		expect(await reopened.get(original.id)).toMatchObject({ category: "other", lifecycle: "active", useCount: 0 });
+		expect(await reopened.get(original.id)).toMatchObject({ category: "other", lifecycle: "active", useCount: 0, type: "episodic", scope: { kind: "task", id: "old-task" }, contentHash: "old-hash" });
 	});
 
 	it("keeps task duplicates within their source task and honors an explicit forget", async () => {
@@ -189,7 +196,10 @@ describe("Memory Governance schema and lifecycle", () => {
 			metadata: { category: "environment", tags: [], importance: 1, validUntil: Date.now() - 1 },
 			now: Date.now(),
 		});
-		await provider.setStatus({ id: candidate.id, status: "verified", expectedRevision: candidate.revision, now: Date.now() });
+		await provider.setStatus({
+			id: candidate.id, status: "verified", expectedRevision: candidate.revision, now: Date.now(),
+			verification: { id: randomUUID(), type: "test_passed", evidenceRef: "fixture", evidenceVersion: "v1", verifiedAt: Date.now() },
+		});
 		expect(await service.search({ text: "expired environment" })).toEqual([]);
 		expect((await service.list({ statuses: ["verified"] })).map(({ id }) => id)).toContain(candidate.id);
 		expect((await service.doctor(governance)).expiredActiveIds).toContain(candidate.id);

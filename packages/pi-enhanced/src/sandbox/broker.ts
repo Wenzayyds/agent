@@ -38,6 +38,7 @@ export interface SandboxAuditRecord {
 	image: string;
 	durationMs: number;
 	errorCode?: string;
+	writeDigest?: { path: string; content: string };
 }
 
 export interface SandboxContainerEvidence {
@@ -191,7 +192,7 @@ export class DockerSandboxBroker {
 		if (!/^[a-z_]{1,40}$/u.test(operation)) throw new Error("SANDBOX_OPERATION_INVALID");
 		this.journal?.begin({
 			runId: this.config.runId,
-			requestId: auditRequestId(requestId),
+			requestId: sha256(requestId),
 			toolName,
 			operation,
 			containerId,
@@ -227,6 +228,11 @@ export class DockerSandboxBroker {
 			toolName,
 			operation,
 			status: "ok",
+			...(operation === "write_file" && typeof args.path === "string" && typeof args.content === "string"
+				? {
+						writeDigest: { path: sha256(args.path), content: sha256(args.content) },
+					}
+				: {}),
 			containerId,
 			image: this.config.image,
 			durationMs: Number((performance.now() - started).toFixed(3)),
@@ -255,7 +261,7 @@ export class DockerSandboxBroker {
 		this.journal?.complete();
 	}
 	private record(value: SandboxAuditRecord): void {
-		this.journal?.end({ ...value, requestId: auditRequestId(value.requestId) });
+		this.journal?.end({ ...value, requestId: sha256(value.requestId) });
 		this.audit.push(value);
 	}
 
@@ -345,6 +351,6 @@ export class DockerSandboxBroker {
 	}
 }
 
-function auditRequestId(value: string): string {
+function sha256(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
 }

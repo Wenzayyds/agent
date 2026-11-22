@@ -8,6 +8,7 @@ export interface DurableBudgetOptions {
 	id: string;
 	mode: "create" | "resume";
 	deadlineAt?: number;
+	scope?: "session";
 }
 
 export interface PendingBudgetRequest {
@@ -18,7 +19,19 @@ export interface PendingBudgetRequest {
 	updatedAt: number;
 }
 
+/** Admission failed before any request or new reservation existed. */
+export class ExpiredBudgetResume extends Error {
+	readonly status: BudgetGatewayStatus;
+	readonly deadlineAt: number;
+	constructor(status: BudgetGatewayStatus, deadlineAt: number) {
+		super("GATEWAY_RUN_TIMEOUT");
+		this.status = status;
+		this.deadlineAt = deadlineAt;
+	}
+}
+
 interface RecordBody {
+	resumeDeniedAt?: number;
 	version: 1;
 	policy: string;
 	deadlineAt: number;
@@ -30,6 +43,28 @@ interface RecordBody {
 }
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+
+export function storedBudget(options: Pick<DurableBudgetOptions, "databasePath" | "id">): BudgetGatewayStatus | undefined {
+	const db = new DatabaseSync(options.databasePath, { readOnly: true, timeout: 1500 });
+	try {
+		if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='gateway_budget_runs'").get()) return;
+		return readRecord(db, options.id)?.status;
+	} finally {
+		db.close();
+	}
+}
+
+function readRecord(db: DatabaseSync, id: string): RecordBody | undefined {
+	const row = db.prepare("SELECT body, checksum FROM gateway_budget_runs WHERE id=?").get(id) as
+		{ body: string; checksum: string } | undefined;
+	if (!row) return;
+	if (hash(row.body) !== row.checksum) throw new Error("GATEWAY_BUDGET_CORRUPT");
+	let record: RecordBody;
+	try { record = JSON.parse(row.body); } catch { throw new Error("GATEWAY_BUDGET_CORRUPT"); }
+	if (record?.version !== 1) throw new Error("GATEWAY_BUDGET_VERSION");
+	validateRecord(record);
+	return record;
+}
 
 export class DurableBudget {
 	private readonly db: DatabaseSync;
@@ -48,7 +83,7 @@ export class DurableBudget {
 			this.db.exec("PRAGMA synchronous=FULL");
 			this.record = this.transaction(() => {
 				this.db.exec("CREATE TABLE IF NOT EXISTS gateway_budget_runs (id TEXT PRIMARY KEY, body TEXT NOT NULL, checksum TEXT NOT NULL)");
-				if (!this.db.prepare("SELECT 1 FROM tasks WHERE task_id=?").get(this.id))
+				if (options.scope !== "session" && !this.db.prepare("SELECT 1 FROM tasks WHERE task_id=?").get(this.id))
 					throw new Error("GATEWAY_BUDGET_TASK_NOT_FOUND");
 				const previous = this.read();
 				const now = Date.now();
@@ -66,7 +101,8 @@ export class DurableBudget {
 				if (previous.policy !== policy || (options.deadlineAt !== undefined && options.deadlineAt !== previous.deadlineAt))
 					throw new Error("GATEWAY_BUDGET_POLICY_MISMATCH");
 				if (previous.ownerPid !== null && alive(previous.ownerPid)) throw new Error("GATEWAY_BUDGET_IN_USE");
-				checkTime(previous, now);
+				if (now < previous.updatedAt) throw new Error("GATEWAY_BUDGET_CLOCK_REGRESSION");
+				if (previous.resumeDeniedAt !== undefined) return previous;
 				const status = previous.status;
 				if (previous.pending.some(({ phase }) => phase === "dispatched")) throw new Error("GATEWAY_BUDGET_UNCERTAIN_USAGE");
 				if (status.state === "failed_closed") throw new Error(status.lastError ?? "GATEWAY_FAILED_CLOSED");
@@ -79,12 +115,23 @@ export class DurableBudget {
 				}
 				status.reservedCostUsd = 0;
 				previous.pending = [];
+				if (now >= previous.deadlineAt) {
+					previous.resumeDeniedAt = now;
+					previous.updatedAt = now;
+					status.lastError = "GATEWAY_RUN_TIMEOUT";
+					status.state = "failed_closed";
+					previous.owner = null;
+					previous.ownerPid = null;
+					this.write(previous);
+					return previous;
+				}
 				previous.ownerPid = process.pid;
 				previous.owner = this.owner;
 				previous.updatedAt = now;
 				this.write(previous);
 				return previous;
 			});
+			if (this.record.resumeDeniedAt !== undefined) throw new ExpiredBudgetResume(this.record.status, this.record.deadlineAt);
 		} catch (error) {
 			this.db.close();
 			throw error;
@@ -94,6 +141,15 @@ export class DurableBudget {
 	get deadlineAt(): number { return this.record.deadlineAt; }
 	get updatedAt(): number { return this.record.updatedAt; }
 	snapshot(): BudgetGatewayStatus { return structuredClone(this.record.status); }
+
+	changePolicy(status: BudgetGatewayStatus, policy: string): void {
+		const record = { ...this.record, policy, status: structuredClone(status), updatedAt: Date.now() };
+		if (record.updatedAt < this.record.updatedAt) throw new Error("GATEWAY_BUDGET_CLOCK_REGRESSION");
+		if (record.updatedAt >= this.record.deadlineAt) throw new Error("GATEWAY_RUN_TIMEOUT");
+		if (record.pending.length) throw new Error("GATEWAY_BUDGET_TIER_CHANGE_DENIED");
+		this.transaction(() => this.writeOwned(record));
+		this.record = record;
+	}
 
 	save(status: BudgetGatewayStatus, change?: PendingBudgetRequest | { settled: number }): void {
 		const record = structuredClone(this.record);
@@ -125,15 +181,7 @@ export class DurableBudget {
 	}
 
 	private read(): RecordBody | undefined {
-		const row = this.db.prepare("SELECT body, checksum FROM gateway_budget_runs WHERE id=?").get(this.id) as
-			{ body: string; checksum: string } | undefined;
-		if (!row) return undefined;
-		if (hash(row.body) !== row.checksum) throw new Error("GATEWAY_BUDGET_CORRUPT");
-		let record: RecordBody;
-		try { record = JSON.parse(row.body); } catch { throw new Error("GATEWAY_BUDGET_CORRUPT"); }
-		if (record?.version !== 1) throw new Error("GATEWAY_BUDGET_VERSION");
-		validateRecord(record);
-		return record;
+		return readRecord(this.db, this.id);
 	}
 
 	private writeOwned(record: RecordBody): void {
@@ -165,17 +213,14 @@ function alive(pid: number): boolean {
 	catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
-function checkTime(record: RecordBody, now: number): void {
-	if (now < record.updatedAt) throw new Error("GATEWAY_BUDGET_CLOCK_REGRESSION");
-	if (now >= record.deadlineAt) throw new Error("GATEWAY_RUN_TIMEOUT");
-}
-
 function validateRecord(record: RecordBody): void {
 	const status = record.status;
 	const validCount = (n: number) => Number.isSafeInteger(n) && n >= 0;
 	const validCost = (n: number) => Number.isFinite(n) && n >= 0;
 	const limits = status?.limits as BudgetGatewayLimits | undefined;
-	if (!status || !limits || !validCount(record.deadlineAt) || !validCount(record.updatedAt) ||
+	if (!status || !limits || (record.resumeDeniedAt !== undefined && (!validCount(record.resumeDeniedAt) ||
+		record.resumeDeniedAt < record.deadlineAt || record.resumeDeniedAt !== record.updatedAt ||
+		status.lastError !== "GATEWAY_RUN_TIMEOUT" || status.state !== "failed_closed" || record.owner !== null)) || !validCount(record.deadlineAt) || !validCount(record.updatedAt) ||
 		(record.ownerPid !== null && (!validCount(record.ownerPid) || record.ownerPid === 0)) ||
 		(record.ownerPid === null ? record.owner !== null : typeof record.owner !== "string") ||
 		!Array.isArray(record.pending) || !Array.isArray(status.denials) || !Array.isArray(status.requestOutcomes) ||

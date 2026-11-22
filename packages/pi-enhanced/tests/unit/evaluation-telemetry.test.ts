@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type RunningBudgetGateway, startBudgetGateway } from "../../benchmarks/real-agent/budget-gateway.ts";
 import {
@@ -207,13 +207,10 @@ describe("Batch N metadata-only observability", () => {
 	it("detects interrupted metadata from a real terminated child", async () => {
 		const { dir, workspace } = setup();
 		const script = join(dir, "child.mjs");
-		const modulePath = resolve("packages/pi-enhanced/benchmarks/real-agent/evaluation-telemetry.ts").replaceAll(
-			"\\",
-			"/",
-		);
+		const moduleUrl = new URL("../../benchmarks/real-agent/evaluation-telemetry.ts", import.meta.url).href;
 		writeFileSync(
 			script,
-			`import {EvaluationTelemetry} from ${JSON.stringify(`file:///${modulePath}`)}; const trace=new EvaluationTelemetry('unit-run',${JSON.stringify(join(dir, "crash.json"))},${JSON.stringify(workspace)});trace.event({type:'tool_execution_start',toolCallId:'pending',toolName:'read',args:{path:'a'}});console.log('ready');setInterval(()=>{},1000);`,
+			`import {EvaluationTelemetry} from ${JSON.stringify(moduleUrl)}; const trace=new EvaluationTelemetry('unit-run',${JSON.stringify(join(dir, "crash.json"))},${JSON.stringify(workspace)});trace.event({type:'tool_execution_start',toolCallId:'pending',toolName:'read',args:{path:'a'}});console.log('ready');setInterval(()=>{},1000);`,
 		);
 		const child = spawn(process.execPath, ["--experimental-strip-types", script], {
 			windowsHide: true,

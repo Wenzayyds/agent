@@ -7,6 +7,7 @@ export interface SandboxConfig {
 	enabled: boolean;
 	trusted: boolean;
 	readonlyModuleTools?: boolean;
+	readonlyKnowledgeTools?: boolean;
 	taskPlanTool?: boolean;
 	runId: string;
 	containerOwner?: string;
@@ -78,6 +79,7 @@ export function loadSandboxConfig(
 	return {
 		enabled: true,
 		readonlyModuleTools: env.PI_ENHANCED_SANDBOX_READONLY_MODULE_TOOLS === "1",
+		readonlyKnowledgeTools: env.PI_ENHANCED_SANDBOX_READONLY_KNOWLEDGE_TOOLS === "1",
 		...(env.PI_ENHANCED_SANDBOX_TASK_PLAN_TOOL === "1" ? { taskPlanTool: true } : {}),
 		trusted: env.PI_ENHANCED_SANDBOX_TRUSTED === "1",
 		runId,
