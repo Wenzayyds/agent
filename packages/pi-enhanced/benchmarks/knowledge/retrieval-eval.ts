@@ -486,7 +486,7 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 							...describeHit(hit),
 							...rank,
 							fusedRank: i + 1,
-							inTopK: i < TOP_K,
+							inTopK: i < trialTopK,
 						}));
 						traces.push({
 							queryId: query.id,
@@ -529,7 +529,7 @@ async function evaluate(lab: Lab, root: string, resources: KnowledgeService[]) {
 			dataset: dataset.id,
 			datasetSha256: createHash("sha256").update(JSON.stringify(dataset)).digest("hex"),
 			action,
-			topK: TOP_K,
+			topK: trialTopK,
 			repetitions: REPETITIONS,
 			model: lab.embedding.model,
 			qdrant: "1.15.5",
