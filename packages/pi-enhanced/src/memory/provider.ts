@@ -19,6 +19,7 @@ import {
 	type MemoryType,
 	type MemoryVerification,
 	type ProjectScope,
+	parseTaskDreamSource,
 	recordScope,
 	type ScopedSearchQuery,
 } from "./contracts.ts";
@@ -154,7 +155,165 @@ export class LocalMemoryProvider {
 		}
 	}
 
-	async saveCandidate(input: StoredCandidateInput): Promise<MemoryRecord> {
+	// Only the owning MemoryService can validate live file evidence.
+	private conflictingEvidence?: (record: MemoryRecord) => readonly string[];
+
+	// A model read needs a single SQLite snapshot across hydration, scope and source checks.
+	withReadSnapshot<T>(check: () => T): T {
+		if (this.database.isTransaction) return check();
+		return this.storageOperation(() => this.transaction(check, "BEGIN"));
+	}
+
+	checkSubjectCoverage(taskId?: string, subject?: string): void {
+		// Creation fixes the scope. A verification at the current revision can exclude an unrelated topic.
+		const missing = this.database
+			.prepare(`SELECT m.id, md.memory_id AS metadata_id FROM memories m
+			LEFT JOIN memory_metadata md ON md.memory_id=m.id
+			WHERE m.project_id=? AND m.status='verified'
+			AND (md.memory_id IS NULL OR (md.scope_kind='task' AND NULLIF(trim(md.scope_id),'') IS NULL))
+			AND NOT EXISTS (SELECT 1 FROM memory_governance_audit a
+				WHERE a.memory_id=m.id AND a.project_id=m.project_id AND a.action='candidate_created'
+				AND (json_extract(a.after_json,'$.scopeKind') IN ('session','unbound') OR
+					(json_extract(a.after_json,'$.scopeKind')='task' AND
+					 NULLIF(json_extract(a.after_json,'$.scopeId'),'') IS NOT NULL AND json_extract(a.after_json,'$.scopeId') IS NOT ?)))
+			AND NOT EXISTS (SELECT 1 FROM memory_governance_audit v
+				WHERE v.memory_id=m.id AND v.project_id=m.project_id AND v.action='status_changed'
+				AND json_extract(v.after_json,'$.revision')=m.revision
+				AND json_extract(v.after_json,'$.status')='verified'
+				AND NULLIF(json_extract(v.after_json,'$.subjectKey'),'') <> ?)
+			`)
+			.all(this.projectId, taskId ?? null, subject ?? null);
+		for (const row of missing) {
+			const known =
+				row.metadata_id === null && taskId && subject ? this.legacySubject(row.id as string, taskId) : undefined;
+			if (!known || known === subject)
+				throw new MemoryError("MEMORY_REVIEW_REQUIRED", "待核验：已验证记忆缺少元数据，无法完成主题冲突检查");
+		}
+	}
+
+	private legacySubject(id: string, taskId: string): string | undefined {
+		// The legacy writer recorded possibleConflictId only after an exact subject and scope match.
+		// Either endpoint can lose metadata. Requiring both to remain at their first verification
+		// excludes subsequent subject changes from this proof.
+		const rows = this.database
+			.prepare(`WITH edges AS (
+				SELECT memory_id AS newer, json_extract(after_json,'$.possibleConflictId') AS older
+				FROM memory_governance_audit WHERE project_id=? AND action='candidate_created'
+				AND json_extract(after_json,'$.revision')=1 AND json_extract(after_json,'$.scopeKind')='task'
+				AND json_extract(after_json,'$.scopeId')=? AND (memory_id=? OR json_extract(after_json,'$.possibleConflictId')=?)
+			), first_verified AS (
+				SELECT m.id FROM memories m JOIN memory_governance_audit a ON a.project_id=m.project_id AND a.memory_id=m.id
+				WHERE m.project_id=? AND m.status='verified' AND m.revision=2 AND a.action='status_changed'
+				AND json_extract(a.before_json,'$.revision')=1 AND json_extract(a.before_json,'$.status')='candidate'
+				AND json_extract(a.before_json,'$.content_hash')=m.content_hash
+				AND json_extract(a.after_json,'$.revision')=2 AND json_extract(a.after_json,'$.status')='verified'
+			)
+			SELECT DISTINCT md.subject_key FROM edges e JOIN first_verified n ON n.id=e.newer
+			JOIN first_verified o ON o.id=e.older JOIN memory_metadata md ON md.memory_id=CASE WHEN e.newer=? THEN e.older ELSE e.newer END
+			WHERE md.scope_kind='task' AND md.scope_id=?`)
+			.all(this.projectId, taskId, id, id, this.projectId, id, taskId);
+		const key = rows.length === 1 ? rows[0]?.subject_key : undefined;
+		return typeof key === "string" && key.trim() ? key : undefined;
+	}
+
+	isDreamSource(id: string): boolean {
+		return !!this.database
+			.prepare(`SELECT 1 FROM memory_relations r JOIN memory_sources s ON s.memory_id=r.source_memory_id
+			JOIN memories dream ON dream.id=r.source_memory_id JOIN memory_metadata md ON md.memory_id=dream.id
+			WHERE dream.status IN ('candidate','verified','stale') AND md.lifecycle='active' AND (md.valid_until IS NULL OR md.valid_until>?)
+			AND r.project_id=? AND r.target_memory_id=? AND r.relation='derived_from' AND s.source_ref GLOB 'task:*:dream:v1:*' LIMIT 1`)
+			.get(Date.now(), this.projectId, id);
+	}
+
+	taskSubjectRecords(taskId: string, subject?: string): MemoryRecord[] {
+		this.checkSubjectCoverage(taskId, subject);
+		const rows = this.database
+			.prepare(`SELECT m.* FROM memories m JOIN memory_metadata md ON md.memory_id=m.id
+			WHERE m.project_id=? AND (md.scope_kind='project' OR (md.scope_kind='task' AND md.scope_id=?))
+			AND (? IS NULL OR md.subject_key IS NULL OR md.subject_key=?) AND md.lifecycle='active' AND m.status='verified'`)
+			.all(this.projectId, taskId, subject ?? null, subject ?? null) as unknown as MemoryRow[];
+		return rows.map((row) => this.hydrate(row));
+	}
+
+	approvedDreams(taskId?: string): MemoryRecord[] {
+		const rows = this.database
+			.prepare(`SELECT m.* FROM memories m JOIN memory_metadata md ON md.memory_id=m.id
+			WHERE m.project_id=? AND m.status='verified' AND md.scope_kind='task' AND (? IS NULL OR md.scope_id=?)
+			AND EXISTS (SELECT 1 FROM memory_sources s WHERE s.memory_id=m.id AND s.source_ref GLOB 'task:*:dream:v1:*')`)
+			.all(this.projectId, taskId ?? null, taskId ?? null) as unknown as MemoryRow[];
+		return rows.map((row) => this.hydrate(row));
+	}
+
+	initializeDreamReview(check: (record: MemoryRecord) => readonly string[]): void {
+		this.conflictingEvidence = check;
+		this.storageOperation(() =>
+			this.transaction(() => {
+				const orphans = this.database
+					.prepare(`SELECT m.id,m.status,m.revision FROM memories m
+					LEFT JOIN memory_metadata md ON md.memory_id=m.id
+					WHERE m.project_id=? AND m.status='verified' AND md.memory_id IS NULL AND EXISTS
+					(SELECT 1 FROM memory_sources s WHERE s.memory_id=m.id AND s.source_ref GLOB 'task:*:dream:v1:*')`)
+					.all(this.projectId) as unknown as MemoryRow[];
+				for (const record of orphans) this.quarantineDream(record, "MEMORY_REVIEW_REQUIRED", []);
+				for (const record of this.approvedDreams()) this.recordSubjectReview(record);
+			}),
+		);
+	}
+
+	private recordSubjectReview(record: MemoryRecord, fileEvidence = false): MemoryError | undefined {
+		if (!this.conflictingEvidence) throw new MemoryError("MEMORY_STORAGE_ERROR", "Task Dream review is unavailable");
+		let evidence: readonly string[] = [];
+		let pending: MemoryError;
+		try {
+			evidence = this.conflictingEvidence(record);
+			if (!evidence.length) return;
+			pending = new MemoryError(
+				"MEMORY_CONTENT_CONFLICT",
+				`候选 ${record.id} 待处理，同主题证据：${evidence.join(", ")}`,
+			);
+		} catch (error) {
+			if (
+				!(error instanceof MemoryError) ||
+				(error.code !== "MEMORY_REVIEW_REQUIRED" && error.code !== "MEMORY_VALIDATION_ERROR")
+			)
+				throw error;
+			pending = new MemoryError(error.code, `待核验：${error.message}`, { cause: error });
+		}
+		if (fileEvidence) {
+			this.writeAudit(
+				record.id,
+				null,
+				"subject_review_pending",
+				null,
+				{ revision: record.revision, reason: pending.code, evidence },
+				Date.now(),
+			);
+		} else this.quarantineDream(record, pending.code, evidence);
+		return pending;
+	}
+
+	private quarantineDream(
+		record: Pick<MemoryRecord, "id" | "status" | "revision">,
+		reason: string,
+		evidence: readonly string[],
+	) {
+		const status = record.status === "verified" ? "stale" : record.status;
+		if (status !== record.status) {
+			this.database
+				.prepare("UPDATE memories SET status=?, revision=revision+1, updated_at=? WHERE id=? AND project_id=?")
+				.run(status, Date.now(), record.id, this.projectId);
+		}
+		this.writeAudit(
+			record.id,
+			null,
+			"dream_conflict_pending",
+			{ status: record.status, revision: record.revision },
+			{ status, reason, evidence },
+			Date.now(),
+		);
+	}
+
+	async saveCandidate(input: StoredCandidateInput, validateSource?: () => void): Promise<MemoryRecord> {
 		this.assertOpen();
 		const recordScope = input.scope ?? inferMemoryScope([input.source], input.metadata?.category ?? "other");
 		const type =
@@ -162,11 +321,14 @@ export class LocalMemoryProvider {
 		const scopeKind = recordScope?.kind ?? "unbound";
 		const scopeId = recordScope && recordScope.kind !== "project" ? recordScope.id : "";
 		const dataJson = JSON.stringify(input.data ?? {});
+		let pending: MemoryError | undefined;
 		const recordId = this.storageOperation(() =>
 			this.transaction(() => {
+				validateSource?.();
 				this.assertNotForgotten(input.kind, input.contentHash);
 				// Host task proposals have a stable source token, even if their record was later edited.
-				if (scopeKind === "task" && /^task:[^:\s]+:experience:[a-f0-9]{64}$/u.test(input.source.ref)) {
+				const dream = parseTaskDreamSource(input.source.ref);
+				if (scopeKind === "task" && (dream || /^task:[^:\s]+:experience:[a-f0-9]{64}$/u.test(input.source.ref))) {
 					const forgottenEvent = this.database
 						.prepare(`SELECT 1 FROM memory_governance_audit a
 						JOIN json_each(a.before_json, '$.sources') s
@@ -182,7 +344,10 @@ export class LocalMemoryProvider {
 						.get(this.projectId, scopeId, type, input.source.type, input.source.ref) as
 						| { id: string }
 						| undefined;
-					if (replay) return replay.id;
+					if (replay) {
+						if (dream) pending = this.recordSubjectReview(this.getCurrent(replay.id)!);
+						return replay.id;
+					}
 				}
 				if (
 					input.derivation &&
@@ -205,6 +370,9 @@ export class LocalMemoryProvider {
 						scopeId,
 						input.data?.taskId ?? null,
 					) as { id: string; content_hash: string; data_json: string } | undefined;
+				if (existing && dream) {
+					throw new MemoryError("MEMORY_CONTENT_CONFLICT", "A separate record already owns this task summary");
+				}
 				if (existing && existing.data_json !== dataJson) {
 					throw new MemoryError("MEMORY_CONTENT_CONFLICT", "Duplicate memory has different structured data");
 				}
@@ -317,9 +485,11 @@ export class LocalMemoryProvider {
 						.run(this.projectId, id, input.derivation.id, input.now);
 				if (existing && Number(sourceResult.changes) === 1)
 					this.writeAudit(id, null, "source_attached", null, input.source, input.now);
+				if (dream) pending = this.recordSubjectReview(this.getCurrent(id)!);
 				return id;
 			}),
 		);
+		if (pending) throw pending;
 		const record = await this.get(recordId);
 		if (!record) throw new MemoryError("MEMORY_STORAGE_ERROR", "Saved memory could not be read back");
 		return record;
@@ -575,17 +745,28 @@ export class LocalMemoryProvider {
 		reason?: string;
 		expectedRevision: number;
 		now: number;
+		validateSource?: () => void;
 		reflection?: readonly { evidenceRef: string; previousSha256: string; observedSha256: string | null }[];
 	}): Promise<MemoryRecord> {
 		this.assertOpen();
 		if (options.status === "verified" && !options.verification)
 			throw new MemoryError("MEMORY_VALIDATION_ERROR", "Verification evidence is required");
+		let pending: MemoryError | undefined;
 		this.storageOperation(() =>
 			this.transaction(() => {
 				const current = this.database
 					.prepare("SELECT * FROM memories WHERE id=? AND project_id=? AND revision=?")
 					.get(options.id, this.projectId, options.expectedRevision) as MemoryRow | undefined;
 				if (!current) this.throwMissingOrRevision(options.id);
+				const memory = this.hydrate(current);
+				const dream = memory.sources.some((s) => parseTaskDreamSource(s.ref));
+				if (options.status === "verified" && dream) {
+					if (!options.validateSource)
+						throw new MemoryError("MEMORY_VALIDATION_ERROR", "Task Dream requires source review");
+					pending = this.recordSubjectReview(memory);
+					if (pending) return;
+				}
+				if (options.status === "verified") options.validateSource?.();
 				const result = this.database
 					.prepare(
 						"UPDATE memories SET status=?, revision=revision+1, updated_at=? WHERE id=? AND project_id=? AND revision=?",
@@ -600,6 +781,7 @@ export class LocalMemoryProvider {
 					{
 						status: options.status,
 						revision: current.revision + 1,
+						...(options.status === "verified" && memory.subjectKey ? { subjectKey: memory.subjectKey } : {}),
 						verification: options.verification,
 						reason: options.reason,
 					},
@@ -629,8 +811,20 @@ export class LocalMemoryProvider {
 							options.verification.verifiedAt,
 						);
 				}
+				if (
+					options.status === "verified" &&
+					!dream &&
+					this.conflictingEvidence &&
+					(memory.scope?.kind === "project" || memory.scope?.kind === "task")
+				) {
+					const taskId = memory.scope.kind === "task" ? memory.scope.id : undefined;
+					if (taskId && options.verification?.type === "file_observed")
+						this.recordSubjectReview(this.getCurrent(memory.id)!, true);
+					for (const derived of this.approvedDreams(taskId)) this.recordSubjectReview(derived);
+				}
 			}),
 		);
+		if (pending) throw pending;
 		return this.require(options.id);
 	}
 
@@ -926,7 +1120,7 @@ export class LocalMemoryProvider {
 				"SELECT md.*, COALESCE(us.last_used_at, NULL) AS last_used_at, COALESCE(us.use_count, 0) AS use_count FROM memory_metadata md LEFT JOIN memory_usage_stats us ON us.memory_id=md.memory_id WHERE md.memory_id=?",
 			)
 			.get(row.id) as MetadataRow | undefined;
-		if (!metadata) throw new MemoryError("MEMORY_STORAGE_ERROR", "Memory metadata is missing");
+		if (!metadata) throw new MemoryError("MEMORY_REVIEW_REQUIRED", "待核验：记忆缺少范围和主题元数据");
 		const sources = this.database
 			.prepare(
 				"SELECT source_type, source_ref, source_commit, observed_at FROM memory_sources WHERE memory_id=? ORDER BY observed_at, source_type, source_ref",
@@ -1011,8 +1205,8 @@ export class LocalMemoryProvider {
 		return rows.map((row) => this.hydrate(row));
 	}
 
-	private transaction<T>(operation: () => T): T {
-		this.database.exec("BEGIN IMMEDIATE");
+	private transaction<T>(operation: () => T, begin: "BEGIN" | "BEGIN IMMEDIATE" = "BEGIN IMMEDIATE"): T {
+		this.database.exec(begin);
 		try {
 			const result = operation();
 			this.database.exec("COMMIT");

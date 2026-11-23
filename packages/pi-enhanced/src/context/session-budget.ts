@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type RunningBudgetGateway, startBudgetGateway } from "../../benchmarks/real-agent/budget-gateway.ts";
+import {
+	type BudgetGatewayModel,
+	type RunningBudgetGateway,
+	startBudgetGateway,
+} from "../../benchmarks/real-agent/budget-gateway.ts";
 import { storedBudget } from "../../benchmarks/real-agent/budget-persistence.ts";
 import { createProjectScope } from "../memory/project-scope.ts";
 import { loadTaskBudget } from "../shared/config.ts";
@@ -11,11 +15,18 @@ import { currentScopedTaskReader } from "../task-manager/reader.ts";
 import type { AgentBudgetWorkflow } from "./budget-workflow.ts";
 
 const gatewayAnchor = "pi-enhanced:budget-scope";
+const ccrWorkflowChannel = "pi-enhanced:ccr-budget-workflow";
+const ccrLaunchCache = Symbol.for("pi-enhanced:ccr-launch");
+const launchState = globalThis as typeof globalThis & {
+	[ccrLaunchCache]?: { config: string; key: string };
+};
+
 export interface SessionBudgetProvider {
 	provider: string;
 	model: string;
 	baseUrl: string;
 	pricing: { inputUsdPerMillion: number; outputUsdPerMillion: number };
+	models?: readonly BudgetGatewayModel[];
 }
 
 const deepseek: SessionBudgetProvider = {
@@ -25,9 +36,77 @@ const deepseek: SessionBudgetProvider = {
 	pricing: { inputUsdPerMillion: 0.3, outputUsdPerMillion: 1.2 },
 };
 
-export function installSessionBudget(pi: ExtensionAPI, agentDir: string, host = deepseek): AgentBudgetWorkflow {
+const ccrModels: Readonly<Record<string, Pick<BudgetGatewayModel, "responseModelId" | "pricing">>> = {
+	"DeepSeek/deepseek-flash": { responseModelId: "deepseek-flash", pricing: deepseek.pricing },
+	"DeepSeek/deepseek-v4-pro": {
+		responseModelId: "deepseek-v4-pro",
+		pricing: { inputUsdPerMillion: 1.32, outputUsdPerMillion: 3.96 },
+	},
+};
+
+export function installCcrSessionBudget(pi: ExtensionAPI, agentDir: string): void {
+	if (!process.env.PI_ENHANCED_CCR_BUDGET) throw new Error("GATEWAY_CCR_LAUNCH_REQUIRED");
+	installSessionBudget(pi, agentDir);
+}
+
+function readCcrLaunch() {
+	const raw = process.env.PI_ENHANCED_CCR_BUDGET;
+	if (raw === undefined) return;
+	const key =
+		process.env.PI_ENHANCED_CCR_BUDGET_KEY ??
+		(launchState[ccrLaunchCache]?.config === raw ? launchState[ccrLaunchCache].key : undefined);
+	if (!key) throw new Error("GATEWAY_SECRET_MISSING");
+	const config = JSON.parse(raw) as { baseUrl?: unknown; models?: unknown } | null;
+	const { baseUrl, models } = config ?? {};
+	if (
+		typeof baseUrl !== "string" ||
+		!/^http:\/\/127\.0\.0\.1(?::[1-9]\d{0,4})?\/v1$/u.test(baseUrl) ||
+		new URL(baseUrl).href !== baseUrl ||
+		!Array.isArray(models) ||
+		!models.length ||
+		new Set(models).size !== models.length ||
+		!models.every((id) => typeof id === "string" && Object.hasOwn(ccrModels, id))
+	)
+		throw new Error("GATEWAY_CCR_CONFIG_INVALID");
+	const profiles = models
+		.map(
+			(modelId: string): BudgetGatewayModel => ({
+				modelId,
+				...ccrModels[modelId]!,
+				contextWindow: 64_000,
+				maxOutputTokens: 4096,
+				supportsTools: true,
+			}),
+		)
+		.sort((a, b) => a.modelId.localeCompare(b.modelId));
+	// Extension reloads reuse the launch credential in memory. Shell tools must not inherit it.
+	launchState[ccrLaunchCache] = { config: raw, key };
+	delete process.env.PI_ENHANCED_CCR_BUDGET_KEY;
+	const { modelId: model, pricing } = profiles[0]!;
+	return { key, host: { provider: "local-ccr", baseUrl, model, pricing, models: profiles } };
+}
+
+export function installSessionBudget(
+	pi: ExtensionAPI,
+	agentDir: string,
+	provider?: SessionBudgetProvider,
+): AgentBudgetWorkflow {
+	const ccr = readCcrLaunch();
+	const host = ccr?.host ?? provider ?? deepseek;
+	if (ccr) {
+		// The explicit launcher and optional Context can load separate copies of this module.
+		let existing: AgentBudgetWorkflow | undefined;
+		pi.events.emit(ccrWorkflowChannel, (workflow: AgentBudgetWorkflow) => {
+			existing = workflow;
+		});
+		if (existing) return existing;
+	}
+	const endpoint = `${host.baseUrl}/chat/completions`;
+	const alternateEndpoint = ccr ? endpoint : `${host.baseUrl}/v1/chat/completions`;
+	const manages = (modelId: string) =>
+		host.models ? host.models.some((model) => model.modelId === modelId) : modelId === host.model;
 	const clientToken = randomUUID();
-	const permits = new Map<string, () => void>();
+	const permits = new Map<string, { check(modelId: string): void; retryableUndelivered: boolean }>();
 	const databasePath = join(agentDir, "pi-enhanced-budget.sqlite3");
 	let active: { id: string; gateway: RunningBudgetGateway } | undefined;
 	let selection: { id: string; tier: TaskBudgetTier } | undefined;
@@ -55,7 +134,7 @@ export function installSessionBudget(pi: ExtensionAPI, agentDir: string, host = 
 		return { id, projectId: project.projectId, taskId };
 	};
 	const settings = (ctx: ExtensionContext) =>
-		loadTaskBudget({ agentDir, cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() });
+		loadTaskBudget({ agentDir, cwd: ctx.cwd, projectTrusted: !ccr && ctx.isProjectTrusted() });
 	const stored = (id: string) => {
 		if (!existsSync(databasePath)) return undefined;
 		const file = lstatSync(databasePath);
@@ -83,7 +162,7 @@ export function installSessionBudget(pi: ExtensionAPI, agentDir: string, host = 
 					: config.tier
 				: previous?.limits.tier;
 			if (!tier) throw new Error("GATEWAY_BUDGET_TIER_INVALID");
-			const key = await ctx.modelRegistry.getApiKeyForProvider(host.provider);
+			const key = ccr?.key ?? (await ctx.modelRegistry.getApiKeyForProvider(host.provider));
 			if (!key) throw new Error("GATEWAY_SECRET_MISSING");
 			mkdirSync(agentDir, { recursive: true });
 			if (!existsSync(databasePath)) {
@@ -101,8 +180,15 @@ export function installSessionBudget(pi: ExtensionAPI, agentDir: string, host = 
 				adminToken: randomUUID(),
 				allowedModel: host.model,
 				pricing: host.pricing,
+				models: host.models,
 				guardedClientRetry: true,
-				dispatchCheck: (permit) => (permit ? permits.get(permit) : undefined),
+				dispatchCheck: (permit) => (permit ? permits.get(permit)?.check : undefined),
+				onRetryableUndelivered: ccr
+					? (permit) => {
+							const dispatch = permits.get(permit);
+							if (dispatch) dispatch.retryableUndelivered = true;
+						}
+					: undefined,
 				limits: previous?.limits ?? {
 					tier,
 					maxTotalTokens: TASK_TOKEN_TIERS[tier],
@@ -147,39 +233,59 @@ export function installSessionBudget(pi: ExtensionAPI, agentDir: string, host = 
 		const baseUrl = model.baseUrl.replace(/\/$/u, "");
 		if (
 			model.provider !== host.provider ||
-			model.id !== host.model ||
+			!manages(model.id) ||
 			model.api !== "openai-completions" ||
-			(baseUrl !== host.baseUrl && baseUrl !== `${host.baseUrl}/v1`)
+			(baseUrl !== host.baseUrl && (ccr || baseUrl !== `${host.baseUrl}/v1`))
 		) {
-			if (existsSync(databasePath) && stored(scope(ctx).id)) throw new Error("GATEWAY_BUDGET_MODEL_CHANGE_DENIED");
+			if (ccr || (existsSync(databasePath) && stored(scope(ctx).id)))
+				throw new Error("GATEWAY_BUDGET_MODEL_CHANGE_DENIED");
 			return;
 		}
 		const gateway = await getGateway(ctx, scope(ctx));
 		return async (input, init) => {
 			const request = new Request(input, init);
-			if (
-				(request.url !== `${host.baseUrl}/chat/completions` &&
-					request.url !== `${host.baseUrl}/v1/chat/completions`) ||
-				request.method !== "POST"
-			)
+			if ((request.url !== endpoint && request.url !== alternateEndpoint) || request.method !== "POST")
 				throw new Error("GATEWAY_UPSTREAM_NOT_ALLOWED");
-			const permit = randomUUID();
-			permits.set(permit, () => beforeSend?.());
-			try {
-				return await fetch(`${gateway.url}/v1/chat/completions`, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${clientToken}`,
-						"Content-Type": "application/json",
-						"x-pi-budget-permit": permit,
+			const body = await request.text();
+			const send = async () => {
+				request.signal.throwIfAborted();
+				const permit = randomUUID();
+				const dispatch = {
+					check(modelId: string) {
+						if (modelId !== model.id) throw new Error("GATEWAY_BUDGET_MODEL_CHANGE_DENIED");
+						beforeSend?.();
 					},
-					body: await request.text(),
-					signal: request.signal,
-					redirect: "error",
-				});
-			} finally {
-				permits.delete(permit);
-			}
+					retryableUndelivered: false,
+				};
+				permits.set(permit, dispatch);
+				try {
+					const response = await fetch(`${gateway.url}/v1/chat/completions`, {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${clientToken}`,
+							"Content-Type": "application/json",
+							"x-pi-budget-permit": permit,
+						},
+						body,
+						signal: request.signal,
+						redirect: "error",
+					});
+					return { response, retryableUndelivered: dispatch.retryableUndelivered };
+				} finally {
+					permits.delete(permit);
+				}
+			};
+			const first = await send();
+			// A status or header alone cannot authorize replay. Only this local Gateway can attest
+			// that this attempt's bytes were not sent and its durable reservation was released.
+			if (
+				!first.retryableUndelivered ||
+				first.response.status !== 503 ||
+				first.response.headers.get("x-should-retry") !== "true"
+			)
+				return first.response;
+			await first.response.body?.cancel();
+			return (await send()).response;
 		};
 	});
 	pi.on("session_shutdown", async () => {
@@ -218,9 +324,14 @@ export function installSessionBudget(pi: ExtensionAPI, agentDir: string, host = 
 			}
 		},
 	});
-	return {
+	const workflow: AgentBudgetWorkflow = {
 		active: () => !!active,
 		preview: (body) => active!.gateway.preview!(body),
 		status: () => active!.gateway.status(),
 	};
+	if (ccr)
+		pi.events.on(ccrWorkflowChannel, (claim) => {
+			if (typeof claim === "function") claim(workflow);
+		});
+	return workflow;
 }

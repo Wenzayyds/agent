@@ -18,6 +18,7 @@ import {
 } from "../../benchmarks/real-agent/evaluation-context-budget.ts";
 import { finalizeAgentExecution } from "../../benchmarks/real-agent/runner-cleanup.ts";
 import { SWE_FLASH_OFF_CONFIGURATION } from "../../benchmarks/real-agent/swe-profile.ts";
+import { registerAdaptiveRouter } from "../../src/ccr/adaptive.ts";
 import { TASK_BUDGET_DEFAULTS, TASK_TOKEN_TIERS, type TaskBudgetTier } from "../../src/shared/task-budget.ts";
 
 const running: Array<{ close(): Promise<void> }> = [];
@@ -80,6 +81,129 @@ describe("Batch H hard budget gateway", () => {
 			[pro.modelId, 0.00048], [flash.modelId, 0.00013],
 		]);
 		expect(status.actualCostUsd).toBeCloseTo(0.00061, 12);
+	});
+
+
+	it.each([true, false])("keeps one Gateway ledger across a CCR upgrade (consent=%s)", async (allow) => {
+		const flashId = "DeepSeek/deepseek-flash";
+		const proId = "DeepSeek/deepseek-v4-pro";
+		const modelFor = (id: string) => ({
+			id, provider: "local-ccr", api: "openai-completions", baseUrl: "http://127.0.0.1",
+		});
+		const seen: string[] = [];
+		const upstream = await mockUpstream(async (_request, response, { model }) => {
+			seen.push(String(model));
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(
+				"data: " + JSON.stringify({ model, choices: [], usage: { prompt_tokens: 120, completion_tokens: 10 } }) +
+				"\n\ndata: [DONE]\n\n",
+			);
+		});
+		const limits = { ...baseLimits, tier: "standard" as const, maxTotalTokens: 25_000,
+			maxTotalCostUsd: 0.03, maxOutputTokensPerRequest: 512, maxRequests: 8 };
+		const gateway = await startBudgetGateway({ runId: "ccr-confirm-" + allow,
+			upstreamBaseUrl: upstream.url, upstreamApiKey: "local", clientToken: "client-token",
+			adminToken: "admin-token", allowedModel: flashId, pricing: flash.pricing,
+			models: [{ ...flash, modelId: flashId }, { ...pro, modelId: proId }], limits });
+		running.push(gateway);
+		const events = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+		const entries: { reason: string; model: string }[] = [];
+		let confirmationCount = 0;
+		let versions = new Map([["calc.py", "initial"], ["test_calc.py", "unchanged"]]);
+		const ctx = {
+			model: modelFor(flashId), scopedModels: [{ model: modelFor(proId) }], hasUI: true,
+			signal: new AbortController().signal, hasPendingMessages: () => false,
+			sessionManager: { getBranch: () => [] },
+			ui: { confirm: async () => { confirmationCount++; return allow; }, setStatus: () => {} },
+		};
+		const send = async () => {
+			const response = await callGateway(gateway.url, "client-token", {
+				model: ctx.model.id, messages: [{ role: "user", content: "Run the current turn" }],
+			});
+			expect(await response.text()).toContain("[DONE]");
+		};
+		const plugin = {
+			on: (name: string, handle: (event: unknown, context: unknown) => unknown) => events.set(name, handle),
+			appendEntry: (_name: string, entry: { reason: string; model: string }) => entries.push(entry),
+			setModel: async (model: typeof ctx.model) => {
+				const previousModel = ctx.model;
+				ctx.model = model;
+				await events.get("model_select")!({ previousModel, model }, ctx);
+				return true;
+			},
+		};
+		const reportTest = registerAdaptiveRouter(plugin as never, () => versions, () => ["test_calc.py"], (path) => path);
+		await events.get("session_start")!({ reason: "startup" }, ctx);
+		await events.get("before_agent_start")!({}, ctx);
+		const emitTurn = async (name: string, id: string) => {
+			await events.get("turn_end")!({
+				message: {
+					role: "assistant", provider: ctx.model.provider, model: ctx.model.id,
+					usage: { input: 120, output: 10, cacheRead: 0, cacheWrite: 0 },
+					content: [{ type: "toolCall", name, id, arguments: { path: "calc.py" } }],
+				},
+				outcome: "completed", toolResults: [{ toolCallId: id, isError: false }],
+			}, ctx);
+		};
+		const test = async (id: string) => {
+			await send();
+			reportTest(id, { status: "failed", canRunAgain: true, files: versions, targets: ["test_calc.py"] });
+			await emitTurn("run_tests", id);
+		};
+		for (let n = 1; n <= 2; n++) {
+			await send();
+			await events.get("tool_call")!({ toolName: "edit" }, ctx);
+			versions = new Map(versions).set("calc.py", "revision-" + n);
+			await emitTurn("edit", "edit-" + n);
+			await test("test-" + n);
+			if (n === 1) {
+				expect(ctx.model.id).toBe(flashId);
+				expect(confirmationCount).toBe(0);
+			}
+		}
+		await send();
+		const expectedModel = allow ? proId : flashId;
+		expect(confirmationCount).toBe(1);
+		expect(seen).toEqual([flashId, flashId, flashId, flashId, expectedModel]);
+		expect(entries.map(({ reason }) => reason)).toContain(allow ? "upgrade_confirmed" : "upgrade_declined");
+		const ledger = gateway.status();
+		expect(ledger).toMatchObject({ requestsStarted: 5, requestsCompleted: 5, actualTotalTokens: 650, reservedCostUsd: 0 });
+		expect(ledger.requestOutcomes.map(({ modelId }) => modelId)).toEqual(seen);
+		expect(ledger.actualCostUsd).toBeCloseTo(4 * 0.000075 + (allow ? 0.00028 : 0.000075), 12);
+	});
+
+	it.each([
+		["deepseek-flash", undefined],
+		["deepseek-v4-pro", "GATEWAY_UPSTREAM_MODEL_MISMATCH"],
+		["Other/deepseek-flash", "GATEWAY_UPSTREAM_MODEL_MISMATCH"],
+	])("only accepts the exact configured physical response model (%s)", async (reported, error) => {
+		const upstream = await mockUpstream(async (_req, response) => {
+			response.writeHead(200, { "Content-Type": "text/event-stream" }).end(
+				"data: " + JSON.stringify({ model: reported, choices: [],
+					usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }) + "\n\ndata: [DONE]\n\n",
+			);
+		});
+		const selector = "DeepSeek/deepseek-flash";
+		const gateway = await startBudgetGateway({
+			runId: "ccr-physical-model", upstreamBaseUrl: upstream.url, upstreamApiKey: "local",
+			clientToken: "client-token", adminToken: "admin-token", allowedModel: selector, pricing: flash.pricing,
+			models: [
+				{ ...flash, modelId: selector, responseModelId: "deepseek-flash" },
+				{ ...pro, modelId: "DeepSeek/deepseek-v4-pro", responseModelId: "deepseek-v4-pro" },
+			],
+			limits: baseLimits,
+		});
+		running.push(gateway);
+		const response = await callGateway(gateway.url, "client-token", { model: selector });
+		if (error) {
+			expect(await response.json()).toEqual({ error });
+			expect(gateway.status()).toMatchObject({ actualTotalTokens: 0, lastError: error });
+		} else {
+			expect(await response.text()).toContain("[DONE]");
+			expect(gateway.status()).toMatchObject({
+				actualTotalTokens: 120, requestsCompleted: 1,
+				requestOutcomes: [{ modelId: selector, actualCostUsd: 0.00008 }],
+			});
+		}
 	});
 
 	it("retains the reservation when the provider reports a different model or omits its identity", async () => {

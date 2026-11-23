@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { compose, dockerWorker, reserveLoopbackPort } from "../../fixtures/memory-v3/lab.ts";
@@ -15,6 +15,9 @@ import { baseCases, baseFixtures, cases, type Case, fixtures, version } from "./
 
 const stratified = process.argv.includes("--stratified");
 const testCases = stratified ? cases : baseCases;
+const split = (scenario: Case) => baseCases.includes(scenario) ? "development" : "holdout";
+const datasetSha256 = createHash("sha256").update(JSON.stringify({ corpus: stratified ? fixtures : baseFixtures,
+	queries: testCases.map((scenario) => ({ split: split(scenario), ...scenario })) })).digest("hex");
 const corpus = stratified ? fixtures : baseFixtures;
 
 const image = process.env.PI_MEMORY_V3_E5_IMAGE ?? "pi-memory-v3-e5:local";
@@ -23,12 +26,20 @@ const tempRoot = realpathSync(tmpdir());
 const workspace = mkdtempSync(join(tempRoot, "pi-memory-v3-eval-"));
 const passes = 3;
 const results = [];
+const foreignRoot = join(workspace, "foreign-project");
+mkdirSync(foreignRoot);
+const foreign = await openMemoryService(createProjectScope({ cwd: foreignRoot, agentDir: join(workspace, "agent") }));
 const store = await openMemoryService(createProjectScope({ cwd: workspace, agentDir: join(workspace, "agent") }));
 try {
 	await reserveLoopbackPort(project);
 	compose(project, "up", "-d", "--wait", "--wait-timeout", "30");
 	const endpoint = "http://" + compose(project, "port", "qdrant", "6333");
 	const ids = new Map<string, string>();
+	const foreignContent = "The LOCAL_PROJECT_ONLY_FOREIGN marker belongs only to a different project.";
+	writeFileSync(join(foreignRoot, "foreign.md"), foreignContent);
+	const foreignDraft = await foreign.saveCandidate({ kind: "fact", content: foreignContent, source: { type: "file", ref: "foreign.md" } });
+	const foreignVerified = await foreign.verifyFileFact(foreignDraft.id,
+		{ relativePath: "foreign.md", exactExcerpt: foreignContent }, foreignDraft.revision);
 	const context = { hasUI: true, ui: { confirm: async () => true },
 		sessionManager: { getSessionId: () => "session-1" } } as unknown as ExtensionCommandContext;
 	for (const { key, input, proof } of corpus) {
@@ -36,12 +47,20 @@ try {
 		writeFileSync(join(workspace, ref), input.content);
 		const candidate = await store.saveCandidate({ ...input, source: { type: "file", ref } });
 		if (proof === "explicit") await new Promise((resolve) => setTimeout(resolve, 5));
-		const verified = proof === "explicit"
+		let verified = proof === "explicit"
 			? await store.confirmByUser(candidate.id, candidate.revision, context)
 			: await store.verifyFileFact(candidate.id, { relativePath: ref, exactExcerpt: input.content }, candidate.revision);
 		if (proof === "withdrawn") writeFileSync(join(workspace, ref), input.content + " Withdrawn evidence.");
+		if (proof === "archived") verified = await store.archive(verified.id, verified.revision);
+		if (proof === "revised") {
+			const content = input.content.replace("OBSOLETE_MANIFEST_V1", "CURRENT_MANIFEST_V2");
+			writeFileSync(join(workspace, ref), content);
+			const revised = await store.updateContent(verified.id, content, verified.revision);
+			verified = await store.verifyFileFact(revised.id, { relativePath: ref, exactExcerpt: content }, revised.revision);
+		}
 		ids.set(key, verified.id);
 	}
+	const keys = new Map([...ids].map(([key, id]) => [id, key]));
 	for (const [method, backend, mode] of [
 		["FTS5", "tfidf-svd", "lexical"],
 		["TF-IDF+SVD", "tfidf-svd", "semantic"],
@@ -72,7 +91,10 @@ try {
 		});
 		try {
 			const invoke = async ({ query }: Case) => {
-				const reply = await adapter.search({ ...query, limit: 5 });
+				const reply = await adapter.search({ ...query, limit: 10 });
+				if (reply.records.some((record) => record.projectId !== store.scope.projectId ||
+					record.id === foreignVerified.id || record.content.includes("OBSOLETE_MANIFEST_V1")))
+					throw new Error("Cross-project or obsolete revision returned");
 				const direct = !query.text.trim() || query.preferenceKey || query.types?.every((type) =>
 					type === "working" || type === "preference");
 				const expectedMode = direct ? "lexical" : mode;
@@ -83,15 +105,18 @@ try {
 			await invoke(testCases[0]);
 			if (qdrant) await invoke(testCases[0]);
 			const coldMs = performance.now() - started;
-			const observations: { stratum: string; ms: number; rank?: number; forbidden: number; negativeReturned: boolean }[] = [];
+			await invoke({ stratum: "project-boundary", query: { text: "LOCAL_PROJECT_ONLY_FOREIGN" } });
+			const observations: Observation[] = [];
 			const hostCpu = process.cpuUsage();
 			for (let pass = 0; pass < passes; pass++) {
-				for (const scenario of testCases) {
+				for (const [index, scenario] of testCases.entries()) {
 					const start = performance.now();
 					const found = await invoke(scenario);
+					const actual = found.map((id) => keys.get(id) ?? "unmapped");
 					const rank = scenario.expected ? found.indexOf(ids.get(scenario.expected)!) + 1 : undefined;
 					const forbidden = (scenario.forbidden ?? []).filter((key) => found.includes(ids.get(key)!)).length;
-					observations.push({ stratum: scenario.stratum, ms: performance.now() - start, rank, forbidden,
+					observations.push({ index, pass, split: split(scenario), stratum: scenario.stratum,
+						ms: performance.now() - start, rank, forbidden, actual, expected: scenario.expected,
 						negativeReturned: !scenario.expected && found.length > 0 });
 				}
 			}
@@ -101,6 +126,9 @@ try {
 				.map((stratum) => [stratum, measure(observations.filter((row) => row.stratum === stratum))]));
 			results.push({
 				method, ...measure(observations), byStratum,
+				bySplit: Object.fromEntries([...new Set(observations.map((row) => row.split))]
+					.map((partition) => [partition, measure(observations.filter((row) => row.split === partition))])),
+				observations,
 				coldMs, p50Ms: percentile(latencies, 0.5), p95Ms: percentile(latencies, 0.95),
 				workerRequests: Object.fromEntries(Object.entries(requestTimes).map(([tag, times]) => [tag, {
 					count: times.length, firstMs: times[0], ...(times.length > 1 ? { warmP50Ms: percentile(times.slice(1), 0.5) } : {}),
@@ -112,12 +140,12 @@ try {
 		} finally { await adapter.close(); }
 	}
 	console.log(JSON.stringify({ version: stratified ? version : "memory-v3-v1", embeddingModel: MULTILINGUAL_E5_SMALL,
-		corpus: corpus.length, queries: testCases.length, passes, node: process.version, platform: process.platform, results }, null, 2));
+		datasetSha256, corpus: corpus.length, queries: testCases.length, passes, node: process.version, platform: process.platform, results }, null, 2));
 } catch (error) {
 	try { console.error(compose(project, "logs", "--tail", "20", "qdrant")); } catch {}
 	throw error;
 } finally {
-	await store.close();
+	await Promise.all([store.close(), foreign.close()]);
 	try {
 		compose(project, "down", "-v");
 	} finally {
@@ -127,13 +155,31 @@ try {
 	}
 }
 
-function measure(observations: readonly { rank?: number; forbidden: number; negativeReturned: boolean }[]) {
+interface Observation {
+	index: number;
+	pass: number;
+	split: "development" | "holdout";
+	stratum: string;
+	ms: number;
+	rank?: number;
+	forbidden: number;
+	actual: string[];
+	expected?: string;
+	negativeReturned: boolean;
+}
+
+function measure(observations: readonly Observation[]) {
 	const ranks = observations.flatMap(({ rank }) => rank === undefined ? [] : [rank]);
 	return {
 		queries: observations.length / passes,
 		positiveQueries: ranks.length / passes,
-		recallAt5: ranks.length ? ranks.filter((rank) => rank > 0).length / ranks.length : null,
-		mrrAt5: ranks.length ? ranks.reduce((sum, rank) => sum + (rank ? 1 / rank : 0), 0) / ranks.length : null,
+		recallAt5: ranks.length ? ranks.filter((rank) => rank > 0 && rank <= 5).length / ranks.length : null,
+		recallAt10: ranks.length ? ranks.filter((rank) => rank > 0).length / ranks.length : null,
+		mrrAt5: ranks.length ? ranks.reduce((sum, rank) => sum + (rank > 0 && rank <= 5 ? 1 / rank : 0), 0) / ranks.length : null,
+		mrrAt10: ranks.length ? ranks.reduce((sum, rank) => sum + (rank ? 1 / rank : 0), 0) / ranks.length : null,
+		ndcgAt10: ranks.length ? ranks.reduce((sum, rank) => sum + (rank ? 1 / Math.log2(rank + 1) : 0), 0) / ranks.length : null,
+		p50Ms: percentile(observations.map((row) => row.ms), 0.5),
+		p95Ms: percentile(observations.map((row) => row.ms), 0.95),
 		forbiddenHits: observations.reduce((sum, row) => sum + row.forbidden, 0),
 		negativeQueriesReturningResults: observations.filter((row) => row.negativeReturned).length,
 	};

@@ -6,6 +6,7 @@ import { runKnowledgeCommand } from "./commands.ts";
 import { type KnowledgeState, loadKnowledgeConfig } from "./config.ts";
 import { KnowledgeDocumentError } from "./contracts.ts";
 import { projectKnowledgeRequest, registerKnowledgePageAccess } from "./request-policy.ts";
+import { createLocalKnowledgeReranker } from "./reranker.ts";
 import { errorCode, KnowledgeService, type KnowledgeVectors } from "./service.ts";
 import { isKnowledgeTool, registerKnowledgeTools, storeKnowledgeToolReferences } from "./tools.ts";
 import { KNOWLEDGE_COLLECTION, openDocumentIndex } from "./vector.ts";
@@ -62,6 +63,7 @@ export function createKnowledgeExtension(options: { agentDir?: string } = {}): (
 							filename: join(agentDir, "pi-enhanced", "knowledge", "projects", projectId, "knowledge.sqlite3"),
 							mode: config.mode,
 							vectors,
+							reranker: config.rerank && config.mode === "hybrid" ? createLocalKnowledgeReranker() : undefined,
 							background: true,
 						}),
 						cwd: ctx.cwd,

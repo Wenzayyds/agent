@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -13,7 +14,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { AuthStorage } from "../../../coding-agent/src/core/auth-storage.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "../../../coding-agent/test/model-runtime-test-utils.ts";
 import { createTestUiContext } from "../../../coding-agent/test/suite/harness.ts";
@@ -134,11 +135,12 @@ async function openSession(
 	extraTools: string[] = [],
 	requestBudget?: AgentBudgetWorkflow,
 	managedBudget = false,
+	ccr = false,
 ) {
 	const agentDir = join(root, "a");
 	const settingsManager = SettingsManager.inMemory({
 		compaction: { enabled: false, keepRecentTokens: 12 },
-		retry: { enabled: false, provider: { maxRetries: 1 } },
+		retry: { enabled: false, provider: { maxRetries: ccr ? 0 : 1 } },
 	});
 	settingsManager.setProjectTrusted(true);
 	const audit: unknown[] = [];
@@ -173,8 +175,8 @@ async function openSession(
 		...getModel("openai", "gpt-4o"),
 		api,
 		baseUrl,
-		id: "local-history-fixture",
-		provider: "qa-knowledge",
+		id: ccr ? "DeepSeek/deepseek-flash" : "local-history-fixture",
+		provider: ccr ? "local-ccr" : "qa-knowledge",
 	};
 	registry.registerProvider(model.provider, { baseUrl, api: model.api, apiKey: "fixture-only", models: [model] });
 	const modelRuntime = getModelRuntime(registry);
@@ -1136,6 +1138,64 @@ it.each([false, true, "test-only", "read-only-verification", "runtime", "runtime
 	},
 );
 
+it("rechecks real Memory and Knowledge sources before the ordinary CCR transport retries", async () => {
+	await withFixture(async (f) => withMemory(f, async (memory) => {
+		const row = await seed(f, memory);
+		const deliveredMemory = await memoryLookup(f);
+		const deliveredKnowledge = await f.lookup();
+		expect(markerBytes(deliveredMemory, SENSITIVE)).toBeGreaterThan(0);
+		expect(markerBytes(deliveredKnowledge, REVOKED)).toBeGreaterThan(0);
+		await f.closeSession();
+		const initialCount = f.provider.requests.length;
+		const flash = "DeepSeek/deepseek-flash";
+		const send = globalThis.fetch;
+		let connectionAttempts = 0;
+		try {
+			vi.stubEnv("PI_ENHANCED_CCR_BUDGET", JSON.stringify({ baseUrl: f.baseUrl, models: [flash] }));
+			vi.stubEnv("PI_ENHANCED_CCR_BUDGET_KEY", "fixture-only");
+			vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+				if (input === `${f.baseUrl}/chat/completions` && ++connectionAttempts === 1) {
+					const pending = Buffer.from(String(init?.body));
+					expect(markerBytes([pending], SENSITIVE)).toBeGreaterThan(0);
+					expect(markerBytes([pending], REVOKED)).toBeGreaterThan(0);
+					await memory.review(row.id, "mark_stale", row.revision, "Revoked before CCR retry");
+					await f.revokeExternally();
+					throw new TypeError("fetch failed", { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+				}
+				return send(input, init);
+			});
+			const restored = await openSession(
+				f.root, f.baseUrl, f.manager, undefined, "openai-completions", true, [], undefined, false, true,
+			);
+			try {
+				await restored.session.prompt("Assess the authorized rollout.");
+				expect(restored.session.messages.at(-1)).toMatchObject({
+					role: "assistant", stopReason: "error", errorMessage: expect.stringContaining("GATEWAY_DISPATCH_AUTHORIZATION_CHANGED"),
+				});
+				expect(restored.audit).toContainEqual(expect.objectContaining({ decision: "dispatch-denied" }));
+				expect(connectionAttempts).toBe(1);
+				expect(f.provider.requests).toHaveLength(initialCount);
+
+				f.provider.replies.push(textSse("Authorized control only.", 100, 20));
+				await restored.session.prompt("Continue with current authorization.");
+				expect(restored.session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+				const delivered = f.provider.requests.slice(initialCount);
+				expect(delivered).toHaveLength(1);
+				expect(markerBytes(delivered, SENSITIVE)).toBe(0);
+				expect(markerBytes(delivered, REVOKED)).toBe(0);
+				expect(markerBytes(delivered, RETAINED)).toBeGreaterThan(0);
+				recordWire("ccr-retry-after", delivered, { memoryRevokedBytes: markerBytes(delivered, SENSITIVE) });
+			} finally {
+				await restored.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+				restored.session.dispose();
+			}
+		} finally {
+			vi.unstubAllGlobals();
+			vi.unstubAllEnvs();
+		}
+	}));
+});
+
 it("T11 rejects task Memory and paging from a sibling branch", async () => {
 	await withFixture(async (f) =>
 		withMemory(f, async (m) => {
@@ -1352,3 +1412,63 @@ it("E16 leaves source, mutation and non-Chat-Completions results intact and reje
 	expect(deduplicateRuntimeReads({ ...payload, messages: [...messages, ...pair("read-2", "read")] })).toBeUndefined();
 	expect(deduplicateRuntimeReads({ ...payload, messages: messages.slice(0, -1) })).toBeUndefined();
 });
+
+it("withholds both sides of a Dream conflict from injection, Memory tools and HTTP history", async () => {
+	await withFixture(async (f) =>
+		withMemory(f, async (memory) => {
+			const taskId = await activeTask(f);
+			const query = "shipment temperature";
+			const cold = "dream_cold_rule_12b4",
+				warm = "dream_warm_rule_e8a1",
+				control = "dream_dispatch_control_72a1";
+			async function verify(token: string, subjectKey: string) {
+				const path = token + ".txt",
+					content = query + " " + token;
+				writeFileSync(join(f.root, path), content);
+				const record = await memory.saveCandidate({
+					scope: { kind: "task", id: taskId },
+					type: "episodic",
+					kind: "experience",
+					content,
+					metadata: { subjectKey },
+					source: { type: "file", ref: path },
+				});
+				return memory.verifyFileFact(record.id, { relativePath: path, exactExcerpt: content }, record.revision);
+			}
+			const current = await verify(cold, "temperature");
+			const draft = await memory.saveTaskDreamCandidate(taskId, 8, current.id, current.revision);
+			const approve = {
+				hasUI: true,
+				ui: { confirm: async () => true },
+				sessionManager: { getSessionId: () => "qa-owner" },
+			} as never;
+			await memory.confirmByUser(draft.id, draft.revision, approve);
+			await verify(control, "manifest");
+			const before = await f.next("Ok.", query);
+			expect(markerBytes(before, cold)).toBeGreaterThan(0);
+			expect(markerBytes(before, draft.id)).toBeGreaterThan(0);
+			recordWire("dream-control-before", before, { cold, warm, control, derived: draft.id });
+			const other = await verify(warm, "temperature");
+			async function capture(id: string) {
+				const wire = [...(await f.next("Ok.", query)), ...(await memoryLookup(f, query, "Lookup complete."))];
+				recordWire(id, wire, { cold, warm, control, derived: draft.id });
+				expect(markerBytes(wire, cold)).toBe(0);
+				expect(markerBytes(wire, warm)).toBe(0);
+				expect(markerBytes(wire, draft.id)).toBe(0);
+				return wire;
+			}
+			expect(markerBytes(await capture("dream-complete-conflict"), control)).toBeGreaterThan(0);
+			const db = new DatabaseSync(memory.scope.databasePath);
+			try {
+				db.prepare("DELETE FROM memory_metadata WHERE memory_id=?").run(other.id);
+			} finally {
+				db.close();
+			}
+			const stale = (await memory.inspect(draft.id)).record;
+			await expect(memory.confirmByUser(draft.id, stale.revision, approve)).rejects.toMatchObject({
+				code: "MEMORY_REVIEW_REQUIRED",
+			});
+			expect(markerBytes(await capture("dream-incomplete-conflict"), control)).toBeGreaterThan(0);
+		}),
+	);
+}, 90000);

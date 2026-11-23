@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,7 +39,7 @@ async function main() {
 	const baseUrl = provider?.baseUrl;
 	if (
 		typeof baseUrl !== "string" ||
-		!/^http:\/\/127\.0\.0\.1(?::[1-9]\d{0,4})?\/v1$/.test(baseUrl) ||
+		!isCcrBaseUrl(baseUrl) ||
 		provider.api !== "openai-completions" ||
 		provider.apiKey !== "$PI_CCR_TOKEN" ||
 		Object.keys(providers).length !== 1 ||
@@ -64,8 +65,16 @@ async function main() {
 		if (response.status === 401 || response.status === 403) throw new Error("auth");
 		if (!response.ok) throw new Error("unavailable");
 		discovered = await response.json();
+		const denied = await fetch(baseUrl + "/models", {
+			headers: { Authorization: "Bearer " + randomUUID() },
+			redirect: "error",
+			signal: AbortSignal.timeout(3000),
+		});
+		if (denied.status !== 401 && denied.status !== 403) throw new Error("auth-open");
 	} catch (error) {
-		throw new Error(error.message === "auth" ? "CCR 拒绝客户端令牌。" : "CCR 不可用，请检查本机服务和端口。");
+		if (error.message === "auth") throw new Error("CCR 拒绝客户端令牌。");
+		if (error.message === "auth-open") throw new Error("CCR 须拒绝无效客户端令牌。");
+		throw new Error("CCR 不可用，请检查本机服务和端口。");
 	}
 	if (
 		!Array.isArray(discovered?.data) ||
@@ -82,17 +91,39 @@ async function main() {
 
 	const cli = fileURLToPath(new URL("../../coding-agent/dist/bundle/cli.js", import.meta.url));
 	if (!existsSync(cli)) throw new Error("Pi CLI 尚未构建，请先构建 packages/coding-agent。");
-	const scoped = (adaptive ? [flash, pro] : [model]).map((id) => providerId + "/" + id).join(",");
+	const budgetModels = adaptive ? [flash, pro] : [model];
+	const scoped = budgetModels.map((id) => providerId + "/" + id).join(",");
+	const budgetExtension = fileURLToPath(new URL("../src/ccr/budget-extension.ts", import.meta.url));
+	if (!existsSync(budgetExtension)) throw new Error("缺少 CCR 预算扩展。");
 	const isolated = adaptive ? [
 		"--no-extensions", "--no-mcp", "--no-builtin-tools",
 		"-e", fileURLToPath(new URL("../src/ccr/auto-extension.ts", import.meta.url)),
 	] : [];
 	const child = spawn(process.execPath, [
 		cli, "--offline", "--no-approve", "--provider", providerId, "--model", model,
-		"--models", scoped, "--thinking", "off", ...isolated,
-	], { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, stdio: "inherit" });
+		"--models", scoped, "--thinking", "off", ...isolated, "-e", budgetExtension,
+	], {
+		env: {
+			...process.env,
+			PI_CODING_AGENT_DIR: agentDir,
+			// Only the protected transport has a credential accepted by CCR.
+			PI_CCR_TOKEN: randomUUID(),
+			PI_ENHANCED_CCR_BUDGET_KEY: token,
+			PI_ENHANCED_CCR_BUDGET: JSON.stringify({ baseUrl, models: budgetModels }),
+		},
+		stdio: "inherit",
+	});
 	child.once("error", () => { console.error("无法启动 Pi CLI。"); process.exitCode = 1; });
 	child.once("exit", (code, signal) => { process.exitCode = code ?? (signal === "SIGINT" ? 130 : 1); });
+}
+
+function isCcrBaseUrl(value) {
+	if (!/^http:\/\/127\.0\.0\.1(?::[1-9]\d{0,4})?\/v1$/.test(value)) return false;
+	try {
+		return new URL(value).href === value;
+	} catch {
+		return false;
+	}
 }
 
 function readConfig(agentDir, file) {

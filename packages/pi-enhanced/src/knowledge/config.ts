@@ -3,7 +3,7 @@ import { getEnhancedConfigPaths } from "../shared/config.ts";
 import type { RetrievalMode } from "./service.ts";
 
 export type KnowledgeState = "disabled" | "blocked" | "enabled" | "invalid-config";
-type KnowledgeConfig = { state: KnowledgeState; mode: RetrievalMode; qdrantEndpoint: string };
+type KnowledgeConfig = { state: KnowledgeState; mode: RetrievalMode; qdrantEndpoint: string; rerank?: boolean };
 
 export function loadKnowledgeConfig(options: {
 	agentDir: string;
@@ -25,10 +25,14 @@ export function loadKnowledgeConfig(options: {
 			if (
 				!isRecord(module) ||
 				typeof module.enabled !== "boolean" ||
-				Object.keys(module).some((key) => !["enabled", "mode", "qdrantEndpoint"].includes(key))
+				Object.keys(module).some((key) => !["enabled", "mode", "qdrantEndpoint", "rerank"].includes(key))
 			)
 				throw new TypeError();
 			enabled = module.enabled;
+			if (module.rerank !== undefined) {
+				if (typeof module.rerank !== "boolean") throw new TypeError();
+				config.rerank = module.rerank;
+			}
 			if (module.mode !== undefined) {
 				if (module.mode !== "lexical" && module.mode !== "semantic" && module.mode !== "hybrid")
 					throw new TypeError();

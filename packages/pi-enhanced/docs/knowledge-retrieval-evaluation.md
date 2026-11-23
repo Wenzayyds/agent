@@ -70,3 +70,33 @@ node --experimental-strip-types benchmarks/knowledge/select-retrieval.ts verify 
 调用方可显式传 `evidenceOnly: true`，只看含有精确引用的摘录。默认返回授权候选，保留探索式检索与 `enhanced_docs_read`。模型读取历史引用时按当前权限和版本重新判定，有效摘录减少后会随之改变状态。旧历史的证明字段缺失时按普通候选处理。
 
 现有评测入口新增 `k7 fixed|dev|holdout|challenge`。它复用相同的三次采样、语料导入、作用域验证和引用检查，额外采集默认工具投影与显式证据模式的差异。独立挑战集包含共享关键词、近义但事实缺失的负例，以及两个跨语言方向和多片段正例。评测结果统一保存在任务的 `.artifacts/rag-k7-k9/results.json`。此前已封存的源码和评测结果用于复现上轮选择。
+
+## 可选本地重排
+
+默认继续使用等权 RRF。受信任的项目可以设置 `modules.knowledge.rerank: true`，且检索模式必须为 `hybrid`。例如，在配置文件中加入以下设置。
+
+```json
+{
+  "modules": {
+    "knowledge": {
+      "enabled": true,
+      "mode": "hybrid",
+      "rerank": true
+    }
+  }
+}
+```
+
+宿主通过 `PI_KNOWLEDGE_RERANK_MODEL_DIR` 指向预先下载的权重目录。模型为 [multilingual MiniLM v2](https://huggingface.co/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1/tree/1427fd652930e4ba29e8149678df786c240d8825)，Apache-2.0，固定 revision `1427fd652930e4ba29e8149678df786c240d8825`。目录需包含 `config.json`、`model.safetensors`、`sentencepiece.bpe.model`、`special_tokens_map.json`、`tokenizer.json` 和 `tokenizer_config.json`，约 493 MB。Worker 启动时校验六个文件的 SHA-256。`PI_MEMORY_V3_E5_IMAGE` 沿用本地 Memory CPU 镜像配置，默认 `pi-memory-v3-e5:local`。已验证版本为 PyTorch 2.7.1+cpu、Transformers 4.57.6。
+
+重排进程只使用宿主的本地 Docker 命名管道或 Unix socket，在断网容器运行，限制为 2 核、1536 MiB、1 个并行推理，每次至多 12 个候选。模型启动上限 12 秒，推理请求上限 1.5 秒。进程解析失败、超时或繁忙时沿用原 RRF 顺序。服务在重排前按查询范围筛选候选，重排结束后再次检查权限和文档版本。现有引用和充分证据判定保持原规则。
+
+在 `packages/pi-enhanced` 下运行以下命令。三个分组分别记录，留出集结果不用于调参。
+
+```powershell
+node --experimental-strip-types benchmarks/knowledge/retrieval-eval.ts rerank dev
+node --experimental-strip-types benchmarks/knowledge/retrieval-eval.ts rerank holdout
+node --experimental-strip-types benchmarks/knowledge/retrieval-eval.ts rerank docs
+```
+
+`docs` 使用本仓库 README、V4 架构手册和 Memory V3 手册的真实段落，逐题标注对应标题。评测还保留原有带项目、corpus、撤权和版本负例的数据集。
