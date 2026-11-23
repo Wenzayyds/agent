@@ -282,7 +282,8 @@ export function installSessionBudget(
 				!first.retryableUndelivered ||
 				first.response.status !== 503 ||
 				first.response.headers.get("x-should-retry") !== "true"
-			) return first.response;
+			)
+				return first.response;
 			await first.response.body?.cancel();
 			return (await send()).response;
 		};

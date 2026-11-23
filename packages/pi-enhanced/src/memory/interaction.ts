@@ -129,10 +129,11 @@ function registerTaskDreamCommand(pi: ExtensionAPI, getRuntime: RuntimeGetter): 
 					return;
 				}
 				const preview = evidence
-					.map(
-						(record) =>
-							`${record.id} ${redactMemoryOutput(record.content.slice(0, 500), service.scope.rootPath)}`,
-					)
+					.map((record) => {
+						const conflicts = service.taskDreamConflicts(taskId, record);
+						const warning = conflicts.length ? `（同主题冲突待处理：${conflicts.join(", ")}）` : "";
+						return `${record.id} ${redactMemoryOutput(record.content.slice(0, 500), service.scope.rootPath)}${warning}`;
+					})
 					.join("\n");
 				ctx.ui.notify(preview, "info");
 				if (
@@ -186,10 +187,15 @@ function registerGovernanceCommands(pi: ExtensionAPI, getRuntime: RuntimeGetter)
 			if (!id || /\s/u.test(id)) return notifyUsage(ctx, "/enhanced-memory-inspect <id>");
 			try {
 				const { runtime, service } = readyService(getRuntime());
-				const { record, relations } = await service.inspect(id);
+				const { record, relations, modelReview } = await service.inspect(id);
+				const labels = { conflict: "同主题证据冲突", needs_review: "待核验", invalid: "证据已失效" };
+				const review =
+					modelReview && modelReview.state !== "current"
+						? `模型读取已暂停：${labels[modelReview.state]} ${modelReview.evidence.join(", ")}\n`
+						: "";
 				ctx.ui.notify(
 					truncateMemoryOutput(
-						`${formatRecords([record], runtime.scope?.rootPath, COMMAND_RESULT_CHARACTERS)}\n\nrelations=${JSON.stringify(relations)}`,
+						`${review}${formatRecords([record], runtime.scope?.rootPath, COMMAND_RESULT_CHARACTERS)}\n\nrelations=${JSON.stringify(relations)}`,
 						COMMAND_RESULT_CHARACTERS,
 					),
 					"info",

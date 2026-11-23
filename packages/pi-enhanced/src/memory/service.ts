@@ -27,7 +27,6 @@ import {
 	type MemoryKind,
 	type MemoryLifecycle,
 	type MemoryRecord,
-	type MemoryRelation,
 	type MemoryScope,
 	type MemoryStatus,
 	type MemoryType,
@@ -39,6 +38,7 @@ import {
 	parseTaskDreamSource,
 	recordScope,
 	type ScopedSearchQuery,
+	sameMemoryRevision,
 	type VerifiedMemorySnapshot,
 } from "./contracts.ts";
 import { CoreMemoryStore } from "./core-memory.ts";
@@ -96,6 +96,10 @@ export class MemoryService {
 		this.vectorOutbox = provider.vectorOutbox;
 		this.coreMemory = new CoreMemoryStore(scope);
 		this.searchStatus = provider.searchStatus;
+		provider.initializeDreamReview((record) => {
+			if (dreamOrigins(record).length) return this.derivedConflicts(record);
+			return record.scope?.kind === "task" ? this.subjectConflicts(record.scope.id, record) : [];
+		});
 	}
 
 	async saveCandidate(input: NewMemoryInput): Promise<MemoryRecord> {
@@ -106,6 +110,7 @@ export class MemoryService {
 	private async saveCandidateRecord(
 		input: NewMemoryInput,
 		derivation?: { id: string; revision: number; reason: string },
+		validateSource?: () => void,
 	): Promise<MemoryRecord> {
 		this.assertOpen();
 		if (!MEMORY_KINDS.includes(input.kind)) throw validationError("Unsupported memory kind");
@@ -132,24 +137,27 @@ export class MemoryService {
 				Number.MAX_SAFE_INTEGER,
 				Math.max(now, metadata.validFrom ?? 0) + WORKING_TTL_MS,
 			);
-		return this.provider.saveCandidate({
-			derivation,
-			type,
-			scope,
-			data,
-			kind: input.kind,
-			content,
-			normalizedContent: normalizeMemoryText(content),
-			contentHash: scopedContentHash(normalizeMemoryText(content), input.kind, type, scope, data?.taskId),
-			source: {
-				type: input.source.type,
-				ref: sourceRef,
-				...(input.source.commit ? { commit: validateText(input.source.commit, "Source commit", 200) } : {}),
-				observedAt: now,
+		return this.provider.saveCandidate(
+			{
+				derivation,
+				type,
+				scope,
+				data,
+				kind: input.kind,
+				content,
+				normalizedContent: normalizeMemoryText(content),
+				contentHash: scopedContentHash(normalizeMemoryText(content), input.kind, type, scope, data?.taskId),
+				source: {
+					type: input.source.type,
+					ref: sourceRef,
+					...(input.source.commit ? { commit: validateText(input.source.commit, "Source commit", 200) } : {}),
+					observedAt: now,
+				},
+				now,
+				metadata,
 			},
-			now,
-			metadata,
-		});
+			validateSource,
+		);
 	}
 
 	async search(query: ScopedSearchQuery): Promise<MemoryRecord[]> {
@@ -214,7 +222,7 @@ export class MemoryService {
 		const isCurrent = (record: MemoryRecord) =>
 			matchesMemoryScope(record, query.visibility) &&
 			matchesMemoryQuery(record, providerQuery) &&
-			(record.status !== "verified" || this.hasCurrentFileEvidence(record));
+			(record.status !== "verified" || this.isTrustedForModel(record, query.visibility?.taskId));
 		const records = await this.provider.search(providerQuery);
 		const current = records.filter(isCurrent);
 		const select = (rows: MemoryRecord[]) => {
@@ -263,7 +271,7 @@ export class MemoryService {
 
 	async getVerified(id: string): Promise<MemoryRecord | null> {
 		const record = await this.get(id);
-		return record?.status === "verified" && this.hasCurrentFileEvidence(record) ? record : null;
+		return record?.status === "verified" && this.isTrustedForModel(record) ? record : null;
 	}
 
 	indexCandidates(after: string, limit: number): MemoryRecord[] {
@@ -272,7 +280,7 @@ export class MemoryService {
 	}
 
 	hasValidEvidence(record: MemoryRecord): boolean {
-		return record.status === "verified" && this.hasCurrentFileEvidence(record);
+		return record.status === "verified" && this.isTrustedForModel(record);
 	}
 
 	async getVisible(id: string, visibility?: MemoryVisibility): Promise<MemoryRecord | null> {
@@ -281,10 +289,19 @@ export class MemoryService {
 
 	getVisibleNow(id: string, visibility?: MemoryVisibility): MemoryRecord | null {
 		this.assertOpen();
-		const current = this.provider.getCurrent(validateId(id));
-		return current && isVisibleVerifiedMemory(current, visibility) && this.hasCurrentFileEvidence(current)
-			? current
-			: null;
+		return this.provider.withReadSnapshot(() => {
+			try {
+				const current = this.provider.getCurrent(validateId(id));
+				return current &&
+					isVisibleVerifiedMemory(current, visibility) &&
+					this.isTrustedForModel(current, visibility?.taskId)
+					? current
+					: null;
+			} catch (error) {
+				if (error instanceof MemoryError && error.code === "MEMORY_REVIEW_REQUIRED") return null;
+				throw error;
+			}
+		});
 	}
 
 	async listVerifiedSnapshot(
@@ -297,7 +314,7 @@ export class MemoryService {
 		}
 		const records = await this.provider.listVerified(limit + 1, query);
 		return {
-			records: records.slice(0, limit).filter((record) => this.hasCurrentFileEvidence(record)),
+			records: records.slice(0, limit).filter((record) => this.isTrustedForModel(record, query?.visibility?.taskId)),
 			truncated: records.length > limit,
 		};
 	}
@@ -389,13 +406,7 @@ export class MemoryService {
 	async reviewTaskDream(taskId: string): Promise<readonly MemoryRecord[]> {
 		this.assertOpen();
 		validateId(taskId);
-		const rows = await this.provider.list({
-			limit: 50,
-			types: ["semantic"],
-			statuses: ["verified"],
-			visibility: { taskId },
-		});
-		const reminders = rows.filter((record) => dreamOrigins(record).some((origin) => origin.taskId === taskId));
+		const reminders = this.provider.approvedDreams(taskId);
 		return Promise.all(reminders.map((record) => this.reflectFileEvidence(record.id, record.revision)));
 	}
 
@@ -407,23 +418,6 @@ export class MemoryService {
 		const source = this.provider.getCurrent(validateId(sourceId));
 		if (!source || source.revision !== sourceRevision || !this.isDreamEvidence(source, taskId))
 			throw validationError("Task Dream requires current, verified file evidence from the same task");
-		if (source.subjectKey) {
-			const records = await this.provider.list({
-				limit: 50,
-				types: ["episodic"],
-				statuses: ["verified"],
-				visibility: { taskId },
-			});
-			if (
-				records.some(
-					(other) =>
-						other.subjectKey === source.subjectKey &&
-						this.isDreamEvidence(other, taskId) &&
-						normalizeMemoryText(other.content) !== normalizeMemoryText(source.content),
-				)
-			)
-				throw new MemoryError("MEMORY_CONTENT_CONFLICT", "Current file evidence disagrees on this task subject");
-		}
 		return this.saveCandidateRecord(
 			{
 				kind: "experience",
@@ -442,7 +436,82 @@ export class MemoryService {
 				},
 			},
 			{ id: sourceId, revision: sourceRevision, reason: "Extractive task memory review" },
+			() => {
+				const live = this.provider.getCurrent(sourceId);
+				if (!live || live.revision !== sourceRevision || !this.isDreamEvidence(live, taskId))
+					throw revisionConflict();
+			},
 		);
+	}
+
+	taskDreamConflicts(taskId: string, source: MemoryRecord): readonly string[] {
+		if (source.scope?.kind !== "task" || source.projectId !== this.scope.projectId || source.scope.id !== taskId)
+			throw validationError("Task Dream scope changed");
+		return this.provider.withReadSnapshot(() => this.subjectConflicts(taskId, source, true));
+	}
+
+	private subjectConflicts(taskId: string, source: MemoryRecord, reviewingDream = false): readonly string[] {
+		const conflicts: string[] = [];
+		for (const other of this.provider.taskSubjectRecords(taskId, source.subjectKey)) {
+			if (other.id === source.id || dreamOrigins(other).length || !isVisibleVerifiedMemory(other, { taskId }))
+				continue;
+			if (source.scope?.kind === "project" && other.scope?.kind === "project") continue;
+			if (normalizeMemoryText(other.content) === normalizeMemoryText(source.content)) continue;
+			// A missing optional topic is ambiguous for a Dream. Ordinary unclassified facts do not
+			// establish a shared subject unless one is being used as Dream evidence.
+			if (
+				!reviewingDream &&
+				(!source.subjectKey || !other.subjectKey) &&
+				!this.provider.isDreamSource(source.id) &&
+				!this.provider.isDreamSource(other.id)
+			)
+				continue;
+			if (this.fileProofCurrent(other, true)) conflicts.push(`${other.id}@${other.revision}`);
+		}
+		return conflicts;
+	}
+
+	private modelReview(
+		record: MemoryRecord,
+		taskId?: string,
+	): { state: "current" | "conflict" | "needs_review" | "invalid"; evidence: readonly string[] } {
+		return this.provider.withReadSnapshot(() => {
+			try {
+				const current = this.provider.getCurrent(record.id);
+				if (
+					!current ||
+					!sameMemoryRevision(record, current) ||
+					current.status !== "verified" ||
+					!this.hasCurrentDreamEvidence(current) ||
+					!this.fileProofCurrent(current, true)
+				)
+					return { state: "invalid", evidence: [] };
+				let evidence: readonly string[] = [];
+				if (dreamOrigins(record).length) evidence = this.derivedConflicts(record);
+				else if (record.scope?.kind === "task") evidence = this.subjectConflicts(record.scope.id, record);
+				else if (record.scope?.kind === "project") {
+					if (taskId) evidence = this.subjectConflicts(taskId, record);
+					else this.provider.checkSubjectCoverage(undefined, record.subjectKey);
+				}
+				return { state: evidence.length ? "conflict" : "current", evidence };
+			} catch (error) {
+				if (
+					error instanceof MemoryError &&
+					(error.code === "MEMORY_REVIEW_REQUIRED" || error.code === "MEMORY_VALIDATION_ERROR")
+				)
+					return { state: "needs_review", evidence: [] };
+				throw error;
+			}
+		});
+	}
+
+	private derivedConflicts(record: MemoryRecord): readonly string[] {
+		return dreamOrigins(record).flatMap((origin) => {
+			const source = this.provider.getCurrent(origin.memoryId);
+			if (!source || source.revision !== origin.memoryRevision)
+				throw new MemoryError("MEMORY_REVIEW_REQUIRED", "待核验：找不到派生记忆所依据的来源版本");
+			return this.taskDreamConflicts(origin.taskId, source);
+		});
 	}
 
 	private isDreamEvidence(record: MemoryRecord, taskId: string): boolean {
@@ -458,7 +527,7 @@ export class MemoryService {
 			isVisibleVerifiedMemory(record, { taskId }) &&
 			evidence.length > 0 &&
 			evidence.every(({ type }) => type === "file_observed") &&
-			this.hasCurrentFileEvidence(record)
+			this.fileProofCurrent(record)
 		);
 	}
 
@@ -555,10 +624,19 @@ export class MemoryService {
 			throw validationError("User confirmation failed");
 		}
 		if (!confirmed) throw validationError("User did not confirm the memory");
-		if (!this.hasCurrentDreamEvidence(current))
-			throw validationError("Task Dream source changed or is no longer available");
+
 		return this.provider.setStatus({
 			id: memoryId,
+			validateSource: () => {
+				if (!this.hasCurrentDreamEvidence(current))
+					throw validationError("Task Dream source changed or is no longer available");
+				if (!dreamOrigins(current).length && current.scope?.kind === "task") {
+					const conflicts = this.subjectConflicts(current.scope.id, current);
+					if (conflicts.length)
+						throw new MemoryError("MEMORY_CONTENT_CONFLICT", `待核验：同主题证据 ${conflicts.join(", ")}`);
+				} else if (current.scope?.kind === "project")
+					this.provider.checkSubjectCoverage(undefined, current.subjectKey);
+			},
 			status: "verified",
 			verification: {
 				id: randomUUID(),
@@ -615,6 +693,7 @@ export class MemoryService {
 			if (record.status !== "verified") throw validationError("Review requires an approved Task Dream memory");
 			if (
 				this.hasCurrentDreamEvidence(record) &&
+				!this.derivedConflicts(record).length &&
 				(record.validUntil === undefined || record.validUntil > Date.now())
 			)
 				return record;
@@ -655,10 +734,17 @@ export class MemoryService {
 	}
 
 	/** Suppress obsolete file-only claims at retrieval. Governance still owns status transitions. */
-	private hasCurrentFileEvidence(record: MemoryRecord): boolean {
-		if (!this.hasCurrentDreamEvidence(record)) return false;
+	private isTrustedForModel(record: MemoryRecord, taskId?: string): boolean {
+		return this.modelReview(record, taskId).state === "current";
+	}
+
+	private fileProofCurrent(record: MemoryRecord, strict = false): boolean {
 		const proof = record.verifications.filter((item) => item.verifiedContentRevision === record.contentRevision);
-		if (!proof.length || proof.some((item) => item.type !== "file_observed")) return true;
+		if (!proof.length || !record.sources.length) {
+			if (strict) throw new MemoryError("MEMORY_REVIEW_REQUIRED", "待核验：缺少当前版本的验证证据");
+			return false;
+		}
+		if (proof.some((item) => item.type !== "file_observed")) return true;
 		const checked = new Set<string>();
 		return [...proof]
 			.sort((left, right) => right.verifiedAt - left.verifiedAt)
@@ -667,7 +753,12 @@ export class MemoryService {
 				checked.add(item.evidenceRef);
 				try {
 					return this.observeFileProof(item).unchanged;
-				} catch {
+				} catch (error) {
+					if (
+						strict &&
+						!(error instanceof MemoryError && (error.cause as NodeJS.ErrnoException)?.code === "ENOENT")
+					)
+						throw error;
 					return false;
 				}
 			});
@@ -699,7 +790,7 @@ export class MemoryService {
 			};
 		} catch (error) {
 			if (error instanceof MemoryError) throw error;
-			throw validationError("File evidence could not be read");
+			throw new MemoryError("MEMORY_VALIDATION_ERROR", "File evidence could not be read", { cause: error });
 		}
 	}
 
@@ -769,10 +860,14 @@ export class MemoryService {
 		await this.provider.recordUsage(validateId(id), Date.now());
 	}
 
-	async inspect(id: string): Promise<{ record: MemoryRecord; relations: readonly MemoryRelation[] }> {
-		this.assertOpen();
+	async inspect(id: string) {
 		const memoryId = validateId(id);
-		return { record: await this.require(memoryId), relations: await this.provider.listRelations(memoryId) };
+		const record = await this.require(memoryId);
+		return {
+			record,
+			relations: await this.provider.listRelations(memoryId),
+			...(record.status === "verified" ? { modelReview: this.modelReview(record) } : {}),
+		};
 	}
 
 	async doctor(config: MemoryGovernanceConfig): Promise<MemoryDoctorReport> {
@@ -791,7 +886,7 @@ export class MemoryService {
 		) as Record<CoreMemoryName, number>;
 		const plan = planMemoryGovernance({ projectId: this.scope.projectId, records, coreBytes, config });
 		const invalidEvidenceIds = records
-			.filter((record) => record.status === "verified" && !this.hasCurrentFileEvidence(record))
+			.filter((record) => record.status === "verified" && !this.isTrustedForModel(record))
 			.map(({ id }) => id);
 		Object.assign(plan.report, {
 			invalidEvidenceIds,
@@ -846,7 +941,13 @@ export class MemoryService {
 }
 
 export async function openMemoryService(scope: ProjectScope): Promise<MemoryService> {
-	return new MemoryService(scope, await openLocalMemoryProvider(scope));
+	const provider = await openLocalMemoryProvider(scope);
+	try {
+		return new MemoryService(scope, provider);
+	} catch (error) {
+		await provider.close();
+		throw error;
+	}
 }
 
 export function normalizeMemoryText(content: string): string {

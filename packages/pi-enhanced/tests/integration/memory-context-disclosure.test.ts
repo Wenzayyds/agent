@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -1411,3 +1412,63 @@ it("E16 leaves source, mutation and non-Chat-Completions results intact and reje
 	expect(deduplicateRuntimeReads({ ...payload, messages: [...messages, ...pair("read-2", "read")] })).toBeUndefined();
 	expect(deduplicateRuntimeReads({ ...payload, messages: messages.slice(0, -1) })).toBeUndefined();
 });
+
+it("withholds both sides of a Dream conflict from injection, Memory tools and HTTP history", async () => {
+	await withFixture(async (f) =>
+		withMemory(f, async (memory) => {
+			const taskId = await activeTask(f);
+			const query = "shipment temperature";
+			const cold = "dream_cold_rule_12b4",
+				warm = "dream_warm_rule_e8a1",
+				control = "dream_dispatch_control_72a1";
+			async function verify(token: string, subjectKey: string) {
+				const path = token + ".txt",
+					content = query + " " + token;
+				writeFileSync(join(f.root, path), content);
+				const record = await memory.saveCandidate({
+					scope: { kind: "task", id: taskId },
+					type: "episodic",
+					kind: "experience",
+					content,
+					metadata: { subjectKey },
+					source: { type: "file", ref: path },
+				});
+				return memory.verifyFileFact(record.id, { relativePath: path, exactExcerpt: content }, record.revision);
+			}
+			const current = await verify(cold, "temperature");
+			const draft = await memory.saveTaskDreamCandidate(taskId, 8, current.id, current.revision);
+			const approve = {
+				hasUI: true,
+				ui: { confirm: async () => true },
+				sessionManager: { getSessionId: () => "qa-owner" },
+			} as never;
+			await memory.confirmByUser(draft.id, draft.revision, approve);
+			await verify(control, "manifest");
+			const before = await f.next("Ok.", query);
+			expect(markerBytes(before, cold)).toBeGreaterThan(0);
+			expect(markerBytes(before, draft.id)).toBeGreaterThan(0);
+			recordWire("dream-control-before", before, { cold, warm, control, derived: draft.id });
+			const other = await verify(warm, "temperature");
+			async function capture(id: string) {
+				const wire = [...(await f.next("Ok.", query)), ...(await memoryLookup(f, query, "Lookup complete."))];
+				recordWire(id, wire, { cold, warm, control, derived: draft.id });
+				expect(markerBytes(wire, cold)).toBe(0);
+				expect(markerBytes(wire, warm)).toBe(0);
+				expect(markerBytes(wire, draft.id)).toBe(0);
+				return wire;
+			}
+			expect(markerBytes(await capture("dream-complete-conflict"), control)).toBeGreaterThan(0);
+			const db = new DatabaseSync(memory.scope.databasePath);
+			try {
+				db.prepare("DELETE FROM memory_metadata WHERE memory_id=?").run(other.id);
+			} finally {
+				db.close();
+			}
+			const stale = (await memory.inspect(draft.id)).record;
+			await expect(memory.confirmByUser(draft.id, stale.revision, approve)).rejects.toMatchObject({
+				code: "MEMORY_REVIEW_REQUIRED",
+			});
+			expect(markerBytes(await capture("dream-incomplete-conflict"), control)).toBeGreaterThan(0);
+		}),
+	);
+}, 90000);
