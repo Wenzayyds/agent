@@ -192,7 +192,7 @@ export function recoveryPreflight(
 	if (unknown.size > 0) recommendations.push("先人工核对结果不确定的工具调用，再决定失败、完成或重新执行。");
 	if (workspaceChanged) recommendations.push("工作区有限指纹已变化，需要重新检查相关文件和 Git 状态。");
 	if (limited) recommendations.push("工作区检查未覆盖全部变更，请先核对未完成内容校验的文件。");
-	const requiresReconciliation = unknown.size > 0 || workspaceChanged || limited || !bindingMatches || !consistencyValid;
+	const canRecommendSteps = unknown.size === 0 && !workspaceChanged && !limited && consistencyValid;
 	const safeContinueStepIds = snapshot.steps
 		.filter(
 			(step) =>
@@ -223,14 +223,11 @@ export function recoveryPreflight(
 		pendingStepIds: snapshot.steps
 			.filter((step) => ["pending", "running", "blocked", "verifying", "needs_reconciliation"].includes(step.status))
 			.map(({ stepId }) => stepId),
-		requiresReconciliation,
+		requiresReconciliation: !canRecommendSteps || !bindingMatches,
 		consistencyValid,
 		bindingMatches,
 		driftReasons,
-		safeContinueStepIds:
-			snapshot.task.status !== "budget_exhausted" && !requiresReconciliation
-				? safeContinueStepIds
-				: [],
+		safeContinueStepIds: snapshot.task.status !== "budget_exhausted" && canRecommendSteps ? safeContinueStepIds : [],
 		automaticReplayAllowed: false,
 		recommendations,
 	};
