@@ -40,21 +40,23 @@ export function observeWorkspace(rootPath: string, controlledFiles: readonly str
 		gitStatusDigest = createHash("sha256").update(status).digest("hex");
 	} catch {}
 	const candidates = new Set<string>([join(".git", "HEAD"), "package.json", "pyproject.toml", ...controlledFiles]);
+	let gitDiffComplete = false;
 	try {
-		const changed = execFileSync("git", ["diff", "--name-only", "HEAD", "--"], {
+		const changed = execFileSync("git", ["diff", "--name-only", "--relative", "-z", "HEAD", "--"], {
 			cwd: realRoot,
 			encoding: "utf8",
 			timeout: 1_500,
 			windowsHide: true,
 			stdio: ["ignore", "pipe", "ignore"],
-		}).trim();
-		for (const item of changed ? changed.split(/\r?\n/u) : []) candidates.add(item);
+		});
+		for (const item of changed.split("\0")) if (item) candidates.add(item);
+		gitDiffComplete = true;
 	} catch {}
 	const trackedFiles: Array<WorkspaceObservation["trackedFiles"][number]> = [];
 	let totalBytes = 0;
-	let observationLimited = candidates.size > MAX_FILES;
+	let observationLimited = candidates.size > MAX_FILES || (gitHead !== undefined && (!gitDiffComplete || !gitStatusDigest));
 	for (const requested of [...candidates].sort().slice(0, MAX_FILES)) {
-		const normalized = requested.replaceAll("\\", "/");
+		const normalized = process.platform === "win32" ? requested.replaceAll("\\", "/") : requested;
 		if (!normalized || isAbsolute(normalized) || normalized.split("/").includes("..")) {
 			observationLimited = true;
 			continue;
@@ -181,12 +183,16 @@ export function recoveryPreflight(
 		if (checkpoint.taskRevision !== snapshot.task.revision) driftReasons.push("task-revision-changed");
 	}
 	const bindingMatches = provider.hasSessionBinding(taskId, sessionId, branchLeafId);
+	const limited = currentWorkspace.observationLimited || checkpoint?.workspaceObservation.observationLimited === true;
+	if (limited) driftReasons.push("workspace-observation-limited");
 	if (!bindingMatches) driftReasons.push("session-binding-missing");
 	const consistencyValid = checkpointIntegrity !== "invalid" && provider.verifyConsistency(taskId);
 	if (!consistencyValid) driftReasons.push("event-snapshot-inconsistent");
 	const recommendations = ["恢复仅生成计划建议，不会自动重放任何工具。"];
 	if (unknown.size > 0) recommendations.push("先人工核对结果不确定的工具调用，再决定失败、完成或重新执行。");
 	if (workspaceChanged) recommendations.push("工作区有限指纹已变化，需要重新检查相关文件和 Git 状态。");
+	if (limited) recommendations.push("工作区检查未覆盖全部变更，请先核对未完成内容校验的文件。");
+	const requiresReconciliation = unknown.size > 0 || workspaceChanged || limited || !bindingMatches || !consistencyValid;
 	const safeContinueStepIds = snapshot.steps
 		.filter(
 			(step) =>
@@ -217,12 +223,12 @@ export function recoveryPreflight(
 		pendingStepIds: snapshot.steps
 			.filter((step) => ["pending", "running", "blocked", "verifying", "needs_reconciliation"].includes(step.status))
 			.map(({ stepId }) => stepId),
-		requiresReconciliation: unknown.size > 0 || workspaceChanged || !bindingMatches || !consistencyValid,
+		requiresReconciliation,
 		consistencyValid,
 		bindingMatches,
 		driftReasons,
 		safeContinueStepIds:
-			snapshot.task.status !== "budget_exhausted" && consistencyValid && !workspaceChanged && unknown.size === 0
+			snapshot.task.status !== "budget_exhausted" && !requiresReconciliation
 				? safeContinueStepIds
 				: [],
 		automaticReplayAllowed: false,

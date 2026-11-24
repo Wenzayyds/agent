@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,6 +76,36 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 		const preflight = recoveryPreflight(service.provider, created.task.taskId, "s", null, ["controlled.txt", "missing.txt"]);
 		expect(preflight.workspaceChanged).toBe(true);
 		expect(preflight.driftReasons).toContain("controlled-files-changed");
+	});
+
+	it("detects content drift in an already modified Unicode Git path", () => {
+		const { service, root } = fixture();
+		const name = "部署 参数.txt";
+		const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
+		git("init", "-q");
+		git("config", "core.quotePath", "true");
+		writeFileSync(join(root, name), "initial");
+		git("add", "--", name);
+		git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "baseline");
+		writeFileSync(join(root, name), "first");
+		const task = service.create("resume", [{ title: "test", expectedOutcome: "pass" }], "s", null);
+		createCheckpoint(service.provider, task, "s", null);
+		expect(recoveryPreflight(service.provider, task.task.taskId, "s", null).requiresReconciliation).toBe(false);
+		writeFileSync(join(root, name), "other");
+		const result = recoveryPreflight(service.provider, task.task.taskId, "s", null);
+		expect(result.driftReasons).toContain("controlled-files-changed");
+		expect(result.safeContinueStepIds).toEqual([]);
+	});
+
+	it("withholds continuation when content exceeds the fingerprint limit", () => {
+		const { service, root } = fixture();
+		writeFileSync(join(root, "large.txt"), Buffer.alloc(256 * 1024 + 1));
+		const task = service.create("resume", [{ title: "test", expectedOutcome: "pass" }], "s", null);
+		createCheckpoint(service.provider, task, "s", null, ["large.txt"]);
+		const result = recoveryPreflight(service.provider, task.task.taskId, "s", null, ["large.txt"]);
+		expect(result.requiresReconciliation).toBe(true);
+		expect(result.safeContinueStepIds).toEqual([]);
+		expect(result.driftReasons).toContain("workspace-observation-limited");
 	});
 
 	it("isolates equal directory names by canonical project identity and rejects a newer schema", () => {
