@@ -30,7 +30,20 @@ jobs:
       - run: python -m pip install numpy pytest
       - run: node --version && npm --version && python --version && python -c "import numpy; print(numpy.__version__)"
       - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-metadata.json
-      - run: npm run hydrate:model-data
+      - &hydrate_catalog
+        name: Hydrate the pinned model catalog
+        shell: bash
+        env:
+          # Upstream Pi v1.6.0 catalog, compatible with this branch's provider tests.
+          CATALOG_REVISION: sha256-48c17cd79668cd3c3ff43626fddbc1318f5473ebf9a8bf250c5dc8d9cfbc22f5
+        run: |
+          set -euo pipefail
+          catalog=$(mktemp)
+          trap 'rm -f "$catalog"' EXIT
+          curl --fail --silent --show-error --location --retry 2 \
+            "https://pi.dev/api/models/revisions/$CATALOG_REVISION?types=chat,image,classifier" -o "$catalog"
+          echo "${CATALOG_REVISION#sha256-}  $catalog" | sha256sum --check
+          node packages/ai/scripts/hydrate-model-catalog.ts "$catalog"
       - run: npm run build:offline
       - run: npm run check --workspace=@wz-agent/pi-enhanced
       - run: npm run check:evaluation --workspace=@wz-agent/pi-enhanced
@@ -62,7 +75,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run hydrate:model-data
+      - *hydrate_catalog
       - run: npm run build:offline
       - run: node --experimental-strip-types packages/pi-enhanced/scripts/ci/ci-metadata.ts packages/pi-enhanced/ci-docker-metadata.json --docker
       - run: docker pull node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
