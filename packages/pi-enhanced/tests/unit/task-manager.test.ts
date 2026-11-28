@@ -95,6 +95,12 @@ describe("P4 Task plan, state, evidence, and recovery", () => {
 		const result = recoveryPreflight(service.provider, task.task.taskId, "s", null);
 		expect(result.driftReasons).toContain("controlled-files-changed");
 		expect(result.safeContinueStepIds).toEqual([]);
+		createCheckpoint(service.provider, task, "s", null);
+		writeFileSync(join(root, "new_module.py"), "value = 1\n");
+		const added = recoveryPreflight(service.provider, task.task.taskId, "s", null);
+		expect(added.driftReasons).toContain("git-worktree-changed");
+		expect(added.requiresReconciliation).toBe(true);
+		expect(added.safeContinueStepIds).toEqual([]);
 	});
 
 	it("withholds continuation when content exceeds the fingerprint limit", () => {

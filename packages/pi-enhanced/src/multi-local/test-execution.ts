@@ -54,7 +54,6 @@ export function createTestExecution(sandbox: SandboxConfig, policy: PytestConfig
 					});
 					recorded = true;
 				},
-				{ recordCompletedTests: true },
 			);
 			if (!recorded) throw new Error("MA1_RECEIPT_MISSING");
 		},

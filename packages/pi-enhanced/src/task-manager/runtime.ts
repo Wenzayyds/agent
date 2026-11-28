@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionContext, ToolExecutionEndEvent, ToolExecutionStartEvent } from "@earendil-works/pi-coding-agent";
 import type { ProjectScope } from "../memory/contracts.ts";
-import type { PytestReceipt, TaskPytestSource } from "../sandbox/task-evidence.ts";
+import type { PytestAttempt, TaskPytestSource } from "../sandbox/task-evidence.ts";
 import type { TaskManagerConfig } from "./config.ts";
 import type { ScopedTaskReader, ScopedTaskSummary } from "./contracts.ts";
 import { TaskError } from "./errors.ts";
@@ -102,7 +102,7 @@ export class TaskRuntime {
 	}
 
 	/** Called by the host Sandbox at tool entry, before it creates the Docker snapshot. */
-	openPytestAttempt(workspace: string, toolCallId: string): ((receipt: PytestReceipt) => void) | undefined {
+	openPytestAttempt(workspace: string, toolCallId: string): PytestAttempt | undefined {
 		const service = this.service;
 		const binding = service?.activeBinding;
 		if (!service || !binding || this.closed || workspace !== this.scope?.rootPath) return;
@@ -126,12 +126,12 @@ export class TaskRuntime {
 			attempt.state !== "started"
 		)
 			return;
-		return (receipt) => {
+		const record: PytestAttempt["record"] = (receipt, targets) => {
 			const current = service.activeBinding;
 			if (this.closed || current?.taskId !== taskId || current.stepId !== stepId || current.sessionId !== sessionId)
 				return;
 			const verified =
-				attempt.inputDigest === digestToolInput(receipt.usedDefaultTargets ? {} : { targets: [receipt.target] }) &&
+				attempt.inputDigest === digestToolInput(receipt.usedDefaultTargets ? {} : { targets }) &&
 				receipt.status === "passed" &&
 				receipt.exitCode === 0 &&
 				(receipt.completedPasses ?? 0) > 0 &&
@@ -152,6 +152,7 @@ export class TaskRuntime {
 				resultDigest: receipt.patchHash,
 			});
 		};
+		return { target: rule.target, record };
 	}
 
 	onToolEnd(event: ToolExecutionEndEvent, ctx: ExtensionContext): void {

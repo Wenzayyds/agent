@@ -4,7 +4,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { atomicPrivateJson } from "../../src/sandbox/audit.ts";
 import { assertSandboxWorkspaceIdentity } from "../../src/sandbox/config.ts";
 import { createSandboxExtension } from "../../src/sandbox/extension.ts";
-import { createPytestExecutor, isPytestConfig, pytestFileVersions, type PytestConfig, type PytestEvidence } from "../../src/sandbox/pytest.ts";
+import { createPytestExecutor, isPytestConfig, MAX_PYTEST_TARGETS, pytestFileVersions, type PytestConfig, type PytestEvidence } from "../../src/sandbox/pytest.ts";
 import { digest } from "./evaluation-identity.ts";
 import { runSweGit as git } from "./swe-git.ts";
 import { readSwePatch, safePatchPath } from "./swe-patch.ts";
@@ -47,7 +47,7 @@ export function assertSwePytestWorkspace(policy: SwePytestPolicy, task: SweTask 
 
 const evidenceName = "swe-local-verification.json";
 type Verification = {
-	status: "passed" | "failed" | "unavailable";
+	status: "passed" | "failed" | "skipped" | "unavailable";
 	reason: string;
 	patchSha256: string | null;
 	targets: string[];
@@ -56,7 +56,7 @@ type Verification = {
 	failed: number | null;
 };
 
-export function sweVerificationStatus(root: string, patchSha256: string | null): Verification {
+export function sweVerificationStatus(root: string, patchSha256: string | null): Verification & { checks?: Verification[] } {
 	const unavailable: Verification = {
 		status: "unavailable", reason: "not_run", patchSha256, targets: [], exitCode: null, passed: null, failed: null,
 	};
@@ -66,11 +66,18 @@ export function sweVerificationStatus(root: string, patchSha256: string | null):
 		if (patchSha256 === null) return { ...unavailable, reason: current.at(-1)?.status === "unavailable" ? current.at(-1)!.reason : "no_exported_patch" };
 		const tested = new Map<string, Verification>();
 		for (const attempt of current) {
-			if (attempt.status !== "unavailable") tested.set(JSON.stringify([...attempt.targets].sort()), attempt);
+			if (attempt.status === "unavailable") continue;
+			const key = JSON.stringify([...attempt.targets].sort());
+			// Older executors reported a zero exit with no passing tests as a pass.
+			tested.set(key, attempt.status === "passed" && attempt.passed === 0
+				? { ...attempt, status: "unavailable", reason: "no_completed_passes" } : attempt);
 		}
-		return [...tested.values()].find((attempt) => attempt.status === "failed") ??
-			[...tested.values()].at(-1) ?? current.at(-1) ??
+		const checks = [...tested.values()];
+		const summary = checks.find((attempt) => attempt.status === "failed") ??
+			checks.find((attempt) => attempt.status !== "passed") ?? checks.at(-1) ?? current.at(-1) ??
 			{ ...unavailable, reason: attempts.length ? "patch_changed_or_unavailable" : "not_run" };
+		// Selectors can overlap. Preserve each result without adding its counts twice.
+		return checks.length > 1 ? { ...summary, checks } : summary;
 	} catch {
 		return unavailable;
 	}
@@ -80,6 +87,8 @@ export function sweVerificationStatus(root: string, patchSha256: string | null):
 export function createSweTestFeedback(policy: SwePytestPolicy, configSource?: Parameters<typeof createSandboxExtension>[0]) {
 	return createSandboxExtension(configSource, undefined, undefined, false, (pi, config, isActive) => {
 		const execute = createPytestExecutor(config, policy, true);
+		const smokeOnlyTarget = policy.instanceId === "psf__requests-1142"
+			? "test_requests.py::RequestsTestCase::test_basic_building" : undefined;
 		const attempts: Verification[] = [];
 		let unavailable = false;
 		let busy = false;
@@ -89,7 +98,7 @@ export function createSweTestFeedback(policy: SwePytestPolicy, configSource?: Pa
 			description: "Run approved public repository tests in an isolated snapshot. Select related files or file.py::test_name. After a source edit, use test feedback to revise the patch and rerun if budget permits. Stop with the validation status if tests are unavailable. Approved targets: " +
 				policy.tests.join(", ") + ". Policy SHA-256 " + digest(policy) + ".",
 			parameters: Type.Object({
-				targets: Type.Array(Type.String({ maxLength: 240 }), { minItems: 1, maxItems: 16 }),
+				targets: Type.Array(Type.String({ maxLength: 240 }), { minItems: 1, maxItems: MAX_PYTEST_TARGETS }),
 			}, { additionalProperties: false }),
 			async execute(_id, { targets }, signal) {
 				const feedback = (value: object, isError = false) => ({
@@ -117,12 +126,13 @@ export function createSweTestFeedback(policy: SwePytestPolicy, configSource?: Pa
 						return feedback({ status: "unavailable", reason: "sandbox_error", output: result.output }, true);
 					let status: Verification["status"] = "unavailable";
 					let reason: string = result.status;
-					if (snapshot && (result.status === "passed" || result.status === "failed")) {
+					if (snapshot && (result.status === "passed" || result.status === "failed" || result.status === "skipped")) {
 						const live = pytestFileVersions(config, policy);
 						if (changesFitSnapshot() && readSwePatch(config.workspace) === patch &&
 							[...snapshot.files].every(([path, hash]) => live.get(path) === hash)) {
 							status = result.status;
-							reason = "pytest";
+							reason = status === "passed" && targets.every((target) => target === smokeOnlyTarget)
+								? "request_construction_only_issue_unverified" : "pytest";
 						} else {
 							reason = "patch_changed_during_tests";
 						}

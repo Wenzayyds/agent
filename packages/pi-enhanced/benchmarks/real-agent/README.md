@@ -8,6 +8,19 @@
 
 三个入口保持原路径，沿用现有命令行参数和结果字段。`npm run evaluate:swe --workspace=@wz-agent/pi-enhanced -- ...` 选择 SWE profile；仍须提供原实例、镜像、批次和输出参数。真实执行还须有当前 Commit 的 CI 证据和新的一次性宿主授权。
 
+## Requests-1142 的行为验证
+
+冻结批次的 `test_basic_building` 只检查请求能否构造。它在未修复的基线上也会通过，工具会标注 `request_construction_only_issue_unverified`。独立复核时，令 `CANDIDATE` 指向已应用候选补丁的 Requests 检出目录，在本项目根目录运行下面的命令。检查只构造一个空 GET，发现 `Content-Length` 即以非零状态退出。官方成绩仍由 SWE-bench Harness 给出。
+
+```bash
+docker run --rm -i --pull never --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --user 65534:65534 --cpus 0.5 --memory 128m --pids-limit 32 \
+  --mount "type=bind,src=$CANDIDATE/requests,dst=/testbed/requests,readonly" -w /testbed \
+  --entrypoint /opt/miniconda3/envs/testbed/bin/python \
+  swebench/sweb.eval.x86_64.psf_1776_requests-1142@sha256:b2733e57feb4cfaeac24ab5ec496d4cb89a37db53bd0ca72eaededdb2ce19d1c \
+  -B - < packages/pi-enhanced/benchmarks/real-agent/check-requests-1142.py
+```
+
 ## 五题 Flash OFF
 
 `swe-flash-off-v1` 固定按 `13033 → 13453 → 14365 → 14369 → 14508` 运行 Astropy 的五道 Verified 题。每题使用新的工作区和预算账本，最多 20 次请求、200,000 Token、600 秒、USD 0.08。批次按每题完整额度预留，总上限 USD 0.40，并发为 1。预览时只传本地镜像路径，题号由配置决定。

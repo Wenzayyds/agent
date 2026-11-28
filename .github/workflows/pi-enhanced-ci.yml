@@ -74,7 +74,7 @@ jobs:
           docker build --pull -f scripts/pytest.Dockerfile -t pi-enhanced-pytest:ci scripts
           export PI_TEST_PYTEST_IMAGE="$(docker image inspect pi-enhanced-pytest:ci --format '{{.Id}}')"
           [[ "$PI_TEST_PYTEST_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
-          npm exec vitest -- --run tests/e2e/pytest-tool.test.ts --maxWorkers=1 --reporter=default
+          npm exec vitest -- --run tests/e2e/pytest-tool.test.ts tests/e2e/knowledge-task-resume.test.ts --maxWorkers=1 --reporter=default
       - name: Prepare pinned public Astropy Git mirror
         shell: bash
         run: |

@@ -51,6 +51,7 @@ it.runIf(Boolean(image))("B4 Stub Model, persisted pause/resume, Knowledge, Memo
 	}));
 	writeFileSync(join(project, "calc.py"), fileSource);
 	writeFileSync(join(project, testFile), suiteSource);
+	writeFileSync(join(project, "test_other.py"), "def test_other():\n    assert 2 + 2 == 4\n");
 	const document = join(root, "calculator.md");
 	writeFileSync(document, `# Calculator contract\n\n${contract}\n`);
 	const hosts: Awaited<ReturnType<typeof createHarness>>[] = [];
@@ -74,7 +75,7 @@ it.runIf(Boolean(image))("B4 Stub Model, persisted pause/resume, Knowledge, Memo
 				createSandboxExtension((workspace) => sandboxConfigForTesting({
 					workspace, runId: `b4-${randomUUID().slice(0, 12)}`, containerOwner: randomUUID(),
 					auditReportPath: path, readonlyModuleTools: true, readonlyKnowledgeTools: true,
-				}), undefined, { image, files: ["calc.py", testFile], tests: [testFile] }),
+				}), undefined, { image, files: ["calc.py", testFile, "test_other.py"], tests: ["test_other.py", testFile] }),
 			],
 		});
 		hosts.push(harness);
@@ -128,7 +129,7 @@ it.runIf(Boolean(image))("B4 Stub Model, persisted pause/resume, Knowledge, Memo
 				return call("enhanced_task_get", { taskId });
 			},
 			call("enhanced_memory_search", { query: "calculator previously failed" }),
-			call("run_tests", { targets: [testFile] }),
+			call("run_tests", { targets: ["test_other.py", testFile] }),
 			fauxAssistantMessage("The approved pytest found the broken increment."),
 		]);
 		await first.harness.session.prompt("Inspect the active task and prior failure, then run the approved pytest.");
@@ -181,7 +182,7 @@ it.runIf(Boolean(image))("B4 Stub Model, persisted pause/resume, Knowledge, Memo
 				});
 				return call("edit", { path: "calc.py", edits: [{ oldText: "return n", newText: "return n + 1" }] });
 			},
-			call("run_tests", { targets: [testFile] }),
+			call("run_tests", {}),
 			fauxAssistantMessage("The corrected implementation passed the approved pytest."),
 		]);
 		await second.harness.session.prompt("Read the reference, edit the calculator, and rerun the same approved pytest.");
@@ -189,13 +190,13 @@ it.runIf(Boolean(image))("B4 Stub Model, persisted pause/resume, Knowledge, Memo
 		expect(JSON.stringify(getToolResult(second.harness, KNOWLEDGE_SEARCH))).not.toContain(contract);
 		expect(readFileSync(join(project, "calc.py"), "utf8")).toContain("return n + 1");
 		const passed = getToolResult(second.harness, "run_tests");
-		expect(JSON.parse(getMessageText(passed))).toMatchObject({ status: "passed", exitCode: 0, passed: 1 });
+		expect(JSON.parse(getMessageText(passed))).toMatchObject({ status: "passed", exitCode: 0, passed: 2 });
 		const observed = await second.invoke<TaskSnapshot>("enhanced-task-inspect", taskId);
 		const evidence = observed.evidence.filter(({ kind }) => kind === "sandbox_pytest");
 		expect(evidence).toHaveLength(2);
 		expect(evidence[0]).toMatchObject({ toolCallId: failed.toolCallId, pytest: { status: "failed", exitCode: 1 } });
 		expect(evidence[1]).toMatchObject({ toolCallId: passed.toolCallId, confidenceClass: "validated",
-			pytest: { target: testFile, completedPasses: 1, testHash: sha256(suiteSource) } });
+			pytest: { target: testFile, usedDefaultTargets: true, completedPasses: 1, testHash: sha256(suiteSource) } });
 		const verifying = await second.invoke<TaskSnapshot>("enhanced-task-step", `${taskId} repair verify ${observed.steps[0].revision}`);
 		const complete = await second.invoke<TaskSnapshot>("enhanced-task-step", `${taskId} repair complete ${verifying.steps[0].revision}`);
 		expect(complete.steps[0].status).toBe("completed");

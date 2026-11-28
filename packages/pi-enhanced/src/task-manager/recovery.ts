@@ -29,7 +29,10 @@ export function observeWorkspace(rootPath: string, controlledFiles: readonly str
 			windowsHide: true,
 			stdio: ["ignore", "pipe", "ignore"],
 		}).trim();
-		const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=no"], {
+	} catch {}
+	try {
+		// Include individual new paths (also inside new directories), respecting Git ignore rules.
+		const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
 			cwd: realRoot,
 			encoding: "utf8",
 			timeout: 1_500,
