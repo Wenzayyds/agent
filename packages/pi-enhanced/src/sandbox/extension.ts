@@ -5,7 +5,7 @@ import { isKnowledgeTool } from "../knowledge/tools.ts";
 import { DockerSandboxBroker } from "./broker.ts";
 import { loadSandboxConfig, type SandboxConfig } from "./config.ts";
 import { SANDBOX_ALLOWED_TOOLS, SANDBOX_RESTORE_CHECK, type SandboxToolName } from "./protocol.ts";
-import { isPytestConfig, pytestFileVersions } from "./pytest.ts";
+import { isPytestConfig, MAX_PYTEST_TARGETS, pytestFileVersions } from "./pytest.ts";
 import { registerTaskPytestSource } from "./task-evidence.ts";
 import { registerPytestTool, registerSandboxTools } from "./tools.ts";
 
@@ -124,7 +124,11 @@ export function createSandboxExtension(
 				runTestsActive = true;
 				if (adaptive) pi.setActiveTools([...SANDBOX_ALLOWED_TOOLS, "run_tests"]);
 			} else if (pytestPolicy !== undefined) {
-				ctx.ui.notify("Invalid pytest configuration. run_tests is disabled.", "warning");
+				const targets = typeof pytestPolicy === "object" && pytestPolicy && "tests" in pytestPolicy ? pytestPolicy.tests : undefined;
+				const reason = Array.isArray(targets) && targets.length > MAX_PYTEST_TARGETS
+					? `Configured ${targets.length} pytest targets, maximum ${MAX_PYTEST_TARGETS}.`
+					: "Invalid pytest configuration.";
+				ctx.ui.notify(`${reason} run_tests is disabled.`, "warning");
 			}
 		});
 		pi.on("session_before_switch", () => {

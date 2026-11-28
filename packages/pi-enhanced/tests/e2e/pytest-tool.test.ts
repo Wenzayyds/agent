@@ -25,7 +25,7 @@ import { assessPytest } from "../../src/ccr/adaptive.ts";
 import type { DockerSandboxBroker } from "../../src/sandbox/broker.ts";
 import { loadSandboxConfig } from "../../src/sandbox/config.ts";
 import { createSandboxExtension, sandboxToolAllowed } from "../../src/sandbox/extension.ts";
-import { createPytestExecutor, type PytestConfig } from "../../src/sandbox/pytest.ts";
+import { createPytestExecutor, isPytestConfig, type PytestConfig } from "../../src/sandbox/pytest.ts";
 import { createSweTestFeedback, sweVerificationStatus } from "../../benchmarks/real-agent/swe-test-feedback.ts";
 import { digest } from "../../benchmarks/real-agent/evaluation-identity.ts";
 import { readSwePatch } from "../../benchmarks/real-agent/swe-patch.ts";
@@ -41,6 +41,13 @@ const clean = (root: string) => {
 it("keeps run_tests disabled by default", () => {
 	expect(sandboxToolAllowed("run_tests")).toBe(false);
 	expect(sandboxToolAllowed("run_tests", false, false, true)).toBe(true);
+});
+
+it("accepts only policies whose default targets fit one call", () => {
+	const tests = Array.from({ length: 17 }, (_, i) => `test_calc.py::test_${i}`);
+	const config = { ...policy(), image: "sha256:" + "a".repeat(64) };
+	expect(isPytestConfig({ ...config, tests: tests.slice(0, 16) })).toBe(true);
+	expect(isPytestConfig({ ...config, tests })).toBe(false);
 });
 
 it("counts only distinct completed repairs with valid pytest failures for the same target", () => {
@@ -96,11 +103,21 @@ describe.skipIf(!image)("isolated pytest", () => {
 		try {
 			writeFileSync(file, "import pytest\ndef test_skip():\n    pytest.skip('1 passed')\n");
 			let count: number | undefined;
-			const skipped = await run(["test_calc.py"], undefined, (e) => { count = e.completedPasses; }, { recordCompletedTests: true });
-			expect(skipped.status).toBe("passed");
+			const skipped = await run(["test_calc.py"], undefined, (e) => { count = e.passesByTarget?.get("test_calc.py"); });
+			expect(skipped).toMatchObject({ status: "skipped", passed: 0 });
 			expect(count).toBe(0);
+			writeFileSync(file, "import atexit, os, pytest\n" +
+				"atexit.register(os.write, 2, b'late stderr diagnostic\\n')\n" +
+				"def test_skip():\n    pytest.skip()\ndef test_pass():\n    assert True\n");
+			const targets = ["test_calc.py::test_skip", "test_calc.py::test_pass"];
+			const mixed = await run(targets, undefined, (e) => {
+				expect(e.passesByTarget).toEqual(new Map([[targets[0], 0], [targets[1], 1]]));
+			});
+			expect(mixed).toMatchObject({ status: "passed", passed: 1 });
+			expect(mixed.output).toContain("late stderr diagnostic");
+			expect(mixed.output).not.toContain("pi-pytest-");
 			writeFileSync(file, "import time\ndef test_wait():\n    time.sleep(40)\n");
-			const timedOut = await run(["test_calc.py"], undefined, (e) => { count = e.completedPasses; }, { recordCompletedTests: true });
+			const timedOut = await run(["test_calc.py"], undefined, (e) => { count = e.passesByTarget?.get("test_calc.py"); });
 			expect(timedOut.status).toBe("timeout");
 			expect(count).toBeUndefined();
 		} finally { clean(root); }
@@ -236,6 +253,43 @@ describe.skipIf(!image)("isolated pytest", () => {
 			}
 		}
 	}, 60_000);
+
+	it("keeps skipped tests and the Requests smoke check distinct from issue verification", async () => {
+		const target = "test_requests.py::RequestsTestCase::test_basic_building";
+		const sandbox = (workspace: string) => sandboxConfigForTesting({ workspace, runId: "swe-public-check" });
+		const harness = await createHarness({ extensionFactories: [createSweTestFeedback({
+			...policy(["calc.py", "test_requests.py"]), tests: [target],
+			instanceId: "psf__requests-1142", baseCommit: "a".repeat(40),
+		}, sandbox)] });
+		const cwd = harness.tempDir;
+		const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+		try {
+			writeFileSync(join(cwd, "calc.py"), "enabled = False\n");
+			writeFileSync(join(cwd, "test_requests.py"),
+				"import unittest\nfrom calc import enabled\nclass RequestsTestCase(unittest.TestCase):\n" +
+				"    @unittest.skipUnless(enabled, 'disabled')\n    def test_basic_building(self):\n        self.assertTrue(enabled)\n");
+			git("init");
+			git("add", "calc.py", "test_requests.py");
+			git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "baseline");
+			await harness.session.bindExtensions({});
+			for (const [source, status, reason] of [
+				["enabled = 0", "skipped", "pytest"], ["enabled = True", "passed", "request_construction_only_issue_unverified"],
+			]) {
+				writeFileSync(join(cwd, "calc.py"), source + "\n");
+				harness.setResponses([
+					fauxAssistantMessage([fauxToolCall("run_tests", { targets: [target] })], { stopReason: "toolUse" }),
+					fauxAssistantMessage("Checked the public target."),
+				]);
+				await harness.session.prompt("Run the public test.");
+				const message = harness.session.messages.findLast((m) => m.role === "toolResult" && m.toolName === "run_tests");
+				expect(JSON.parse(getMessageText(message))).toMatchObject({ status, reason });
+				expect(sweVerificationStatus(sandbox(cwd).runRoot, digest(readSwePatch(cwd)))).toMatchObject({ status, reason });
+			}
+		} finally {
+			try { await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
+			finally { harness.cleanup(); }
+		}
+	});
 
 	it("does not register run_tests without trusted opt-in", async () => {
 		let broker: DockerSandboxBroker | undefined;

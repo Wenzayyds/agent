@@ -25,8 +25,11 @@ export interface TaskPytestSource {
 	workspace: string;
 	current(target: string): PytestSnapshot | undefined;
 }
-type ReceiptSink = (receipt: PytestReceipt) => void;
-type OpenAttempt = (workspace: string, toolCallId: string) => ReceiptSink | undefined;
+export type PytestAttempt = {
+	target: string;
+	record(receipt: PytestReceipt, targets: readonly string[]): void;
+};
+type OpenAttempt = (workspace: string, toolCallId: string) => PytestAttempt | undefined;
 const attemptChannel = "pi-enhanced:task:open-pytest-attempt";
 
 export function registerPytestAttempts(events: Events, open: OpenAttempt) {
@@ -76,9 +79,9 @@ export function createTaskPytestEvidence(config: SandboxConfig, policy: PytestCo
 	};
 	return {
 		source,
-		receipt(evidence: PytestEvidence, result: PytestResult, usedDefaultTargets = false): PytestReceipt | undefined {
-			if (!active() || evidence.targets.length !== 1) return undefined;
-			const target = evidence.targets[0]!;
+		receipt(evidence: PytestEvidence, result: PytestResult, usedDefaultTargets = false, boundTarget?: string): PytestReceipt | undefined {
+			const target = evidence.targets.length === 1 ? evidence.targets[0] : boundTarget;
+			if (!active() || !target || !evidence.targets.includes(target)) return undefined;
 			const identity = snapshot(target, evidence.files);
 			if (!identity) return undefined;
 			return {
@@ -87,7 +90,7 @@ export function createTaskPytestEvidence(config: SandboxConfig, policy: PytestCo
 				target,
 				...(usedDefaultTargets ? { usedDefaultTargets: true as const } : {}),
 				status: evidence.status,
-				completedPasses: evidence.completedPasses ?? null,
+				completedPasses: evidence.passesByTarget?.get(target) ?? null,
 				exitCode: result.exitCode,
 				passed: result.passed,
 				failed: result.failed,
@@ -108,16 +111,16 @@ export function registerTaskPytestSource(
 			if (active() && typeof reply === "function") reply(evidenceSource.source);
 		}),
 		begin(id: string, usedDefaultTargets: boolean) {
-			const sinks: ReceiptSink[] = [];
+			const sinks: PytestAttempt[] = [];
 			events.emit(attemptChannel, (open: OpenAttempt) => {
 				const sink = open(config.workspace, id);
 				if (sink) sinks.push(sink);
 			});
 			if (sinks.length !== 1) return undefined;
-			const record = sinks[0]!;
+			const attempt = sinks[0]!;
 			return (evidence: PytestEvidence, result: PytestResult) => {
-				const receipt = evidenceSource.receipt(evidence, result, usedDefaultTargets);
-				if (receipt) record(receipt);
+				const receipt = evidenceSource.receipt(evidence, result, usedDefaultTargets, attempt.target);
+				if (receipt) attempt.record(receipt, evidence.targets);
 			};
 		},
 	};

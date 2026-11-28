@@ -38,6 +38,22 @@ npm exec vitest -- --run packages/pi-enhanced/tests/e2e/real-agent-runner-e2e.te
 
 预期选中的用例显示 `1 passed`。用例使用本地 Stub 作答，实际启动两个 Runner 进程与 Docker。它检查分页保留、恢复后重新检索、复测反馈、独立验证与共用预算，不需要真实模型密钥。
 
+### 面试演示：一次失败的修改如何得到反馈
+
+准备好上面的依赖和文件工具镜像后，从仓库根目录在 Linux 上运行：
+
+```bash
+cd packages/pi-enhanced
+docker build -f scripts/pytest.Dockerfile -t pi-enhanced-pytest:demo scripts
+export PI_TEST_PYTEST_IMAGE="$(docker image inspect pi-enhanced-pytest:demo --format '{{.Id}}')"
+test -n "$PI_TEST_PYTEST_IMAGE" && npm exec vitest -- --run tests/e2e/pytest-tool.test.ts \
+  -t 'uses real failure feedback and fresh code through the native Pi loop' --reporter=verbose
+```
+
+`clamp(x)` 应把负数归零、保留正数。第一次把 `return 0` 改成 `return x` 后，Docker pytest 返回 `1 failed, 1 passed`，Pi 会话收到 `assert -2 == 0`。第二次改为 `return max(0, x)`，对当前源码重新运行相同测试，两个用例都通过。终端里的一个 Vitest 用例覆盖这整个过程。工具调用顺序和修改内容由 Stub 预设，文件编辑、pytest 和断言反馈都实际执行。[演示用例](tests/e2e/pytest-tool.test.ts)
+
+面试追问可以用 Requests-1142：原始代码就能通过请求构造测试，但空 GET 仍带有 `Content-Length: 0`。用独立检查对照这两个结果，可以说明测试究竟覆盖了什么行为。[复现步骤](benchmarks/real-agent/README.md#requests-1142-的行为验证)
+
 ### 源码导读
 
 | 模块 | 入口、关键行为与验证 |
